@@ -25,6 +25,6 @@ COPY entrypoint.sh run-rebalance.sh ./
 RUN chmod +x /app/entrypoint.sh /app/run-rebalance.sh
 
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-  CMD pgrep cron > /dev/null || exit 1
+  CMD pidof cron > /dev/null || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
