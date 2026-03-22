@@ -1,6 +1,6 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import { SLIPPAGE_BUFFER, TAO } from "./constants.ts";
+import { SLIPPAGE_BUFFER, SWAP_SLIPPAGE_BUFFER, TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import type {
 	RebalanceOperation,
@@ -127,8 +127,9 @@ async function simulateSwap(
 	}
 
 	const ratio = (originPrice * TAO) / destPrice;
-	// buffer down → more permissive (lower min ratio)
-	const limitPrice = bufferDown(ratio);
+	// Use wider swap buffer to absorb intra-batch price compounding
+	const bps = BigInt(Math.round(SWAP_SLIPPAGE_BUFFER * 10_000));
+	const limitPrice = ratio - (ratio * bps) / 10_000n;
 	log.verbose(
 		`  Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: ratio=${ratio} limit=${limitPrice}`,
 	);

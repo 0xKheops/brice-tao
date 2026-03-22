@@ -81,3 +81,13 @@ export interface RebalancePlan {
 	/** Subnets not acted on because operation would be below minimum */
 	skipped: Array<{ netuid: number; reason: string }>;
 }
+
+export type BatchResult =
+	| { status: "completed"; blockNumber: number }
+	| {
+			status: "partial_failure";
+			failedAtIndex: number;
+			totalOps: number;
+			blockNumber: number;
+	  }
+	| { status: "timeout" };

@@ -3,7 +3,11 @@ import { randomBytes } from "@noble/ciphers/utils.js";
 import { xxhashAsU8a } from "@polkadot/util-crypto";
 import type { bittensor } from "@polkadot-api/descriptors";
 import { MlKem768 } from "mlkem";
-import type { PolkadotSigner, TypedApi } from "polkadot-api";
+import type {
+	PolkadotSigner,
+	TxFinalizedPayload,
+	TypedApi,
+} from "polkadot-api";
 
 export async function getNextKey(
 	api: TypedApi<typeof bittensor>,
@@ -51,14 +55,14 @@ export async function submitShieldedTx(
 	innerSignedExtrinsicBytes: Uint8Array,
 	publicKey: Uint8Array,
 	nonce: number,
-): Promise<void> {
+): Promise<TxFinalizedPayload> {
 	const ciphertext = await encryptTransaction(
 		innerSignedExtrinsicBytes,
 		publicKey,
 	);
 
 	const tx = api.tx.MevShield.submit_encrypted({ ciphertext });
-	await tx.signAndSubmit(signer, {
+	return tx.signAndSubmit(signer, {
 		nonce,
 		mortality: { mortal: true, period: 8 },
 	});

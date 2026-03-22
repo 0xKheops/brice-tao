@@ -1,5 +1,9 @@
 import type { Balances } from "./getBalances.ts";
-import type { RebalanceOperation, RebalancePlan } from "./rebalance/types.ts";
+import type {
+	BatchResult,
+	RebalanceOperation,
+	RebalancePlan,
+} from "./rebalance/types.ts";
 
 const TAO = 1_000_000_000n;
 const LOW_PROXY_THRESHOLD = TAO / 100n; // 0.01 TAO
@@ -50,6 +54,35 @@ function proxyBalanceField(proxyFreeBalance: bigint): {
 	};
 }
 
+function batchResultField(
+	result: BatchResult | null,
+	totalOps: number,
+): { name: string; value: string; inline: boolean } | null {
+	if (!result) return null;
+
+	switch (result.status) {
+		case "completed":
+			return {
+				name: "🟢 Batch Execution",
+				value: `All ${totalOps} operations executed successfully (block #${result.blockNumber})`,
+				inline: false,
+			};
+		case "partial_failure":
+			return {
+				name: "🟡 Batch Partial Failure",
+				value: `Failed at operation ${result.failedAtIndex + 1}/${totalOps} (block #${result.blockNumber})\n${result.failedAtIndex} operations succeeded, remaining were skipped.`,
+				inline: false,
+			};
+		case "timeout":
+			return {
+				name: "🔴 Batch Execution Unknown",
+				value:
+					"Timed out waiting for inner batch execution. Check chain explorer for results.",
+				inline: false,
+			};
+	}
+}
+
 export async function sendRebalanceNotification(
 	webhookUrl: string,
 	opts: {
@@ -57,13 +90,34 @@ export async function sendRebalanceNotification(
 		balancesBefore: Balances;
 		balancesAfter: Balances;
 		proxyFreeBalance: bigint;
+		batchResult: BatchResult | null;
 		dryRun: boolean;
 	},
 ): Promise<void> {
-	const { plan, balancesBefore, balancesAfter, proxyFreeBalance, dryRun } =
-		opts;
+	const {
+		plan,
+		balancesBefore,
+		balancesAfter,
+		proxyFreeBalance,
+		batchResult,
+		dryRun,
+	} = opts;
 
-	const title = dryRun ? "🧪 Rebalance Dry Run" : "✅ Rebalance Complete";
+	let title: string;
+	let color: number;
+	if (dryRun) {
+		title = "🧪 Rebalance Dry Run";
+		color = 0xf0b232;
+	} else if (batchResult?.status === "partial_failure") {
+		title = "⚠️ Rebalance Partial Failure";
+		color = 0xf0b232;
+	} else if (batchResult?.status === "timeout") {
+		title = "❓ Rebalance Outcome Unknown";
+		color = 0xed4245;
+	} else {
+		title = "✅ Rebalance Complete";
+		color = 0x57f287;
+	}
 
 	const operationLines =
 		plan.operations.length > 0
@@ -73,10 +127,12 @@ export async function sendRebalanceNotification(
 	const valueBefore = formatTao(balancesBefore.totalTaoValue);
 	const valueAfter = formatTao(balancesAfter.totalTaoValue);
 
+	const batchField = batchResultField(batchResult, plan.operations.length);
+
 	const embeds = [
 		{
 			title,
-			color: dryRun ? 0xf0b232 : 0x57f287,
+			color,
 			fields: [
 				{
 					name: "💰 Portfolio Value",
@@ -84,6 +140,7 @@ export async function sendRebalanceNotification(
 					inline: false,
 				},
 				proxyBalanceField(proxyFreeBalance),
+				...(batchField ? [batchField] : []),
 				{
 					name: `📋 Operations (${plan.operations.length})`,
 					value: operationLines,

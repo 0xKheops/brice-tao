@@ -5,7 +5,12 @@ import { Enum } from "polkadot-api";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import { getNextKey, submitShieldedTx } from "./mevShield.ts";
-import type { RebalanceOperation, RebalancePlan } from "./types.ts";
+import type {
+	BatchResult,
+	RebalanceOperation,
+	RebalancePlan,
+} from "./types.ts";
+import { waitForInnerBatch } from "./waitForBatch.ts";
 
 type Api = TypedApi<typeof bittensor>;
 
@@ -16,6 +21,7 @@ export interface ExecuteOptions {
 /**
  * Execute a rebalance plan: build the batch of proxy-wrapped staking calls,
  * sign, encrypt via MEV shield, and submit.
+ * Then wait for the inner batch to be executed and return the result.
  *
  * In dry-run mode, builds and prints the decoded call but does not sign or submit.
  */
@@ -25,12 +31,12 @@ export async function executeRebalance(
 	coldkeyAddress: string,
 	plan: RebalancePlan,
 	options?: ExecuteOptions,
-): Promise<void> {
+): Promise<BatchResult | null> {
 	const dryRun = options?.dryRun ?? false;
 
 	if (plan.operations.length === 0) {
 		log.info("No operations to execute — portfolio is balanced.");
-		return;
+		return null;
 	}
 
 	log.info(
@@ -49,8 +55,8 @@ export async function executeRebalance(
 		});
 	});
 
-	// Bundle into Utility.batch
-	const batchTx = api.tx.Utility.batch({
+	// Bundle into Utility.force_batch (continues on individual failures, unlike batch)
+	const batchTx = api.tx.Utility.force_batch({
 		calls: proxiedCalls.map((tx) => tx.decodedCall),
 	});
 
@@ -67,13 +73,12 @@ export async function executeRebalance(
 
 	if (dryRun) {
 		log.info("[DRY RUN] Skipping sign & submit.");
-		return;
+		return null;
 	}
 
 	// Get current nonce for MEV shield double-nonce pattern
-	const account = await api.query.System.Account.getValue(
-		signerAddress(signer),
-	);
+	const proxyAddress = signerAddress(signer);
+	const account = await api.query.System.Account.getValue(proxyAddress);
 	const nonce = account.nonce;
 
 	// Get MEV shield encryption key
@@ -89,9 +94,28 @@ export async function executeRebalance(
 	const innerSignedBytes = await batchTx.sign(signer, { nonce: nonce + 1 });
 
 	log.verbose("Encrypting and submitting via MEV shield...");
-	await submitShieldedTx(api, signer, innerSignedBytes, nextKey, nonce);
+	const outerResult = await submitShieldedTx(
+		api,
+		signer,
+		innerSignedBytes,
+		nextKey,
+		nonce,
+	);
 
-	log.info("✓ MEV-shielded batch transaction submitted successfully");
+	log.info(
+		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number}`,
+	);
+
+	// Wait for the inner batch transaction to be executed
+	log.info("Waiting for inner batch execution...");
+	const batchResult = await waitForInnerBatch(
+		api,
+		proxyAddress,
+		nonce,
+		outerResult.block.number,
+	);
+
+	return batchResult;
 }
 
 function buildStakingCall(api: Api, op: RebalanceOperation) {

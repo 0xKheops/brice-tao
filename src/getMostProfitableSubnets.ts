@@ -134,8 +134,11 @@ function scoreAndSort(
 	const results: SubnetMomentum[] = subnets.map((s, i) => ({
 		netuid: s.netuid,
 		momentumScore:
+			// biome-ignore lint/style/noNonNullAssertion: checked in filter step
 			weights.priceChange * zPrice[i]! +
+			// biome-ignore lint/style/noNonNullAssertion: checked in filter step
 			weights.emaTaoFlow * zEma[i]! +
+			// biome-ignore lint/style/noNonNullAssertion: checked in filter step
 			weights.volumeMcapRatio * zVm[i]!,
 		priceChange: s.priceChange,
 		emaTaoFlow: Number(s.emaTaoFlow),
@@ -151,9 +154,13 @@ function scoreAndSort(
 export function printMomentumRanking(subnets: SubnetMomentum[]): void {
 	console.log(`\nMomentum ranking (${subnets.length} subnets):`);
 	console.log("  Rank | Netuid |   Score | Price Δ  |  EMA Flow |  Vol/MCap");
-	console.log("  " + "—".repeat(60));
+	console.log(`  ${"—".repeat(60)}`);
 	for (let i = 0; i < subnets.length; i++) {
-		const s = subnets[i]!;
+		const s = subnets[i];
+		if (!s) {
+			console.warn(`  ${i + 1} | (missing data)`);
+			continue;
+		}
 		const rank = (i + 1).toString().padStart(4);
 		const netuid = `SN${s.netuid.toString().padStart(3)}`;
 		const score = s.momentumScore.toFixed(3).padStart(7);

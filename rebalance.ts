@@ -110,7 +110,9 @@ try {
 		log.info("Simulating operations for limit prices...");
 		plan.operations = await simulateAllOperations(api, plan.operations);
 
-		await executeRebalance(api, signer, coldkey, plan, { dryRun });
+		const batchResult = await executeRebalance(api, signer, coldkey, plan, {
+			dryRun,
+		});
 
 		// Fetch post-rebalance balances (or reuse current for dry-run)
 		const postBalances = dryRun
@@ -130,6 +132,7 @@ try {
 			balancesBefore: balances,
 			balancesAfter: postBalances,
 			proxyFreeBalance,
+			batchResult,
 			dryRun,
 		});
 	}
