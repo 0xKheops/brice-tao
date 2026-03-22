@@ -6,7 +6,8 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"ignoreUnknown": false
+		"ignoreUnknown": false,
+		"includes": ["**", "!**/Sn45Api.ts", "!**/TaoDataApi.ts"]
 	},
 	"formatter": {
 		"enabled": true,

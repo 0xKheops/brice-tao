@@ -8,7 +8,10 @@
 		"check:fix": "biome check --fix",
 		"knip": "knip",
 		"typecheck": "tsc --noEmit",
-		"prepare": "simple-git-hooks"
+		"prepare": "simple-git-hooks",
+		"generate-clients:sn45": "bunx swagger-typescript-api generate -p https://sn45api.talisman.xyz/openapi.json -o ./src/api -n Sn45Api --api-class-name Sn45Api",
+		"generate-clients:tda": "bunx swagger-typescript-api generate -p https://tda.talisman.xyz/openapi.json -o ./src/api -n TaoDataApi --api-class-name TaoDataApi",
+		"generate-clients": "bun generate-clients:sn45 && bun generate-clients:tda"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched"
