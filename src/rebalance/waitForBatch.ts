@@ -146,7 +146,12 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 
 /**
  * Given a block hash and extrinsic index, fetch the block's events and
- * extract per-operation results from Utility ItemCompleted/ItemFailed events.
+ * extract per-operation results from Utility ItemCompleted/ItemFailed events,
+ * cross-referenced with Proxy.ProxyExecuted events.
+ *
+ * Each batch call is wrapped in Proxy.proxy, so even when the inner staking
+ * call fails, the proxy dispatch itself succeeds (emitting ItemCompleted).
+ * The real result lives in the Proxy.ProxyExecuted event. We must check both.
  */
 async function extractOperationResults(
 	api: Api,
@@ -162,6 +167,26 @@ async function extractOperationResults(
 			e.phase.type === "ApplyExtrinsic" && e.phase.value === extrinsicIndex,
 	);
 
+	// Collect Proxy.ProxyExecuted results in order — they correspond 1:1 to proxy calls
+	const proxyResults: Array<{ ok: boolean; error?: string }> = [];
+	for (const record of extrinsicEvents) {
+		if (record.event.type !== "Proxy") continue;
+		const ev = record.event.value;
+		if (ev.type !== "ProxyExecuted") continue;
+
+		const result = ev.value.result;
+		if (result.success) {
+			proxyResults.push({ ok: true });
+		} else {
+			proxyResults.push({
+				ok: false,
+				error: formatDispatchError(
+					result.value as { type: string; value?: unknown },
+				),
+			});
+		}
+	}
+
 	// Walk ItemCompleted/ItemFailed events in order — they correspond 1:1 to batch calls
 	const results: OperationResult[] = [];
 	for (const record of extrinsicEvents) {
@@ -169,7 +194,17 @@ async function extractOperationResults(
 		const ev = record.event.value;
 
 		if (ev.type === "ItemCompleted") {
-			results.push({ index: results.length, success: true });
+			// Batch item succeeded, but check if the proxied inner call failed
+			const proxyResult = proxyResults[results.length];
+			if (proxyResult && !proxyResult.ok) {
+				results.push({
+					index: results.length,
+					success: false,
+					error: proxyResult.error ?? "Proxied call failed",
+				});
+			} else {
+				results.push({ index: results.length, success: true });
+			}
 		} else if (ev.type === "ItemFailed") {
 			results.push({
 				index: results.length,

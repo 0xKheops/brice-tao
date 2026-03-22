@@ -158,7 +158,10 @@ function generateOperations(
 		}
 	}
 
-	// 2. Swaps — exit positions with correct hotkey → underweight targets
+	// 2. Swaps — exit positions with correct hotkey → single best underweight target
+	//    To avoid failures from splitting a position across multiple swaps in the
+	//    same batch (pool state changes between swaps), we send the full position
+	//    to the single most underweight target. Temporary imbalance corrects on next run.
 	const swappable = positions.filter((p) => p.classification === "exit_swap");
 	const underweightTargets = targets
 		.filter((t) => {
@@ -183,69 +186,44 @@ function generateOperations(
 			continue;
 		}
 
-		let remainingAlpha = exitPos.stake;
-		let remainingTaoValue = exitPos.taoValue;
+		// Find the single best target: most underweight with enough deficit
+		const bestTarget = underweightTargets.find((t) => {
+			const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
+			return deficit >= MIN_OPERATION_TAO;
+		});
 
-		for (const target of underweightTargets) {
-			if (remainingTaoValue < MIN_OPERATION_TAO) break;
-
-			const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
-			const deficit = target.targetTaoValue - currentFulfilled;
-			if (deficit < MIN_OPERATION_TAO) continue;
-
-			// Swap min(remaining, deficit) TAO worth
-			const swapTaoValue =
-				remainingTaoValue < deficit ? remainingTaoValue : deficit;
-			const swapAlpha =
-				exitPos.alphaPrice > 0n
-					? (swapTaoValue * TAO) / exitPos.alphaPrice
-					: 0n;
-
-			if (swapAlpha <= 0n) continue;
-
+		if (bestTarget) {
+			// Swap the entire position to the best target
 			operations.push({
 				kind: "swap",
 				originNetuid: exitPos.netuid,
-				destinationNetuid: target.netuid,
+				destinationNetuid: bestTarget.netuid,
 				hotkey: validatorHotkey,
-				alphaAmount: swapAlpha,
-				estimatedTaoValue: swapTaoValue,
+				alphaAmount: exitPos.stake,
+				estimatedTaoValue: exitPos.taoValue,
 				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 			});
 
-			fulfilled.set(target.netuid, currentFulfilled + swapTaoValue);
-			remainingAlpha -= swapAlpha;
-			remainingTaoValue -= swapTaoValue;
-
-			log.verbose(
-				`  OP: swap SN${exitPos.netuid}→SN${target.netuid}: ~${formatTao(swapTaoValue)} τ`,
+			fulfilled.set(
+				bestTarget.netuid,
+				(fulfilled.get(bestTarget.netuid) ?? 0n) + exitPos.taoValue,
 			);
-		}
 
-		// If there's remaining alpha from this exit position, unstake it
-		if (remainingTaoValue >= MIN_OPERATION_TAO && remainingAlpha > 0n) {
-			if (remainingTaoValue === exitPos.taoValue) {
-				// Full unstake
-				operations.push({
-					kind: "unstake",
-					netuid: exitPos.netuid,
-					hotkey: exitPos.hotkey,
-					alphaAmount: exitPos.stake,
-					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
-					estimatedTaoValue: remainingTaoValue,
-				});
-			} else {
-				operations.push({
-					kind: "unstake_partial",
-					netuid: exitPos.netuid,
-					hotkey: exitPos.hotkey,
-					alphaAmount: remainingAlpha,
-					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
-					estimatedTaoValue: remainingTaoValue,
-				});
-			}
 			log.verbose(
-				`  OP: unstake remainder SN${exitPos.netuid}: ~${formatTao(remainingTaoValue)} τ`,
+				`  OP: swap SN${exitPos.netuid}→SN${bestTarget.netuid}: ~${formatTao(exitPos.taoValue)} τ (full position)`,
+			);
+		} else {
+			// No underweight target available — unstake fully
+			operations.push({
+				kind: "unstake",
+				netuid: exitPos.netuid,
+				hotkey: exitPos.hotkey,
+				alphaAmount: exitPos.stake,
+				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
+				estimatedTaoValue: exitPos.taoValue,
+			});
+			log.verbose(
+				`  OP: unstake SN${exitPos.netuid}: ~${formatTao(exitPos.taoValue)} τ (no swap target)`,
 			);
 		}
 	}
