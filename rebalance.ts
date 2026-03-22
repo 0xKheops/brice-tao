@@ -141,24 +141,27 @@ try {
 			},
 		);
 
-		// Fetch post-rebalance balances (or reuse current for dry-run)
-		const postBalances = dryRun
-			? balances
+		// Fetch post-rebalance balances and proxy balance (or reuse current for dry-run)
+		const [postBalances, postProxyFreeBalance] = dryRun
+			? [balances, proxyFreeBalance]
 			: await (async () => {
 					log.info("Fetching post-rebalance balances...");
-					const b = await getBalances(api, coldkey);
+					const [b, proxyAccount] = await Promise.all([
+						getBalances(api, coldkey),
+						api.query.System.Account.getValue(proxyAddress),
+					]);
 					log.info(
 						`Portfolio after: ${formatTao(b.totalTaoValue)} τ total, ${b.stakes.length} positions`,
 					);
 					logBalancesDetail("AFTER", coldkey, b);
-					return b;
+					return [b, proxyAccount.data.free] as const;
 				})();
 
 		await sendRebalanceNotification(discordWebhookUrl, {
 			plan,
 			balancesBefore: balances,
 			balancesAfter: postBalances,
-			proxyFreeBalance,
+			proxyFreeBalance: postProxyFreeBalance,
 			batchResult,
 			dryRun,
 		});
