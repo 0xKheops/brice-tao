@@ -1,0 +1,9 @@
+services:
+  rebalance:
+    build: .
+    platform: linux/arm64
+    restart: unless-stopped
+    container_name: brice-tao-rebalance
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./logs:/app/logs

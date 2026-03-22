@@ -1,15 +1,65 @@
 # brice-tao
 
-To install dependencies:
+Automated portfolio rebalancer for Bittensor subnets.
+
+## Prerequisites
+
+- [Bun](https://bun.sh) (for local development)
+- [Docker](https://docs.docker.com/get-docker/) (for containerized deployment)
+
+## Configuration
+
+Copy `.env.example` or create a `.env` file with the following variables:
+
+```env
+WS_ENDPOINT=wss://your-rpc-endpoint
+COLDKEY_ADDRESS=your-coldkey-ss58-address
+PROXY_MNEMONIC=your proxy account mnemonic phrase
+VALIDATOR_HOTKEY=your-validator-hotkey-ss58-address
+SN45_API_KEY=your-sn45-api-key
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+```
+
+## Local Development
 
 ```bash
 bun install
+bun run index.ts        # dashboard / portfolio overview
+bun rebalance.ts        # run rebalance once
+bun rebalance.ts --dry-run  # simulate without submitting transactions
 ```
 
-To run:
+## Docker
+
+The container runs `bun rebalance.ts` every 10 minutes via cron.
+
+### Start
 
 ```bash
-bun run index.ts
+docker compose up -d --build
 ```
 
-This project was created using `bun init` in bun v1.3.10. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+### Stop
+
+```bash
+docker compose down
+```
+
+### View logs
+
+```bash
+# Container status & health
+docker ps
+
+# Rebalance execution logs (persisted on host)
+ls logs/
+cat logs/rebalance-*.log
+```
+
+### Rebuild after code changes
+
+```bash
+docker compose up -d --build
+```
+
+Log files older than 7 days are automatically cleaned up.
