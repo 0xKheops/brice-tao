@@ -149,7 +149,7 @@ function generateOperations(
 				netuid: pos.netuid,
 				hotkey: pos.hotkey,
 				alphaAmount: pos.stake,
-				limitPrice: 0n,
+				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 				estimatedTaoValue: pos.taoValue,
 			});
 			log.verbose(
@@ -202,7 +202,7 @@ function generateOperations(
 				hotkey: validatorHotkey,
 				alphaAmount: swapAlpha,
 				estimatedTaoValue: swapTaoValue,
-				limitPrice: 0n,
+				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 			});
 
 			fulfilled.set(target.netuid, currentFulfilled + swapTaoValue);
@@ -223,7 +223,7 @@ function generateOperations(
 					netuid: exitPos.netuid,
 					hotkey: exitPos.hotkey,
 					alphaAmount: exitPos.stake,
-					limitPrice: 0n,
+					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 					estimatedTaoValue: remainingTaoValue,
 				});
 			} else {
@@ -232,7 +232,7 @@ function generateOperations(
 					netuid: exitPos.netuid,
 					hotkey: exitPos.hotkey,
 					alphaAmount: remainingAlpha,
-					limitPrice: 0n,
+					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 					estimatedTaoValue: remainingTaoValue,
 				});
 			}
@@ -286,7 +286,7 @@ function generateOperations(
 					hotkey: validatorHotkey,
 					alphaAmount: swapAlpha,
 					estimatedTaoValue: swapTaoValue,
-					limitPrice: 0n,
+					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 				});
 				fulfilled.set(destTarget.netuid, destFulfilled + swapTaoValue);
 				swapped = true;
@@ -304,7 +304,7 @@ function generateOperations(
 					netuid: pos.netuid,
 					hotkey: pos.hotkey,
 					alphaAmount: reduceAlpha,
-					limitPrice: 0n,
+					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 					estimatedTaoValue: reduceAmount,
 				});
 				log.verbose(
@@ -345,7 +345,7 @@ function generateOperations(
 			netuid: target.netuid,
 			hotkey: validatorHotkey,
 			taoAmount: stakeAmount,
-			limitPrice: 0n,
+			limitPrice: 0n, // placeholder — filled by simulateAllOperations()
 		});
 
 		fulfilled.set(target.netuid, currentFulfilled + stakeAmount);
