@@ -86,3 +86,12 @@ Domain-specific knowledge is available in `.github/skills/`:
 - All amounts are in RAO (`bigint`), not TAO — always use `TAO` constant for conversions
 - Price limits are U64F64 fixed-point — see bittensor-staking skill for encoding
 - The rebalancer uses a proxy account (not the coldkey directly) to sign transactions
+
+## Quality Gates
+
+Before completing work on any task, ensure that the following checks pass:
+- `pnpm check --fix` (linter)
+- `pnpm typecheck` (TypeScript type-checking)
+- `pnpm knip` (dead code detection)
+
+Also ensure that this file stays up to date with any new conventions or architectural changes.
