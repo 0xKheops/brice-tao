@@ -26,7 +26,13 @@
 		"typescript": "^5"
 	},
 	"dependencies": {
+		"@noble/ciphers": "^2.1.1",
 		"@polkadot-api/descriptors": "file:.papi/descriptors",
+		"@polkadot-labs/hdkd": "^0.0.26",
+		"@polkadot-labs/hdkd-helpers": "^0.0.27",
+		"@polkadot/util": "^14.0.2",
+		"@polkadot/util-crypto": "^14.0.2",
+		"mlkem": "^2.7.0",
 		"polkadot-api": "2.0.0-rc.5"
 	}
 }
