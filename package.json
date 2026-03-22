@@ -7,6 +7,7 @@
 		"check": "biome check",
 		"check:fix": "biome check --fix",
 		"knip": "knip",
+		"typecheck": "tsc --noEmit",
 		"prepare": "simple-git-hooks"
 	},
 	"simple-git-hooks": {
