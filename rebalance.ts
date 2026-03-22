@@ -14,6 +14,7 @@ import { getHealthySubnets } from "./src/getSubnetHealth.ts";
 import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
 import { log } from "./src/rebalance/logger.ts";
+import { simulateAllOperations } from "./src/rebalance/simulateSlippage.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -87,6 +88,10 @@ try {
 		for (const skip of plan.skipped) {
 			log.verbose(`  Skipped SN${skip.netuid}: ${skip.reason}`);
 		}
+
+		// Simulate all operations to compute accurate limit prices
+		log.info("Simulating operations for limit prices...");
+		plan.operations = await simulateAllOperations(api, plan.operations);
 
 		await executeRebalance(api, signer, coldkey, plan, { dryRun });
 

@@ -21,7 +21,9 @@ export interface UnstakeOperation {
 	kind: "unstake";
 	netuid: number;
 	hotkey: string;
-	/** Price limit for the unstake */
+	/** Alpha amount being unstaked (full position) */
+	alphaAmount: bigint;
+	/** Price limit for the unstake (min acceptable TAO/α price) */
 	limitPrice: bigint;
 	/** Estimated TAO value being unstaked */
 	estimatedTaoValue: bigint;

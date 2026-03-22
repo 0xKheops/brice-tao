@@ -6,7 +6,6 @@ import {
 	MIN_OPERATION_TAO,
 	MIN_POSITION_TAO,
 	MIN_STAKE_TAO,
-	SLIPPAGE_FACTOR,
 	TAO,
 } from "./constants.ts";
 import { log } from "./logger.ts";
@@ -145,12 +144,12 @@ function generateOperations(
 				});
 				continue;
 			}
-			const limitPrice = applySlippageSell(pos.alphaPrice);
 			operations.push({
 				kind: "unstake",
 				netuid: pos.netuid,
 				hotkey: pos.hotkey,
-				limitPrice,
+				alphaAmount: pos.stake,
+				limitPrice: 0n,
 				estimatedTaoValue: pos.taoValue,
 			});
 			log.verbose(
@@ -196,10 +195,6 @@ function generateOperations(
 
 			if (swapAlpha <= 0n) continue;
 
-			// Find the destination alpha price for limit_price
-			const destAlphaPrice = getAlphaPriceForNetuid(target.netuid, positions);
-			const limitPrice = applySlippageBuy(destAlphaPrice);
-
 			operations.push({
 				kind: "swap",
 				originNetuid: exitPos.netuid,
@@ -207,7 +202,7 @@ function generateOperations(
 				hotkey: validatorHotkey,
 				alphaAmount: swapAlpha,
 				estimatedTaoValue: swapTaoValue,
-				limitPrice,
+				limitPrice: 0n,
 			});
 
 			fulfilled.set(target.netuid, currentFulfilled + swapTaoValue);
@@ -221,14 +216,14 @@ function generateOperations(
 
 		// If there's remaining alpha from this exit position, unstake it
 		if (remainingTaoValue >= MIN_OPERATION_TAO && remainingAlpha > 0n) {
-			const limitPrice = applySlippageSell(exitPos.alphaPrice);
 			if (remainingTaoValue === exitPos.taoValue) {
 				// Full unstake
 				operations.push({
 					kind: "unstake",
 					netuid: exitPos.netuid,
 					hotkey: exitPos.hotkey,
-					limitPrice,
+					alphaAmount: exitPos.stake,
+					limitPrice: 0n,
 					estimatedTaoValue: remainingTaoValue,
 				});
 			} else {
@@ -237,7 +232,7 @@ function generateOperations(
 					netuid: exitPos.netuid,
 					hotkey: exitPos.hotkey,
 					alphaAmount: remainingAlpha,
-					limitPrice,
+					limitPrice: 0n,
 					estimatedTaoValue: remainingTaoValue,
 				});
 			}
@@ -284,12 +279,6 @@ function generateOperations(
 					pos.alphaPrice > 0n ? (swapTaoValue * TAO) / pos.alphaPrice : 0n;
 				if (swapAlpha <= 0n) continue;
 
-				const destAlphaPrice = getAlphaPriceForNetuid(
-					destTarget.netuid,
-					positions,
-				);
-				const limitPrice = applySlippageBuy(destAlphaPrice);
-
 				operations.push({
 					kind: "swap",
 					originNetuid: pos.netuid,
@@ -297,7 +286,7 @@ function generateOperations(
 					hotkey: validatorHotkey,
 					alphaAmount: swapAlpha,
 					estimatedTaoValue: swapTaoValue,
-					limitPrice,
+					limitPrice: 0n,
 				});
 				fulfilled.set(destTarget.netuid, destFulfilled + swapTaoValue);
 				swapped = true;
@@ -310,13 +299,12 @@ function generateOperations(
 
 			if (!swapped) {
 				// Unstake partial if no swap target available
-				const limitPrice = applySlippageSell(pos.alphaPrice);
 				operations.push({
 					kind: "unstake_partial",
 					netuid: pos.netuid,
 					hotkey: pos.hotkey,
 					alphaAmount: reduceAlpha,
-					limitPrice,
+					limitPrice: 0n,
 					estimatedTaoValue: reduceAmount,
 				});
 				log.verbose(
@@ -352,15 +340,12 @@ function generateOperations(
 			continue;
 		}
 
-		const destAlphaPrice = getAlphaPriceForNetuid(target.netuid, positions);
-		const limitPrice = applySlippageBuy(destAlphaPrice);
-
 		operations.push({
 			kind: "stake",
 			netuid: target.netuid,
 			hotkey: validatorHotkey,
 			taoAmount: stakeAmount,
-			limitPrice,
+			limitPrice: 0n,
 		});
 
 		fulfilled.set(target.netuid, currentFulfilled + stakeAmount);
@@ -370,30 +355,6 @@ function generateOperations(
 	}
 
 	return { targets, operations, skipped };
-}
-
-/** Apply slippage buffer for buying alpha (higher price = pay more TAO per alpha) */
-function applySlippageBuy(alphaPrice: bigint): bigint {
-	// limit_price = price * (1 + slippage)
-	const slippageBps = BigInt(Math.round(SLIPPAGE_FACTOR * 10_000));
-	return alphaPrice + (alphaPrice * slippageBps) / 10_000n;
-}
-
-/** Apply slippage buffer for selling alpha (lower price = receive less TAO per alpha) */
-function applySlippageSell(alphaPrice: bigint): bigint {
-	// limit_price = price * (1 - slippage)
-	const slippageBps = BigInt(Math.round(SLIPPAGE_FACTOR * 10_000));
-	return alphaPrice - (alphaPrice * slippageBps) / 10_000n;
-}
-
-/** Look up alpha price for a target netuid from existing positions, fallback to TAO (1:1) */
-function getAlphaPriceForNetuid(
-	netuid: number,
-	positions: ClassifiedPosition[],
-): bigint {
-	const pos = positions.find((p) => p.netuid === netuid);
-	// If we have no existing position, default to 1:1 (root subnet or new subnet)
-	return pos?.alphaPrice ?? TAO;
 }
 
 function formatTao(rao: bigint): string {
