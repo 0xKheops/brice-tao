@@ -8,7 +8,7 @@ if [ -f /app/.env ]; then
   set +a
 fi
 
-printf 'PATH=/usr/local/bin:/usr/bin:/bin\n6 * * * * /app/scripts/run-rebalance.sh >> /proc/1/fd/1 2>> /proc/1/fd/2\n' | crontab -
+printf 'PATH=/usr/local/bin:/usr/bin:/bin\n0 */6 * * * /app/scripts/run-rebalance.sh >> /proc/1/fd/1 2>> /proc/1/fd/2\n' | crontab -
 
 echo "Rebalance cron started — running every 6 hours"
 
