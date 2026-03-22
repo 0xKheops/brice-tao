@@ -4,6 +4,8 @@ services:
     platform: linux/arm64
     restart: unless-stopped
     container_name: brice-tao-rebalance
+    environment:
+      - TZ=Asia/Seoul
     volumes:
       - ./.env:/app/.env:ro
       - ./logs:/app/logs
