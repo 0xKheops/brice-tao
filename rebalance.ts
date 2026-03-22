@@ -3,10 +3,16 @@ import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
 import {
 	entropyToMiniSecret,
 	mnemonicToEntropy,
+	ss58Address,
 } from "@polkadot-labs/hdkd-helpers";
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "./src/api/generated/Sn45Api.ts";
+import {
+	sendErrorNotification,
+	sendNoRebalanceNotification,
+	sendRebalanceNotification,
+} from "./src/discord.ts";
 import type { Balances } from "./src/getBalances.ts";
 import { getBalances } from "./src/getBalances.ts";
 import { getMostProfitableSubnets } from "./src/getMostProfitableSubnets.ts";
@@ -25,18 +31,21 @@ const coldkey = process.env.COLDKEY_ADDRESS;
 const sn45ApiKey = process.env.SN45_API_KEY;
 const proxyMnemonic = process.env.PROXY_MNEMONIC;
 const validatorHotkey = process.env.VALIDATOR_HOTKEY;
+const discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
 
 if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
 if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 if (!sn45ApiKey) throw new Error("SN45_API_KEY is not set");
 if (!proxyMnemonic) throw new Error("PROXY_MNEMONIC is not set");
 if (!validatorHotkey) throw new Error("VALIDATOR_HOTKEY is not set");
+if (!discordWebhookUrl) throw new Error("DISCORD_WEBHOOK_URL is not set");
 
 // --- Create signer from proxy mnemonic ---
 const miniSecret = entropyToMiniSecret(mnemonicToEntropy(proxyMnemonic));
 const derive = sr25519CreateDerive(miniSecret);
 const keyPair = derive("");
 const signer = getPolkadotSigner(keyPair.publicKey, "Sr25519", keyPair.sign);
+const proxyAddress = ss58Address(keyPair.publicKey, 42);
 
 // --- Connect to chain ---
 const client = createWsClient(wsEndpoints);
@@ -51,10 +60,13 @@ try {
 	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
 	log.info("Fetching balances, subnet health, and profitable subnets...");
-	const [balances, { healthyNetuids, allHealth }] = await Promise.all([
-		getBalances(api, coldkey),
-		getHealthySubnets(api),
-	]);
+	const [balances, { healthyNetuids, allHealth }, proxyAccount] =
+		await Promise.all([
+			getBalances(api, coldkey),
+			getHealthySubnets(api),
+			api.query.System.Account.getValue(proxyAddress),
+		]);
+	const proxyFreeBalance = proxyAccount.data.free;
 
 	log.verbose(
 		`Subnet health: ${healthyNetuids.size} healthy out of ${allHealth.length} total`,
@@ -81,6 +93,11 @@ try {
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");
+		await sendNoRebalanceNotification(
+			discordWebhookUrl,
+			balances,
+			proxyFreeBalance,
+		);
 	} else {
 		log.info(
 			`Plan: ${plan.operations.length} operations across ${plan.targets.length} target subnets`,
@@ -95,20 +112,34 @@ try {
 
 		await executeRebalance(api, signer, coldkey, plan, { dryRun });
 
-		if (!dryRun) {
-			// Re-fetch and log balances after execution
-			log.info("Fetching post-rebalance balances...");
-			const postBalances = await getBalances(api, coldkey);
-			log.info(
-				`Portfolio after: ${formatTao(postBalances.totalTaoValue)} τ total, ${postBalances.stakes.length} positions`,
-			);
-			logBalancesDetail("AFTER", coldkey, postBalances);
-		}
+		// Fetch post-rebalance balances (or reuse current for dry-run)
+		const postBalances = dryRun
+			? balances
+			: await (async () => {
+					log.info("Fetching post-rebalance balances...");
+					const b = await getBalances(api, coldkey);
+					log.info(
+						`Portfolio after: ${formatTao(b.totalTaoValue)} τ total, ${b.stakes.length} positions`,
+					);
+					logBalancesDetail("AFTER", coldkey, b);
+					return b;
+				})();
+
+		await sendRebalanceNotification(discordWebhookUrl, {
+			plan,
+			balancesBefore: balances,
+			balancesAfter: postBalances,
+			proxyFreeBalance,
+			dryRun,
+		});
 	}
 
 	log.info(`Log file: ${log.filePath()}`);
 } catch (err) {
 	log.error("Rebalance failed", err);
+	await sendErrorNotification(discordWebhookUrl, err).catch((e) =>
+		log.error("Failed to send Discord error notification", e),
+	);
 	process.exit(1);
 } finally {
 	client.destroy();

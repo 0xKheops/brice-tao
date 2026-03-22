@@ -175,6 +175,14 @@ function generateOperations(
 		);
 
 	for (const exitPos of swappable) {
+		if (exitPos.taoValue < MIN_OPERATION_TAO) {
+			skipped.push({
+				netuid: exitPos.netuid,
+				reason: `Position too small to swap (${formatTao(exitPos.taoValue)} τ)`,
+			});
+			continue;
+		}
+
 		let remainingAlpha = exitPos.stake;
 		let remainingTaoValue = exitPos.taoValue;
 
