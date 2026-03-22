@@ -1,4 +1,7 @@
-import { bittensor } from "@polkadot-api/descriptors";
+import {
+	bittensor,
+	getMetadata as getDescriptorsMetadata,
+} from "@polkadot-api/descriptors";
 import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
 import {
 	entropyToMiniSecret,
@@ -47,8 +50,25 @@ const keyPair = derive("");
 const signer = getPolkadotSigner(keyPair.publicKey, "Sr25519", keyPair.sign);
 const proxyAddress = ss58Address(keyPair.publicKey, 42);
 
+// --- Metadata caching (avoids re-downloading metadata on every run) ---
+const CACHE_DIR = ".papi/cache";
+await Bun.write(Bun.file(`${CACHE_DIR}/.gitkeep`), "");
+
+const setMetadata = (codeHash: string, value: Uint8Array) => {
+	Bun.write(Bun.file(`${CACHE_DIR}/${codeHash}.bin`), value);
+};
+
+const getMetadata = async (codeHash: string) => {
+	const file = Bun.file(`${CACHE_DIR}/${codeHash}.bin`);
+	if (await file.exists()) return new Uint8Array(await file.arrayBuffer());
+
+	const metadata = await getDescriptorsMetadata(codeHash);
+	if (metadata) setMetadata(codeHash, metadata);
+	return metadata;
+};
+
 // --- Connect to chain ---
-const client = createWsClient(wsEndpoints);
+const client = createWsClient(wsEndpoints, { getMetadata, setMetadata });
 const sn45 = new Sn45Api({
 	baseUrl: "https://sn45api.talisman.xyz",
 	baseApiParams: { headers: { "X-API-Key": sn45ApiKey } },
