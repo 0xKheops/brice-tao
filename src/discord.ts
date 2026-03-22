@@ -1,6 +1,7 @@
 import type { Balances } from "./getBalances.ts";
 import type {
 	BatchResult,
+	OperationResult,
 	RebalanceOperation,
 	RebalancePlan,
 } from "./rebalance/types.ts";
@@ -25,6 +26,26 @@ function describeOp(op: RebalanceOperation): string {
 		case "stake":
 			return `📥 STAKE SN${op.netuid}: ${formatTao(op.taoAmount)} τ`;
 	}
+}
+
+function describeOpWithResult(
+	op: RebalanceOperation,
+	result: OperationResult | null,
+): string {
+	const base = describeOp(op);
+	if (!result) return base; // dry run or no result available
+	if (result.success) return `✅ ${base}`;
+	const errorSuffix = result.error ? ` — ${result.error}` : "";
+	return `❌ ${base}${errorSuffix}`;
+}
+
+function getOperationResult(
+	batchResult: BatchResult | null,
+	index: number,
+): OperationResult | null {
+	if (!batchResult) return null;
+	if (batchResult.status === "timeout") return null;
+	return batchResult.operationResults[index] ?? null;
 }
 
 function buildPositionsTable(balances: Balances): string {
@@ -61,18 +82,23 @@ function batchResultField(
 	if (!result) return null;
 
 	switch (result.status) {
-		case "completed":
+		case "completed": {
+			const succeeded = result.operationResults.filter((r) => r.success).length;
 			return {
 				name: "🟢 Batch Execution",
-				value: `All ${totalOps} operations executed successfully (block #${result.blockNumber})`,
+				value: `All ${succeeded} operations executed successfully (block #${result.blockNumber})`,
 				inline: false,
 			};
-		case "partial_failure":
+		}
+		case "partial_failure": {
+			const succeeded = result.operationResults.filter((r) => r.success).length;
+			const failed = result.operationResults.filter((r) => !r.success).length;
 			return {
 				name: "🟡 Batch Partial Failure",
-				value: `Failed at operation ${result.failedAtIndex + 1}/${totalOps} (block #${result.blockNumber})\n${result.failedAtIndex} operations succeeded, remaining were skipped.`,
+				value: `${succeeded}/${totalOps} succeeded, ${failed} failed (block #${result.blockNumber})`,
 				inline: false,
 			};
+		}
 		case "timeout":
 			return {
 				name: "🔴 Batch Execution Unknown",
@@ -121,7 +147,12 @@ export async function sendRebalanceNotification(
 
 	const operationLines =
 		plan.operations.length > 0
-			? plan.operations.map(describeOp).join("\n")
+			? plan.operations
+					.map((op, i) => {
+						const opResult = getOperationResult(batchResult, i);
+						return describeOpWithResult(op, opResult);
+					})
+					.join("\n")
 			: "Portfolio is balanced — no operations needed.";
 
 	const valueBefore = formatTao(balancesBefore.totalTaoValue);

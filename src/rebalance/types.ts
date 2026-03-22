@@ -82,12 +82,23 @@ export interface RebalancePlan {
 	skipped: Array<{ netuid: number; reason: string }>;
 }
 
+export interface OperationResult {
+	/** 0-based index in the batch */
+	index: number;
+	success: boolean;
+	/** Human-readable error description if failed */
+	error?: string;
+}
+
 export type BatchResult =
-	| { status: "completed"; blockNumber: number }
+	| {
+			status: "completed";
+			blockNumber: number;
+			operationResults: OperationResult[];
+	  }
 	| {
 			status: "partial_failure";
-			failedAtIndex: number;
-			totalOps: number;
 			blockNumber: number;
+			operationResults: OperationResult[];
 	  }
 	| { status: "timeout" };

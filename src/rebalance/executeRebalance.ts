@@ -1,6 +1,6 @@
 import { type bittensor, MultiAddress } from "@polkadot-api/descriptors";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
-import type { PolkadotSigner, TypedApi } from "polkadot-api";
+import type { PolkadotClient, PolkadotSigner, TypedApi } from "polkadot-api";
 import { Enum } from "polkadot-api";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
@@ -26,6 +26,7 @@ export interface ExecuteOptions {
  * In dry-run mode, builds and prints the decoded call but does not sign or submit.
  */
 export async function executeRebalance(
+	client: PolkadotClient,
 	api: Api,
 	signer: PolkadotSigner,
 	coldkeyAddress: string,
@@ -109,10 +110,10 @@ export async function executeRebalance(
 	// Wait for the inner batch transaction to be executed
 	log.info("Waiting for inner batch execution...");
 	const batchResult = await waitForInnerBatch(
+		client,
 		api,
-		proxyAddress,
-		nonce,
-		outerResult.block.number,
+		innerSignedBytes,
+		plan.operations.length,
 	);
 
 	return batchResult;

@@ -1,175 +1,226 @@
 import type { bittensor } from "@polkadot-api/descriptors";
-import type { TypedApi } from "polkadot-api";
+import type { PolkadotClient, TypedApi } from "polkadot-api";
+import { timeout as rxTimeout } from "rxjs/operators";
 import { log } from "./logger.ts";
-import type { BatchResult } from "./types.ts";
+import type { BatchResult, OperationResult } from "./types.ts";
 
 type Api = TypedApi<typeof bittensor>;
 
-const POLL_INTERVAL_MS = 6_000;
-const DEFAULT_TIMEOUT_MS = 90_000;
-const MAX_BLOCKS_TO_SCAN = 5;
+const DEFAULT_TIMEOUT_MS = 120_000;
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * After the outer MEV-shield transaction is finalized, watch finalized blocks
+ * until the inner batch transaction appears in a block body (matched by raw bytes).
+ * Then parse per-operation results from the block's events.
+ */
+export async function waitForInnerBatch(
+	client: PolkadotClient,
+	api: Api,
+	innerSignedBytes: Uint8Array,
+	totalOps: number,
+	timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<BatchResult> {
+	log.verbose("Watching finalized blocks for inner batch transaction...");
+
+	try {
+		const found = await findTxInFinalizedBlocks(
+			client,
+			innerSignedBytes,
+			timeoutMs,
+		);
+
+		log.info(
+			`Inner batch found in block #${found.blockNumber} at extrinsic index ${found.extrinsicIndex}`,
+		);
+
+		const operationResults = await extractOperationResults(
+			api,
+			found.blockHash,
+			found.extrinsicIndex,
+			totalOps,
+		);
+
+		const failedCount = operationResults.filter((r) => !r.success).length;
+
+		if (failedCount === 0) {
+			log.info(
+				`✓ Batch completed successfully: all ${totalOps} operations succeeded (block #${found.blockNumber})`,
+			);
+			return {
+				status: "completed",
+				blockNumber: found.blockNumber,
+				operationResults,
+			};
+		}
+
+		log.warn(
+			`⚠ Batch completed with ${failedCount}/${totalOps} failure(s) in block #${found.blockNumber}`,
+		);
+		for (const r of operationResults) {
+			if (!r.success) {
+				log.warn(`  Operation ${r.index}: ${r.error ?? "unknown error"}`);
+			}
+		}
+		return {
+			status: "partial_failure",
+			blockNumber: found.blockNumber,
+			operationResults,
+		};
+	} catch (err) {
+		if (err instanceof TxSearchTimeoutError) {
+			log.warn(
+				`Timed out waiting for inner batch execution after ${timeoutMs / 1000}s`,
+			);
+			return { status: "timeout" };
+		}
+		throw err;
+	}
+}
+
+class TxSearchTimeoutError extends Error {
+	constructor(timeoutMs: number) {
+		super(`Inner batch tx not found within ${timeoutMs / 1000}s`);
+		this.name = "TxSearchTimeoutError";
+	}
+}
+
+interface FoundTx {
+	blockHash: string;
+	blockNumber: number;
+	extrinsicIndex: number;
 }
 
 /**
- * After the outer MEV-shield transaction is finalized, poll finalized blocks
- * to detect when the inner batch transaction is executed and determine its outcome.
- *
- * The inner tx was signed with `startNonce + 1`, so once the signer's on-chain nonce
- * reaches `startNonce + 2` we know both the outer and inner tx have been consumed.
- * We then scan recent blocks for Utility batch events to determine success/failure.
+ * Subscribe to finalized blocks, fetch each block's body, and find the
+ * extrinsic matching `innerSignedBytes` by direct byte comparison.
+ * This is the same approach polkadot-api uses internally (track-tx.mjs).
  */
-export async function waitForInnerBatch(
-	api: Api,
-	signerAddress: string,
-	startNonce: number,
-	outerBlockNumber: number,
-	timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<BatchResult> {
-	const expectedNonce = startNonce + 2;
-	const deadline = Date.now() + timeoutMs;
+async function findTxInFinalizedBlocks(
+	client: PolkadotClient,
+	innerSignedBytes: Uint8Array,
+	timeoutMs: number,
+): Promise<FoundTx> {
+	return new Promise<FoundTx>((resolve, reject) => {
+		const sub = client.finalizedBlock$.pipe(rxTimeout(timeoutMs)).subscribe({
+			next: async (block) => {
+				try {
+					log.verbose(
+						`  Scanning finalized block #${block.number} (${block.hash.slice(0, 10)}...)`,
+					);
+					const body = await client.getBlockBody(block.hash);
 
-	log.verbose(
-		`Waiting for inner batch execution (nonce ${startNonce + 1}, expecting nonce to reach ${expectedNonce})...`,
-	);
-
-	while (Date.now() < deadline) {
-		await sleep(POLL_INTERVAL_MS);
-
-		const account = await api.query.System.Account.getValue(signerAddress);
-		if (account.nonce < expectedNonce) {
-			log.verbose(`  Nonce still at ${account.nonce}, waiting...`);
-			continue;
-		}
-
-		log.verbose(`  Nonce reached ${account.nonce} — inner tx was included`);
-
-		// Scan recent finalized blocks for batch events
-		const currentBlockNum = await api.query.System.Number.getValue();
-
-		const scanStart = Math.max(
-			outerBlockNumber + 1,
-			currentBlockNum - MAX_BLOCKS_TO_SCAN,
-		);
-		for (let blockNum = scanStart; blockNum <= currentBlockNum; blockNum++) {
-			const result = await checkBlockForBatchResult(api, blockNum);
-			if (result) return result;
-		}
-
-		// Nonce advanced but no batch events found — likely succeeded
-		// (events may have been pruned or the batch had zero operations)
-		log.warn(
-			"Nonce advanced but no Utility batch events found in recent blocks",
-		);
-		return { status: "completed", blockNumber: currentBlockNum };
-	}
-
-	log.warn(
-		`Timed out waiting for inner batch execution after ${timeoutMs / 1000}s`,
-	);
-	return { status: "timeout" };
+					for (const [i, ext] of body.entries()) {
+						if (bytesEqual(ext, innerSignedBytes)) {
+							sub.unsubscribe();
+							resolve({
+								blockHash: block.hash,
+								blockNumber: block.number,
+								extrinsicIndex: i,
+							});
+							return;
+						}
+					}
+				} catch (err) {
+					sub.unsubscribe();
+					reject(err);
+				}
+			},
+			error: (err) => {
+				if (err?.name === "TimeoutError") {
+					reject(new TxSearchTimeoutError(timeoutMs));
+				} else {
+					reject(err);
+				}
+			},
+		});
+	});
 }
 
-async function checkBlockForBatchResult(
-	api: Api,
-	blockNumber: number,
-): Promise<BatchResult | null> {
-	const blockHash = await api.query.System.BlockHash.getValue(blockNumber);
-	const zeroHash =
-		"0x0000000000000000000000000000000000000000000000000000000000000000";
-	if (blockHash === zeroHash) return null;
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
 
+/**
+ * Given a block hash and extrinsic index, fetch the block's events and
+ * extract per-operation results from Utility ItemCompleted/ItemFailed events.
+ */
+async function extractOperationResults(
+	api: Api,
+	blockHash: string,
+	extrinsicIndex: number,
+	totalOps: number,
+): Promise<OperationResult[]> {
 	const events = await api.query.System.Events.getValue({ at: blockHash });
 
-	for (const record of events) {
+	// Filter events belonging to our extrinsic
+	const extrinsicEvents = events.filter(
+		(e) =>
+			e.phase.type === "ApplyExtrinsic" && e.phase.value === extrinsicIndex,
+	);
+
+	// Walk ItemCompleted/ItemFailed events in order — they correspond 1:1 to batch calls
+	const results: OperationResult[] = [];
+	for (const record of extrinsicEvents) {
 		if (record.event.type !== "Utility") continue;
+		const ev = record.event.value;
 
-		const utilityEvent = record.event.value;
-
-		if (utilityEvent.type === "BatchCompleted") {
-			log.info(`✓ Batch completed successfully in block ${blockNumber}`);
-			return { status: "completed", blockNumber };
+		if (ev.type === "ItemCompleted") {
+			results.push({ index: results.length, success: true });
+		} else if (ev.type === "ItemFailed") {
+			results.push({
+				index: results.length,
+				success: false,
+				error: formatDispatchError(ev.value.error),
+			});
 		}
-
-		if (utilityEvent.type === "BatchCompletedWithErrors") {
-			// force_batch emits this when some items failed but execution continued
-			const extrinsicIndex =
-				record.phase.type === "ApplyExtrinsic" ? record.phase.value : undefined;
-			const failedItems =
-				extrinsicIndex !== undefined
-					? events.filter(
-							(e) =>
-								e.phase.type === "ApplyExtrinsic" &&
-								e.phase.value === extrinsicIndex &&
-								e.event.type === "Utility" &&
-								e.event.value.type === "ItemFailed",
-						)
-					: [];
-			const completedCount =
-				extrinsicIndex !== undefined
-					? events.filter(
-							(e) =>
-								e.phase.type === "ApplyExtrinsic" &&
-								e.phase.value === extrinsicIndex &&
-								e.event.type === "Utility" &&
-								e.event.value.type === "ItemCompleted",
-						).length
-					: 0;
-
-			const firstFailedIndex =
-				failedItems.length > 0
-					? events
-							.filter(
-								(e) =>
-									e.phase.type === "ApplyExtrinsic" &&
-									e.phase.value === extrinsicIndex &&
-									e.event.type === "Utility" &&
-									(e.event.value.type === "ItemCompleted" ||
-										e.event.value.type === "ItemFailed"),
-							)
-							.findIndex((e) => e.event.value.type === "ItemFailed")
-					: -1;
-
-			log.warn(
-				`⚠ Batch completed with ${failedItems.length} error(s) in block ${blockNumber} (${completedCount} succeeded)`,
-			);
-			return {
-				status: "partial_failure",
-				failedAtIndex: firstFailedIndex >= 0 ? firstFailedIndex : 0,
-				totalOps: completedCount + failedItems.length,
-				blockNumber,
-			};
-		}
-
-		if (utilityEvent.type === "BatchInterrupted") {
-			const { index } = utilityEvent.value;
-			// Count ItemCompleted events in the same extrinsic phase to determine total ops attempted
-			const extrinsicIndex =
-				record.phase.type === "ApplyExtrinsic" ? record.phase.value : undefined;
-			const itemCount =
-				extrinsicIndex !== undefined
-					? events.filter(
-							(e) =>
-								e.phase.type === "ApplyExtrinsic" &&
-								e.phase.value === extrinsicIndex &&
-								e.event.type === "Utility" &&
-								e.event.value.type === "ItemCompleted",
-						).length
-					: 0;
-
-			log.warn(
-				`⚠ Batch interrupted at operation ${index + 1} in block ${blockNumber} (${itemCount} succeeded before failure)`,
-			);
-			return {
-				status: "partial_failure",
-				failedAtIndex: index,
-				totalOps: itemCount + 1, // completed + the failed one
-				blockNumber,
-			};
-		}
+		if (results.length >= totalOps) break;
 	}
 
-	return null;
+	// Pad remaining as unknown failures if fewer results than expected
+	while (results.length < totalOps) {
+		results.push({
+			index: results.length,
+			success: false,
+			error: "No event found for this operation",
+		});
+	}
+
+	return results;
+}
+
+/**
+ * Convert a DispatchError into a human-readable string.
+ * For Module errors, extracts the pallet and error variant names.
+ */
+function formatDispatchError(error: { type: string; value?: unknown }): string {
+	switch (error.type) {
+		case "Module": {
+			const moduleError = error.value as {
+				type: string;
+				value?: { type: string };
+			};
+			const pallet = moduleError.type;
+			const errorName =
+				moduleError.value &&
+				typeof moduleError.value === "object" &&
+				"type" in moduleError.value
+					? (moduleError.value as { type: string }).type
+					: "Unknown";
+			return `${pallet}::${errorName}`;
+		}
+		case "Token": {
+			const tokenError = error.value as { type: string };
+			return `Token::${tokenError.type}`;
+		}
+		case "Arithmetic": {
+			const arithError = error.value as { type: string };
+			return `Arithmetic::${arithError.type}`;
+		}
+		default:
+			return error.type;
+	}
 }
