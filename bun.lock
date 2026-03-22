@@ -13,18 +13,23 @@
         "@polkadot/util-crypto": "^14.0.2",
         "mlkem": "^2.7.0",
         "polkadot-api": "2.0.0-rc.5",
+        "rxjs": "^7.8.0",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.4.8",
         "@types/bun": "latest",
         "knip": "^6.0.1",
         "simple-git-hooks": "^2.13.1",
+        "typescript": "^5",
       },
       "peerDependencies": {
         "typescript": "^5",
       },
     },
   },
+  "trustedDependencies": [
+    "@polkadot-api/descriptors",
+  ],
   "packages": {
     "@babel/code-frame": ["@babel/code-frame@7.29.0", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.28.5", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw=="],
 

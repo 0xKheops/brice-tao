@@ -150,28 +150,3 @@ function scoreAndSort(
 	results.sort((a, b) => b.momentumScore - a.momentumScore);
 	return results;
 }
-
-export function printMomentumRanking(subnets: SubnetMomentum[]): void {
-	console.log(`\nMomentum ranking (${subnets.length} subnets):`);
-	console.log("  Rank | Netuid |   Score | Price Δ  |  EMA Flow |  Vol/MCap");
-	console.log(`  ${"—".repeat(60)}`);
-	for (let i = 0; i < subnets.length; i++) {
-		const s = subnets[i];
-		if (!s) {
-			console.warn(`  ${i + 1} | (missing data)`);
-			continue;
-		}
-		const rank = (i + 1).toString().padStart(4);
-		const netuid = `SN${s.netuid.toString().padStart(3)}`;
-		const score = s.momentumScore.toFixed(3).padStart(7);
-		const price =
-			`${s.priceChange >= 0 ? "+" : ""}${(s.priceChange * 100).toFixed(2)}%`.padStart(
-				8,
-			);
-		const ema = s.emaTaoFlow.toFixed(0).padStart(9);
-		const vmr = s.volumeMcapRatio.toFixed(4).padStart(9);
-		console.log(
-			`  ${rank} | ${netuid} | ${score} | ${price} | ${ema} | ${vmr}`,
-		);
-	}
-}

@@ -1,6 +1,6 @@
 {
 	"name": "brice-tao",
-	"module": "index.ts",
+	"module": "rebalance.ts",
 	"type": "module",
 	"private": true,
 	"scripts": {
@@ -20,11 +20,15 @@
 		"@biomejs/biome": "^2.4.8",
 		"@types/bun": "latest",
 		"knip": "^6.0.1",
+		"typescript": "^5",
 		"simple-git-hooks": "^2.13.1"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
 	},
+	"trustedDependencies": [
+		"@polkadot-api/descriptors"
+	],
 	"dependencies": {
 		"@noble/ciphers": "^2.1.1",
 		"@polkadot-api/descriptors": "file:.papi/descriptors",
@@ -33,6 +37,7 @@
 		"@polkadot/util": "^14.0.2",
 		"@polkadot/util-crypto": "^14.0.2",
 		"mlkem": "^2.7.0",
-		"polkadot-api": "2.0.0-rc.5"
+		"polkadot-api": "2.0.0-rc.5",
+		"rxjs": "^7.8.0"
 	}
 }

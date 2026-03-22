@@ -3,7 +3,7 @@ import type { TypedApi } from "polkadot-api";
 import { TAO } from "./rebalance/constants.ts";
 
 /** Minimum TAO locked in subnet pool to consider it healthy */
-export const MIN_SUBNET_POOL_TAO = 1_000n * TAO;
+const MIN_SUBNET_POOL_TAO = 1_000n * TAO;
 
 export interface SubnetHealth {
 	netuid: number;

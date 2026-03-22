@@ -16,7 +16,7 @@ export async function getNextKey(
 	return key ?? undefined;
 }
 
-export async function encryptTransaction(
+async function encryptTransaction(
 	plaintext: Uint8Array,
 	publicKey: Uint8Array,
 ): Promise<Uint8Array> {

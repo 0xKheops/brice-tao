@@ -74,7 +74,7 @@ export async function getBalances(
 	};
 }
 
-export function printBalances(address: string, balances: Balances): void {
+function _printBalances(address: string, balances: Balances): void {
 	console.log(`\nBalances for ${address}`);
 	console.log(`  Free:     ${formatAmount(balances.free, "τ")}`);
 	console.log(`  Reserved: ${formatAmount(balances.reserved, "τ")}`);

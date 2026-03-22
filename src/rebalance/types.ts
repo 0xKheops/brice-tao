@@ -1,9 +1,3 @@
-export type OperationKind =
-	| "swap" // swap_stake_limit (same hotkey, cross-subnet)
-	| "unstake" // remove_stake_full_limit (exit a position entirely)
-	| "unstake_partial" // remove_stake_limit (reduce overweight position)
-	| "stake"; // add_stake_limit (new position from free balance)
-
 export interface SwapOperation {
 	kind: "swap";
 	originNetuid: number;
