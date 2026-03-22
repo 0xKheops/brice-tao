@@ -21,10 +21,10 @@ COPY *.ts ./
 RUN mkdir -p /app/logs
 
 # Copy and make scripts executable
-COPY entrypoint.sh run-rebalance.sh ./
-RUN chmod +x /app/entrypoint.sh /app/run-rebalance.sh
+COPY scripts/ ./scripts/
+RUN chmod +x /app/scripts/entrypoint.sh /app/scripts/run-rebalance.sh
 
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
   CMD pidof cron > /dev/null || exit 1
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]

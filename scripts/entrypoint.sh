@@ -9,7 +9,7 @@ if [ -f /app/.env ]; then
 fi
 
 # Install crontab to run rebalance every 10 minutes
-printf 'PATH=/usr/local/bin:/usr/bin:/bin\n0 * * * * /app/run-rebalance.sh >> /proc/1/fd/1 2>> /proc/1/fd/2\n' | crontab -
+printf 'PATH=/usr/local/bin:/usr/bin:/bin\n0 * * * * /app/scripts/run-rebalance.sh >> /proc/1/fd/1 2>> /proc/1/fd/2\n' | crontab -
 
 echo "Rebalance cron started — running every hour"
 

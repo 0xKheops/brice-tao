@@ -8,6 +8,10 @@ interface LeaderboardEntry {
 	mcap: string | null;
 	emaTaoFlow: string | null;
 	volume: string;
+	totalHolders: number;
+	buyCount: number;
+	sellCount: number;
+	emissionPct: number | null;
 }
 
 interface QualifiedEntry extends LeaderboardEntry {
@@ -20,6 +24,9 @@ interface QualifiedEntry extends LeaderboardEntry {
 const DEFAULT_CONFIG = {
 	minVolumeTao: 100,
 	minMcapTao: 1_000,
+	minHolders: 500,
+	maxSellBuyRatio: 2,
+	minEmissionPct: 0.5,
 	bottomPercentileCutoff: 10,
 	weights: { priceChange: 0.5, emaTaoFlow: 0.3, volumeMcapRatio: 0.2 },
 } as const;
@@ -29,6 +36,12 @@ export interface MomentumConfig {
 	minVolumeTao?: number;
 	/** Minimum market cap in TAO — rejects micro-cap noise (default: 1000) */
 	minMcapTao?: number;
+	/** Minimum unique holder wallets — rejects concentrated/fragile subnets (default: 50) */
+	minHolders?: number;
+	/** Maximum sell/buy event ratio — rejects subnets with exodus-like selling pressure (default: 2) */
+	maxSellBuyRatio?: number;
+	/** Minimum emission % from root validators — rejects subnets not valued by the network (default: 0.5) */
+	minEmissionPct?: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
 	bottomPercentileCutoff?: number;
 	/** Signal weights (should sum to 1) */
@@ -68,6 +81,9 @@ export async function getMostProfitableSubnets(
 	const cfg = {
 		minVolumeTao: config?.minVolumeTao ?? DEFAULT_CONFIG.minVolumeTao,
 		minMcapTao: config?.minMcapTao ?? DEFAULT_CONFIG.minMcapTao,
+		minHolders: config?.minHolders ?? DEFAULT_CONFIG.minHolders,
+		maxSellBuyRatio: config?.maxSellBuyRatio ?? DEFAULT_CONFIG.maxSellBuyRatio,
+		minEmissionPct: config?.minEmissionPct ?? DEFAULT_CONFIG.minEmissionPct,
 		bottomPercentileCutoff:
 			config?.bottomPercentileCutoff ?? DEFAULT_CONFIG.bottomPercentileCutoff,
 		weights: { ...DEFAULT_CONFIG.weights, ...config?.weights },
@@ -100,8 +116,23 @@ export async function getMostProfitableSubnets(
 	const minMcapRao = cfg.minMcapTao * RAO;
 	const aboveMcap = aboveFloor.filter((s) => Number(s.mcap) >= minMcapRao);
 
+	// Minimum holder count — reject concentrated/fragile subnets
+	const enoughHolders = aboveMcap.filter(
+		(s) => s.totalHolders >= cfg.minHolders,
+	);
+
+	// Sell/buy ratio — reject subnets with exodus-like selling pressure
+	const healthyFlow = enoughHolders.filter(
+		(s) => s.buyCount === 0 || s.sellCount / s.buyCount <= cfg.maxSellBuyRatio,
+	);
+
+	// Minimum emission % — reject subnets not valued by root validators
+	const enoughEmission = healthyFlow.filter(
+		(s) => s.emissionPct !== null && s.emissionPct >= cfg.minEmissionPct,
+	);
+
 	// Compute volume/mcap ratio for each candidate
-	const withRatio: QualifiedEntry[] = aboveMcap.map((s) => ({
+	const withRatio: QualifiedEntry[] = enoughEmission.map((s) => ({
 		...s,
 		volumeMcapRatio: Number(s.volume) / Number(s.mcap),
 	}));
