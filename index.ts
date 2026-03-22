@@ -6,6 +6,7 @@ import {
 	getMostProfitableSubnets,
 	printMomentumRanking,
 } from "./src/getMostProfitableSubnets.ts";
+import { getHealthySubnets } from "./src/getSubnetHealth.ts";
 import { getSubnets, printSubnets } from "./src/getSubnets.ts";
 
 const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
@@ -24,11 +25,18 @@ const sn45 = new Sn45Api({
 
 try {
 	const api = client.getTypedApi(bittensor);
-	const [balances, subnets, profitable] = await Promise.all([
+	const [balances, subnets, { healthyNetuids }] = await Promise.all([
 		getBalances(api, coldkey),
 		getSubnets(api),
-		getMostProfitableSubnets(sn45),
+		getHealthySubnets(api),
 	]);
+
+	const profitable = await getMostProfitableSubnets(
+		sn45,
+		undefined,
+		healthyNetuids,
+	);
+
 	printBalances(coldkey, balances);
 	printSubnets(subnets);
 	printMomentumRanking(profitable);

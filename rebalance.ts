@@ -10,9 +10,13 @@ import { Sn45Api } from "./src/api/generated/Sn45Api.ts";
 import type { Balances } from "./src/getBalances.ts";
 import { getBalances } from "./src/getBalances.ts";
 import { getMostProfitableSubnets } from "./src/getMostProfitableSubnets.ts";
+import { getHealthySubnets } from "./src/getSubnetHealth.ts";
 import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
 import { log } from "./src/rebalance/logger.ts";
+
+// --- CLI arguments ---
+const dryRun = process.argv.includes("--dry-run");
 
 // --- Environment validation ---
 const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
@@ -43,11 +47,29 @@ const sn45 = new Sn45Api({
 try {
 	const api = client.getTypedApi(bittensor);
 
-	log.info("Fetching balances and profitable subnets...");
-	const [balances, profitable] = await Promise.all([
+	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
+
+	log.info("Fetching balances, subnet health, and profitable subnets...");
+	const [balances, { healthyNetuids, allHealth }] = await Promise.all([
 		getBalances(api, coldkey),
-		getMostProfitableSubnets(sn45),
+		getHealthySubnets(api),
 	]);
+
+	log.verbose(
+		`Subnet health: ${healthyNetuids.size} healthy out of ${allHealth.length} total`,
+	);
+	for (const h of allHealth) {
+		const healthy = healthyNetuids.has(h.netuid) ? "✓" : "✗";
+		log.verbose(
+			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} tao_in=${h.taoIn} volume=${h.subnetVolume}`,
+		);
+	}
+
+	const profitable = await getMostProfitableSubnets(
+		sn45,
+		undefined,
+		healthyNetuids,
+	);
 
 	log.info(
 		`Portfolio: ${formatTao(balances.totalTaoValue)} τ total, ${balances.stakes.length} positions, ${profitable.length} profitable subnets`,
@@ -66,15 +88,17 @@ try {
 			log.verbose(`  Skipped SN${skip.netuid}: ${skip.reason}`);
 		}
 
-		await executeRebalance(api, signer, coldkey, plan);
+		await executeRebalance(api, signer, coldkey, plan, { dryRun });
 
-		// Re-fetch and log balances after execution
-		log.info("Fetching post-rebalance balances...");
-		const postBalances = await getBalances(api, coldkey);
-		log.info(
-			`Portfolio after: ${formatTao(postBalances.totalTaoValue)} τ total, ${postBalances.stakes.length} positions`,
-		);
-		logBalancesDetail("AFTER", coldkey, postBalances);
+		if (!dryRun) {
+			// Re-fetch and log balances after execution
+			log.info("Fetching post-rebalance balances...");
+			const postBalances = await getBalances(api, coldkey);
+			log.info(
+				`Portfolio after: ${formatTao(postBalances.totalTaoValue)} τ total, ${postBalances.stakes.length} positions`,
+			);
+			logBalancesDetail("AFTER", coldkey, postBalances);
+		}
 	}
 
 	log.info(`Log file: ${log.filePath()}`);

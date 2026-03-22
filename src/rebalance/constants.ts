@@ -17,3 +17,6 @@ export const MIN_STAKE_TAO = TAO / 5n; // 0.2 TAO
 
 /** Minimum operation size — skip operations worth less than this */
 export const MIN_OPERATION_TAO = TAO / 5n; // 0.2 TAO
+
+/** Dust threshold — never leave a position with less than this remaining */
+export const DUST_THRESHOLD_TAO = TAO / 10n; // 0.1 TAO

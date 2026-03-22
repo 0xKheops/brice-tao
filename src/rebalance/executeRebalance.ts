@@ -9,22 +9,33 @@ import type { RebalanceOperation, RebalancePlan } from "./types.ts";
 
 type Api = TypedApi<typeof bittensor>;
 
+export interface ExecuteOptions {
+	dryRun?: boolean;
+}
+
 /**
  * Execute a rebalance plan: build the batch of proxy-wrapped staking calls,
  * sign, encrypt via MEV shield, and submit.
+ *
+ * In dry-run mode, builds and prints the decoded call but does not sign or submit.
  */
 export async function executeRebalance(
 	api: Api,
 	signer: PolkadotSigner,
 	coldkeyAddress: string,
 	plan: RebalancePlan,
+	options?: ExecuteOptions,
 ): Promise<void> {
+	const dryRun = options?.dryRun ?? false;
+
 	if (plan.operations.length === 0) {
 		log.info("No operations to execute — portfolio is balanced.");
 		return;
 	}
 
-	log.info(`Executing ${plan.operations.length} operations...`);
+	log.info(
+		`${dryRun ? "[DRY RUN] " : ""}Executing ${plan.operations.length} operations...`,
+	);
 
 	// Build inner staking calls, each wrapped in Proxy.proxy
 	const proxiedCalls = plan.operations.map((op, i) => {
@@ -53,6 +64,11 @@ export async function executeRebalance(
 		),
 	);
 	log.console("");
+
+	if (dryRun) {
+		log.info("[DRY RUN] Skipping sign & submit.");
+		return;
+	}
 
 	// Get current nonce for MEV shield double-nonce pattern
 	const account = await api.query.System.Account.getValue(

@@ -19,6 +19,7 @@ interface QualifiedEntry extends LeaderboardEntry {
 
 const DEFAULT_CONFIG = {
 	minVolumeTao: 100,
+	minMcapTao: 1_000,
 	bottomPercentileCutoff: 10,
 	weights: { priceChange: 0.5, emaTaoFlow: 0.3, volumeMcapRatio: 0.2 },
 } as const;
@@ -26,6 +27,8 @@ const DEFAULT_CONFIG = {
 export interface MomentumConfig {
 	/** Minimum 24h volume in TAO to be considered (default: 100) */
 	minVolumeTao?: number;
+	/** Minimum market cap in TAO — rejects micro-cap noise (default: 1000) */
+	minMcapTao?: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
 	bottomPercentileCutoff?: number;
 	/** Signal weights (should sum to 1) */
@@ -60,9 +63,11 @@ function zScores(values: number[]): number[] {
 export async function getMostProfitableSubnets(
 	sn45: Sn45Api<unknown>,
 	config?: MomentumConfig,
+	activeNetuids?: Set<number>,
 ): Promise<SubnetMomentum[]> {
 	const cfg = {
 		minVolumeTao: config?.minVolumeTao ?? DEFAULT_CONFIG.minVolumeTao,
+		minMcapTao: config?.minMcapTao ?? DEFAULT_CONFIG.minMcapTao,
 		bottomPercentileCutoff:
 			config?.bottomPercentileCutoff ?? DEFAULT_CONFIG.bottomPercentileCutoff,
 		weights: { ...DEFAULT_CONFIG.weights, ...config?.weights },
@@ -71,7 +76,7 @@ export async function getMostProfitableSubnets(
 	const res = await sn45.v1.getSubnetLeaderboard({ period: "1d" });
 	const leaderboard = res.data.subnets as LeaderboardEntry[];
 
-	// Exclude SN0 (root) and subnets missing essential data
+	// Exclude SN0 (root), subnets missing essential data, and non-active subnets
 	const complete = leaderboard.filter(
 		(
 			s,
@@ -83,15 +88,20 @@ export async function getMostProfitableSubnets(
 			s.netuid !== 0 &&
 			s.priceChange !== null &&
 			s.mcap !== null &&
-			s.emaTaoFlow !== null,
+			s.emaTaoFlow !== null &&
+			(activeNetuids === undefined || activeNetuids.has(s.netuid)),
 	);
 
 	// Absolute volume floor
 	const minVolumeRao = cfg.minVolumeTao * RAO;
 	const aboveFloor = complete.filter((s) => Number(s.volume) >= minVolumeRao);
 
+	// Minimum mcap floor — reject micro-cap subnets susceptible to noise
+	const minMcapRao = cfg.minMcapTao * RAO;
+	const aboveMcap = aboveFloor.filter((s) => Number(s.mcap) >= minMcapRao);
+
 	// Compute volume/mcap ratio for each candidate
-	const withRatio: QualifiedEntry[] = aboveFloor.map((s) => ({
+	const withRatio: QualifiedEntry[] = aboveMcap.map((s) => ({
 		...s,
 		volumeMcapRatio: Number(s.volume) / Number(s.mcap),
 	}));
