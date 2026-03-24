@@ -109,6 +109,30 @@ function batchResultField(
 	}
 }
 
+function feesField(
+	result: BatchResult | null,
+): { name: string; value: string; inline: boolean } | null {
+	if (!result) return null;
+
+	if (result.status === "timeout") {
+		if (result.wrapperFee != null && result.wrapperFee > 0n) {
+			return {
+				name: "💸 Transaction Fees",
+				value: `Wrapper: ${formatTao(result.wrapperFee)} τ (inner batch unknown)`,
+				inline: false,
+			};
+		}
+		return null;
+	}
+
+	const total = result.wrapperFee + result.innerBatchFee;
+	return {
+		name: "💸 Transaction Fees",
+		value: `${formatTao(total)} τ`,
+		inline: false,
+	};
+}
+
 export async function sendRebalanceNotification(
 	webhookUrl: string,
 	opts: {
@@ -159,6 +183,7 @@ export async function sendRebalanceNotification(
 	const valueAfter = formatTao(balancesAfter.totalTaoValue);
 
 	const batchField = batchResultField(batchResult, plan.operations.length);
+	const feeField = feesField(batchResult);
 
 	const embeds = [
 		{
@@ -172,6 +197,7 @@ export async function sendRebalanceNotification(
 				},
 				proxyBalanceField(proxyFreeBalance),
 				...(batchField ? [batchField] : []),
+				...(feeField ? [feeField] : []),
 				{
 					name: `📋 Operations (${plan.operations.length})`,
 					value: operationLines,

@@ -103,8 +103,9 @@ export async function executeRebalance(
 		nonce,
 	);
 
+	const wrapperFee = extractWrapperFee(outerResult.events);
 	log.info(
-		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number}`,
+		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number} (fee: ${formatFee(wrapperFee)} τ)`,
 	);
 
 	// Wait for the inner batch transaction to be executed
@@ -114,7 +115,14 @@ export async function executeRebalance(
 		api,
 		innerSignedBytes,
 		plan.operations.length,
+		wrapperFee,
 	);
+
+	if (batchResult.status !== "timeout") {
+		log.info(
+			`Inner batch fee: ${formatFee(batchResult.innerBatchFee)} τ | Total fees: ${formatFee(wrapperFee + batchResult.innerBatchFee)} τ`,
+		);
+	}
 
 	return batchResult;
 }
@@ -175,4 +183,25 @@ function describeOperation(op: RebalanceOperation): string {
 		case "stake":
 			return `STAKE SN${op.netuid}: ${fmt(op.taoAmount)}`;
 	}
+}
+
+function extractWrapperFee(
+	events: Array<{ type: string; value: unknown }>,
+): bigint {
+	for (const event of events) {
+		if (event.type === "TransactionPayment") {
+			const value = event.value as { type: string; value: unknown };
+			if (value.type === "TransactionFeePaid") {
+				const feePaid = value.value as { actual_fee: bigint };
+				return feePaid.actual_fee;
+			}
+		}
+	}
+	return 0n;
+}
+
+function formatFee(rao: bigint): string {
+	const whole = rao / TAO;
+	const frac = ((rao % TAO) * 1_000_000n) / TAO;
+	return `${whole}.${frac.toString().padStart(6, "0")}`;
 }

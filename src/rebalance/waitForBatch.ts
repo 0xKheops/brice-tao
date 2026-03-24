@@ -18,6 +18,7 @@ export async function waitForInnerBatch(
 	api: Api,
 	innerSignedBytes: Uint8Array,
 	totalOps: number,
+	wrapperFee: bigint,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<BatchResult> {
 	log.verbose("Watching finalized blocks for inner batch transaction...");
@@ -33,12 +34,13 @@ export async function waitForInnerBatch(
 			`Inner batch found in block #${found.blockNumber} at extrinsic index ${found.extrinsicIndex}`,
 		);
 
-		const operationResults = await extractOperationResults(
-			api,
-			found.blockHash,
-			found.extrinsicIndex,
-			totalOps,
-		);
+		const { operationResults, fee: innerBatchFee } =
+			await extractOperationResults(
+				api,
+				found.blockHash,
+				found.extrinsicIndex,
+				totalOps,
+			);
 
 		const failedCount = operationResults.filter((r) => !r.success).length;
 
@@ -50,6 +52,8 @@ export async function waitForInnerBatch(
 				status: "completed",
 				blockNumber: found.blockNumber,
 				operationResults,
+				wrapperFee,
+				innerBatchFee,
 			};
 		}
 
@@ -65,13 +69,15 @@ export async function waitForInnerBatch(
 			status: "partial_failure",
 			blockNumber: found.blockNumber,
 			operationResults,
+			wrapperFee,
+			innerBatchFee,
 		};
 	} catch (err) {
 		if (err instanceof TxSearchTimeoutError) {
 			log.warn(
 				`Timed out waiting for inner batch execution after ${timeoutMs / 1000}s`,
 			);
-			return { status: "timeout" };
+			return { status: "timeout", wrapperFee };
 		}
 		throw err;
 	}
@@ -153,12 +159,29 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * call fails, the proxy dispatch itself succeeds (emitting ItemCompleted).
  * The real result lives in the Proxy.ProxyExecuted event. We must check both.
  */
+function extractTransactionFee(
+	extrinsicEvents: Array<{
+		event: { type: string; value: unknown };
+	}>,
+): bigint {
+	for (const record of extrinsicEvents) {
+		if (record.event.type === "TransactionPayment") {
+			const value = record.event.value as { type: string; value: unknown };
+			if (value.type === "TransactionFeePaid") {
+				const feePaid = value.value as { actual_fee: bigint };
+				return feePaid.actual_fee;
+			}
+		}
+	}
+	return 0n;
+}
+
 async function extractOperationResults(
 	api: Api,
 	blockHash: string,
 	extrinsicIndex: number,
 	totalOps: number,
-): Promise<OperationResult[]> {
+): Promise<{ operationResults: OperationResult[]; fee: bigint }> {
 	const events = await api.query.System.Events.getValue({ at: blockHash });
 
 	// Filter events belonging to our extrinsic
@@ -166,6 +189,8 @@ async function extractOperationResults(
 		(e) =>
 			e.phase.type === "ApplyExtrinsic" && e.phase.value === extrinsicIndex,
 	);
+
+	const fee = extractTransactionFee(extrinsicEvents);
 
 	// Collect Proxy.ProxyExecuted results in order — they correspond 1:1 to proxy calls
 	const proxyResults: Array<{ ok: boolean; error?: string }> = [];
@@ -224,7 +249,7 @@ async function extractOperationResults(
 		});
 	}
 
-	return results;
+	return { operationResults: results, fee };
 }
 
 /**

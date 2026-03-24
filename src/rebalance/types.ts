@@ -89,10 +89,22 @@ export type BatchResult =
 			status: "completed";
 			blockNumber: number;
 			operationResults: OperationResult[];
+			/** Fee paid for the MEV-shield wrapper tx (RAO) */
+			wrapperFee: bigint;
+			/** Fee paid for the inner batch tx (RAO) */
+			innerBatchFee: bigint;
 	  }
 	| {
 			status: "partial_failure";
 			blockNumber: number;
 			operationResults: OperationResult[];
+			/** Fee paid for the MEV-shield wrapper tx (RAO) */
+			wrapperFee: bigint;
+			/** Fee paid for the inner batch tx (RAO) */
+			innerBatchFee: bigint;
 	  }
-	| { status: "timeout" };
+	| {
+			status: "timeout";
+			/** Fee paid for the MEV-shield wrapper tx (RAO), if known */
+			wrapperFee?: bigint;
+	  };
