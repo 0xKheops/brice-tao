@@ -1,3 +1,5 @@
+import type { bittensor } from "@polkadot-api/descriptors";
+import type { TypedApi } from "polkadot-api";
 import type { Balances, StakeEntry } from "../getBalances.ts";
 import type { SubnetMomentum } from "../getMostProfitableSubnets.ts";
 import {
@@ -9,22 +11,29 @@ import {
 	TAO,
 } from "./constants.ts";
 import { log } from "./logger.ts";
+import { pickBestValidatorByYield } from "./pickBestValidator.ts";
 import type {
-	ClassifiedPosition,
 	RebalanceOperation,
 	RebalancePlan,
 	TargetSubnet,
 } from "./types.ts";
 
+type Api = TypedApi<typeof bittensor>;
+
+interface ClassifiedPosition extends StakeEntry {
+	classification: "keep" | "exit";
+}
+
 /**
  * Compute the rebalance plan: given current balances and profitable subnets,
  * produce a list of operations to reach equal-weight allocation across the top X subnets.
  */
-export function computeRebalance(
+export async function computeRebalance(
+	api: Api,
 	balances: Balances,
 	profitable: SubnetMomentum[],
-	validatorHotkey: string,
-): RebalancePlan {
+	fallbackValidatorHotkey?: string,
+): Promise<RebalancePlan> {
 	const available = balances.totalTaoValue - FREE_RESERVE_TAO;
 	if (available <= 0n) {
 		log.warn("Portfolio too small to rebalance (below free reserve)");
@@ -49,7 +58,7 @@ export function computeRebalance(
 		if (!targetNetuids.includes(0)) {
 			targetNetuids.push(0);
 		} else {
-			break; // already have netuid 0, can't fill further
+			break;
 		}
 	}
 
@@ -66,13 +75,16 @@ export function computeRebalance(
 		log.verbose(`  Target SN${t.netuid}: ${formatTao(t.targetTaoValue)} τ`);
 	}
 
-	// Classify existing positions
+	const { hotkeysByTarget, skipped: hotkeySelectionSkips } =
+		await resolveTargetHotkeys(
+			api,
+			balances.stakes,
+			targetNetuids,
+			fallbackValidatorHotkey,
+		);
+
 	const targetSet = new Set(targetNetuids);
-	const classified = classifyPositions(
-		balances.stakes,
-		targetSet,
-		validatorHotkey,
-	);
+	const classified = classifyPositions(balances.stakes, targetSet);
 
 	for (const pos of classified) {
 		log.verbose(
@@ -80,35 +92,26 @@ export function computeRebalance(
 		);
 	}
 
-	// Generate operations
-	return generateOperations(
+	const plan = generateOperations(
 		classified,
 		targets,
+		hotkeysByTarget,
 		balances.free,
-		validatorHotkey,
 	);
+	plan.skipped = [...hotkeySelectionSkips, ...plan.skipped];
+	return plan;
 }
 
 function classifyPositions(
 	stakes: StakeEntry[],
 	targetSet: Set<number>,
-	validatorHotkey: string,
 ): ClassifiedPosition[] {
 	return stakes.map((s) => {
-		const isTarget = targetSet.has(s.netuid);
-		const isCorrectHotkey = s.hotkey === validatorHotkey;
-
-		let classification: ClassifiedPosition["classification"];
-		if (isTarget && isCorrectHotkey) {
-			classification = "keep";
-		} else if (isTarget && !isCorrectHotkey) {
-			classification = "mismatch_in_target";
-		} else if (!isTarget && isCorrectHotkey) {
-			classification = "exit_swap";
-		} else {
-			classification = "exit_unstake";
-		}
-
+		const classification: ClassifiedPosition["classification"] = targetSet.has(
+			s.netuid,
+		)
+			? "keep"
+			: "exit";
 		return { ...s, classification };
 	});
 }
@@ -116,8 +119,8 @@ function classifyPositions(
 function generateOperations(
 	positions: ClassifiedPosition[],
 	targets: TargetSubnet[],
+	targetHotkeys: Map<number, string>,
 	freeBalance: bigint,
-	validatorHotkey: string,
 ): RebalancePlan {
 	const operations: RebalanceOperation[] = [];
 	const skipped: RebalancePlan["skipped"] = [];
@@ -126,109 +129,71 @@ function generateOperations(
 	const fulfilled = new Map<number, bigint>();
 	for (const t of targets) {
 		const existing = positions
-			.filter((p) => p.netuid === t.netuid && p.classification === "keep")
+			.filter((p) => p.netuid === t.netuid)
 			.reduce((sum, p) => sum + p.taoValue, 0n);
 		fulfilled.set(t.netuid, existing);
 	}
 
-	// 1. Full exits — wrong hotkey (mismatch in target or exit_unstake)
+	// 1. Full exits — try swap to underweight target only when hotkeys match, otherwise unstake.
 	for (const pos of positions) {
-		if (
-			pos.classification === "exit_unstake" ||
-			pos.classification === "mismatch_in_target"
-		) {
-			if (pos.taoValue < MIN_OPERATION_TAO) {
-				skipped.push({
-					netuid: pos.netuid,
-					reason: `Position too small to unstake (${formatTao(pos.taoValue)} τ)`,
-				});
-				continue;
-			}
-			operations.push({
-				kind: "unstake",
-				netuid: pos.netuid,
-				hotkey: pos.hotkey,
-				alphaAmount: pos.stake,
-				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
-				estimatedTaoValue: pos.taoValue,
-			});
-			log.verbose(
-				`  OP: unstake SN${pos.netuid} (${pos.classification}): ~${formatTao(pos.taoValue)} τ`,
-			);
-		}
-	}
-
-	// 2. Swaps — exit positions with correct hotkey → single best underweight target
-	//    To avoid failures from splitting a position across multiple swaps in the
-	//    same batch (pool state changes between swaps), we send the full position
-	//    to the single most underweight target. Temporary imbalance corrects on next run.
-	const swappable = positions.filter((p) => p.classification === "exit_swap");
-	const underweightTargets = targets
-		.filter((t) => {
-			const f = fulfilled.get(t.netuid) ?? 0n;
-			return f < t.targetTaoValue;
-		})
-		.sort((a, b) =>
-			// Fill most underweight first
-			Number(
-				a.targetTaoValue -
-					(fulfilled.get(a.netuid) ?? 0n) -
-					(b.targetTaoValue - (fulfilled.get(b.netuid) ?? 0n)),
-			),
-		);
-
-	for (const exitPos of swappable) {
-		if (exitPos.taoValue < MIN_OPERATION_TAO) {
+		if (pos.classification !== "exit") continue;
+		if (pos.taoValue < MIN_OPERATION_TAO) {
 			skipped.push({
-				netuid: exitPos.netuid,
-				reason: `Position too small to swap (${formatTao(exitPos.taoValue)} τ)`,
+				netuid: pos.netuid,
+				reason: `Position too small to exit (${formatTao(pos.taoValue)} τ)`,
 			});
 			continue;
 		}
 
-		// Find the single best target: most underweight with enough deficit
-		const bestTarget = underweightTargets.find((t) => {
-			const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
-			return deficit >= MIN_OPERATION_TAO;
-		});
+		const bestSwapTarget = targets
+			.filter((t) => {
+				const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
+				if (deficit < MIN_OPERATION_TAO) return false;
+				const targetHotkey = targetHotkeys.get(t.netuid);
+				return targetHotkey === pos.hotkey;
+			})
+			.sort((a, b) =>
+				Number(
+					b.targetTaoValue -
+						(fulfilled.get(b.netuid) ?? 0n) -
+						(a.targetTaoValue - (fulfilled.get(a.netuid) ?? 0n)),
+				),
+			)[0];
 
-		if (bestTarget) {
-			// Swap the entire position to the best target
+		if (bestSwapTarget) {
 			operations.push({
 				kind: "swap",
-				originNetuid: exitPos.netuid,
-				destinationNetuid: bestTarget.netuid,
-				hotkey: validatorHotkey,
-				alphaAmount: exitPos.stake,
-				estimatedTaoValue: exitPos.taoValue,
-				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
+				originNetuid: pos.netuid,
+				destinationNetuid: bestSwapTarget.netuid,
+				hotkey: pos.hotkey,
+				alphaAmount: pos.stake,
+				estimatedTaoValue: pos.taoValue,
+				limitPrice: 0n,
 			});
-
 			fulfilled.set(
-				bestTarget.netuid,
-				(fulfilled.get(bestTarget.netuid) ?? 0n) + exitPos.taoValue,
+				bestSwapTarget.netuid,
+				(fulfilled.get(bestSwapTarget.netuid) ?? 0n) + pos.taoValue,
 			);
-
 			log.verbose(
-				`  OP: swap SN${exitPos.netuid}→SN${bestTarget.netuid}: ~${formatTao(exitPos.taoValue)} τ (full position)`,
+				`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
 			);
-		} else {
-			// No underweight target available — unstake fully
-			operations.push({
-				kind: "unstake",
-				netuid: exitPos.netuid,
-				hotkey: exitPos.hotkey,
-				alphaAmount: exitPos.stake,
-				limitPrice: 0n, // placeholder — filled by simulateAllOperations()
-				estimatedTaoValue: exitPos.taoValue,
-			});
-			log.verbose(
-				`  OP: unstake SN${exitPos.netuid}: ~${formatTao(exitPos.taoValue)} τ (no swap target)`,
-			);
+			continue;
 		}
+
+		operations.push({
+			kind: "unstake",
+			netuid: pos.netuid,
+			hotkey: pos.hotkey,
+			alphaAmount: pos.stake,
+			limitPrice: 0n,
+			estimatedTaoValue: pos.taoValue,
+		});
+		log.verbose(
+			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no matching swap destination hotkey)`,
+		);
 	}
 
-	// 3. Overweight reductions — "keep" positions above target
+	// 2. Overweight reductions — try swaps only where destination hotkey matches source hotkey.
 	for (const target of targets) {
 		const keepPositions = positions.filter(
 			(p) => p.netuid === target.netuid && p.classification === "keep",
@@ -252,13 +217,26 @@ function generateOperations(
 				pos.alphaPrice > 0n ? (reduceAmount * TAO) / pos.alphaPrice : 0n;
 			if (reduceAlpha <= 0n) continue;
 
-			// Try to swap excess to an underweight target
 			let swapped = false;
-			for (const destTarget of underweightTargets) {
+			const matchingDestTargets = targets
+				.filter((destTarget) => {
+					if (targetHotkeys.get(destTarget.netuid) !== pos.hotkey) return false;
+					const destDeficit =
+						destTarget.targetTaoValue -
+						(fulfilled.get(destTarget.netuid) ?? 0n);
+					return destDeficit >= MIN_OPERATION_TAO;
+				})
+				.sort((a, b) =>
+					Number(
+						b.targetTaoValue -
+							(fulfilled.get(b.netuid) ?? 0n) -
+							(a.targetTaoValue - (fulfilled.get(a.netuid) ?? 0n)),
+					),
+				);
+
+			for (const destTarget of matchingDestTargets) {
 				const destFulfilled = fulfilled.get(destTarget.netuid) ?? 0n;
 				const destDeficit = destTarget.targetTaoValue - destFulfilled;
-				if (destDeficit < MIN_OPERATION_TAO) continue;
-
 				const swapTaoValue =
 					reduceAmount < destDeficit ? reduceAmount : destDeficit;
 				const swapAlpha =
@@ -269,28 +247,27 @@ function generateOperations(
 					kind: "swap",
 					originNetuid: pos.netuid,
 					destinationNetuid: destTarget.netuid,
-					hotkey: validatorHotkey,
+					hotkey: pos.hotkey,
 					alphaAmount: swapAlpha,
 					estimatedTaoValue: swapTaoValue,
-					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
+					limitPrice: 0n,
 				});
 				fulfilled.set(destTarget.netuid, destFulfilled + swapTaoValue);
 				swapped = true;
 
 				log.verbose(
-					`  OP: swap overweight SN${pos.netuid}→SN${destTarget.netuid}: ~${formatTao(swapTaoValue)} τ`,
+					`  OP: swap overweight SN${pos.netuid}→SN${destTarget.netuid}: ~${formatTao(swapTaoValue)} τ (matching hotkey)`,
 				);
 				break;
 			}
 
 			if (!swapped) {
-				// Unstake partial if no swap target available
 				operations.push({
 					kind: "unstake_partial",
 					netuid: pos.netuid,
 					hotkey: pos.hotkey,
 					alphaAmount: reduceAlpha,
-					limitPrice: 0n, // placeholder — filled by simulateAllOperations()
+					limitPrice: 0n,
 					estimatedTaoValue: reduceAmount,
 				});
 				log.verbose(
@@ -300,12 +277,10 @@ function generateOperations(
 		}
 	}
 
-	// 4. Stake from free balance — remaining underweight targets
-	// Calculate available free balance (existing + will-be-freed from unstakes)
+	// 3. Stake from free balance — remaining underweight targets
 	let availableFree = freeBalance - FREE_RESERVE_TAO;
 	if (availableFree < 0n) availableFree = 0n;
 
-	// Add estimated TAO from unstake operations
 	for (const op of operations) {
 		if (op.kind === "unstake" || op.kind === "unstake_partial") {
 			availableFree += op.estimatedTaoValue;
@@ -316,6 +291,15 @@ function generateOperations(
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
 		const deficit = target.targetTaoValue - currentFulfilled;
 		if (deficit < MIN_OPERATION_TAO) continue;
+
+		const targetHotkey = targetHotkeys.get(target.netuid);
+		if (!targetHotkey) {
+			skipped.push({
+				netuid: target.netuid,
+				reason: "No validator hotkey resolved for target subnet",
+			});
+			continue;
+		}
 
 		const stakeAmount = deficit < availableFree ? deficit : availableFree;
 		if (stakeAmount < MIN_OPERATION_TAO) {
@@ -329,18 +313,81 @@ function generateOperations(
 		operations.push({
 			kind: "stake",
 			netuid: target.netuid,
-			hotkey: validatorHotkey,
+			hotkey: targetHotkey,
 			taoAmount: stakeAmount,
-			limitPrice: 0n, // placeholder — filled by simulateAllOperations()
+			limitPrice: 0n,
 		});
 
 		fulfilled.set(target.netuid, currentFulfilled + stakeAmount);
 		availableFree -= stakeAmount;
 
-		log.verbose(`  OP: stake SN${target.netuid}: ${formatTao(stakeAmount)} τ`);
+		log.verbose(
+			`  OP: stake SN${target.netuid} with ${targetHotkey.slice(0, 8)}…: ${formatTao(stakeAmount)} τ`,
+		);
 	}
 
 	return { targets, operations, skipped };
+}
+
+async function resolveTargetHotkeys(
+	api: Api,
+	stakes: StakeEntry[],
+	targetNetuids: number[],
+	fallbackValidatorHotkey?: string,
+): Promise<{
+	hotkeysByTarget: Map<number, string>;
+	skipped: RebalancePlan["skipped"];
+}> {
+	const hotkeysByTarget = new Map<number, string>();
+	const skipped: RebalancePlan["skipped"] = [];
+
+	for (const netuid of targetNetuids) {
+		const existing = stakes.filter((s) => s.netuid === netuid);
+		if (existing.length > 0) {
+			const bestExisting = [...existing].sort((a, b) => {
+				if (b.taoValue !== a.taoValue) return b.taoValue > a.taoValue ? 1 : -1;
+				if (b.stake !== a.stake) return b.stake > a.stake ? 1 : -1;
+				return a.hotkey.localeCompare(b.hotkey);
+			})[0];
+			if (!bestExisting) {
+				continue;
+			}
+			hotkeysByTarget.set(netuid, bestExisting.hotkey);
+			log.verbose(
+				`  Validator SN${netuid}: existing ${bestExisting.hotkey.slice(0, 8)}… (largest position)`,
+			);
+			continue;
+		}
+
+		try {
+			const best = await pickBestValidatorByYield(api, netuid);
+			hotkeysByTarget.set(netuid, best.hotkey);
+			log.verbose(
+				`  Validator SN${netuid}: yield-picked ${best.hotkey.slice(0, 8)}… (UID ${best.candidate.uid})`,
+			);
+		} catch (err) {
+			if (fallbackValidatorHotkey) {
+				hotkeysByTarget.set(netuid, fallbackValidatorHotkey);
+				log.warn(
+					`Validator selection failed for SN${netuid}; falling back to VALIDATOR_HOTKEY (${fallbackValidatorHotkey.slice(0, 8)}…): ${String(err)}`,
+				);
+			} else {
+				const reason =
+					err instanceof Error
+						? err.message
+						: "unknown validator selection error";
+				skipped.push({
+					netuid,
+					reason: `No validator selected for SN${netuid}: ${reason}`,
+				});
+				log.warn(
+					`Skipping SN${netuid} destination: no yield candidate and VALIDATOR_HOTKEY not set`,
+				);
+			}
+		}
+	}
+
+	return { hotkeysByTarget, skipped };
 }
 
 function formatTao(rao: bigint): string {

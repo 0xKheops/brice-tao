@@ -59,7 +59,7 @@ src/
 | `WS_ENDPOINT` | all | RPC WebSocket endpoints (comma-separated for failover) |
 | `COLDKEY_ADDRESS` | all | SS58 coldkey address |
 | `PROXY_MNEMONIC` | rebalance, test-slippage | Mnemonic for proxy account (transaction signer) |
-| `VALIDATOR_HOTKEY` | rebalance | Hotkey to stake under |
+| `VALIDATOR_HOTKEY` | rebalance | Optional fallback hotkey when yield-based validator selection fails |
 | `DISCORD_WEBHOOK_URL` | rebalance | Discord notifications webhook |
 | `SN45_API_KEY` | all | SN45 leaderboard API key |
 

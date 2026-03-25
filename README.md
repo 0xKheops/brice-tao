@@ -17,6 +17,7 @@ Copy `.env.example` or create a `.env` file with the following variables:
 WS_ENDPOINT=wss://your-rpc-endpoint
 COLDKEY_ADDRESS=your-coldkey-ss58-address
 PROXY_MNEMONIC=your proxy account mnemonic phrase
+# Optional fallback only: used when dynamic yield-based validator selection fails
 VALIDATOR_HOTKEY=your-validator-hotkey-ss58-address
 SN45_API_KEY=your-sn45-api-key
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...

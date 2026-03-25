@@ -40,7 +40,6 @@ if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
 if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 if (!sn45ApiKey) throw new Error("SN45_API_KEY is not set");
 if (!proxyMnemonic) throw new Error("PROXY_MNEMONIC is not set");
-if (!validatorHotkey) throw new Error("VALIDATOR_HOTKEY is not set");
 if (!discordWebhookUrl) throw new Error("DISCORD_WEBHOOK_URL is not set");
 
 // --- Create signer from proxy mnemonic ---
@@ -109,7 +108,12 @@ try {
 	);
 	logBalancesDetail("BEFORE", coldkey, balances);
 
-	const plan = computeRebalance(balances, profitable, validatorHotkey);
+	const plan = await computeRebalance(
+		api,
+		balances,
+		profitable,
+		validatorHotkey,
+	);
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");

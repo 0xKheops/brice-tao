@@ -56,19 +56,6 @@ export interface TargetSubnet {
 	targetTaoValue: bigint;
 }
 
-export interface ClassifiedPosition {
-	hotkey: string;
-	netuid: number;
-	stake: bigint;
-	alphaPrice: bigint;
-	taoValue: bigint;
-	classification:
-		| "keep" // in target set, correct hotkey
-		| "exit_swap" // not in target set, correct hotkey (can swap)
-		| "exit_unstake" // not in target set, wrong hotkey (must unstake)
-		| "mismatch_in_target"; // in target set, wrong hotkey (unstake, restake next run)
-}
-
 export interface RebalancePlan {
 	targets: TargetSubnet[];
 	operations: RebalanceOperation[];
