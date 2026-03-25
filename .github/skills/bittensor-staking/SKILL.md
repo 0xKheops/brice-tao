@@ -325,7 +325,7 @@ Post-quantum encrypted transaction submission to prevent MEV (Miner Extractable 
 ### Dependencies
 
 ```
-npm install mlkem @noble/ciphers @polkadot/util-crypto
+bun add mlkem @noble/ciphers @polkadot/util-crypto
 ```
 
 ### How It Works

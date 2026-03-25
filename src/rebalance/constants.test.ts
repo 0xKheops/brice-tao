@@ -10,15 +10,16 @@ import {
 	SWAP_SLIPPAGE_BUFFER,
 	TAO,
 } from "./constants.ts";
+import { parseTao } from "./tao.ts";
 
 describe("rebalance constants", () => {
 	it("keeps TAO conversion and minimum thresholds consistent", () => {
 		expect(TAO).toBe(1_000_000_000n);
-		expect(MIN_POSITION_TAO).toBe(TAO / 2n);
-		expect(FREE_RESERVE_TAO).toBe(TAO / 20n);
-		expect(MIN_STAKE_TAO).toBe(TAO / 100n);
-		expect(MIN_OPERATION_TAO).toBe(TAO / 100n);
-		expect(MIN_REBALANCE_TAO).toBe(TAO / 4n);
+		expect(MIN_POSITION_TAO).toBe(parseTao(0.5));
+		expect(FREE_RESERVE_TAO).toBe(parseTao(0.05));
+		expect(MIN_STAKE_TAO).toBe(parseTao(0.01));
+		expect(MIN_OPERATION_TAO).toBe(parseTao(0.01));
+		expect(MIN_REBALANCE_TAO).toBe(parseTao(0.25));
 	});
 
 	it("uses safe ordering for operational amounts", () => {

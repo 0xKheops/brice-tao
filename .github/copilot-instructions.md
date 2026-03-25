@@ -2,6 +2,10 @@
 
 Automated Bittensor portfolio rebalancer: monitors subnet holdings, scores momentum, computes equal-weight allocation, simulates slippage, batches operations through MEV shield, and reports results to Discord.
 
+## Package Manager
+
+This project uses **Bun** as its package manager and runtime. **Do not use npm, pnpm, or yarn.** All commands (install, run, test, etc.) must use `bun`. The lockfile is `bun.lock` — never generate or reference `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.
+
 ## Quick Reference
 
 | Action | Command |

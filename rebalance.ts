@@ -24,6 +24,7 @@ import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
 import { log } from "./src/rebalance/logger.ts";
 import { simulateAllOperations } from "./src/rebalance/simulateSlippage.ts";
+import { TAO } from "./src/rebalance/tao.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -183,7 +184,6 @@ try {
 }
 
 function formatTao(rao: bigint): string {
-	const TAO = 1_000_000_000n;
 	const whole = rao / TAO;
 	const frac = ((rao % TAO) * 1000n) / TAO;
 	return `${whole}.${frac.toString().padStart(3, "0")}`;

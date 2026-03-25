@@ -9,9 +9,9 @@ import {
 	MIN_POSITION_TAO,
 	MIN_REBALANCE_TAO,
 	MIN_STAKE_TAO,
-	TAO,
 } from "./constants.ts";
 import * as pickValidatorModule from "./pickBestValidator.ts";
+import { parseTao, TAO } from "./tao.ts";
 
 function hotkey(id: string): string {
 	return `5${id.padEnd(47, "a")}`;
@@ -220,20 +220,20 @@ describe("computeRebalance target choice and weird cases", () => {
 				makeStake({
 					netuid: 9,
 					hotkey: "5beta".padEnd(48, "b"),
-					taoValue: TAO / 20n,
-					stake: TAO / 20n,
+					taoValue: parseTao(0.05),
+					stake: parseTao(0.05),
 				}),
 				makeStake({
 					netuid: 9,
 					hotkey: "5alpha".padEnd(48, "a"),
-					taoValue: TAO / 20n,
-					stake: TAO / 20n,
+					taoValue: parseTao(0.05),
+					stake: parseTao(0.05),
 				}),
 				makeStake({
 					netuid: 50,
 					hotkey: "5alpha".padEnd(48, "a"),
-					taoValue: TAO / 2n,
-					stake: TAO / 2n,
+					taoValue: parseTao(0.5),
+					stake: parseTao(0.5),
 				}),
 			],
 		});

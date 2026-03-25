@@ -5,6 +5,7 @@ import {
 	sendRebalanceNotification,
 } from "./discord.ts";
 import type { Balances } from "./getBalances.ts";
+import { parseTao, TAO } from "./rebalance/tao.ts";
 import type { BatchResult, RebalancePlan } from "./rebalance/types.ts";
 
 const webhookUrl = "https://discord.example/webhook";
@@ -15,7 +16,7 @@ function makeBalances(overrides?: Partial<Balances>): Balances {
 		free: 0n,
 		reserved: 0n,
 		stakes: [],
-		totalTaoValue: 5n * 1_000_000_000n,
+		totalTaoValue: parseTao(5),
 		...overrides,
 	};
 }
@@ -56,15 +57,15 @@ describe("discord notifications", () => {
 					kind: "stake",
 					netuid: 1,
 					hotkey: "hk",
-					taoAmount: 1_000_000_000n,
+					taoAmount: TAO,
 					limitPrice: 0n,
 				},
 				{
 					kind: "unstake",
 					netuid: 2,
 					hotkey: "hk",
-					alphaAmount: 1_000_000_000n,
-					estimatedTaoValue: 1_000_000_000n,
+					alphaAmount: TAO,
+					estimatedTaoValue: TAO,
 					limitPrice: 0n,
 				},
 			],

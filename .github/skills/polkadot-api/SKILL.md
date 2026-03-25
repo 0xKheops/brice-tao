@@ -51,7 +51,7 @@ npx papi update bittensor  # specific chain
 
 - `.papi/polkadot-api.json` — config listing registered chains
 - `.papi/metadata/<key>.scale` — SCALE-encoded metadata per chain
-- `.papi/descriptors/` — local npm package installed as `@polkadot-api/descriptors`
+- `.papi/descriptors/` — local package installed as `@polkadot-api/descriptors`
 
 ### Importing descriptors
 

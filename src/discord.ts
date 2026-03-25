@@ -1,4 +1,5 @@
 import type { Balances } from "./getBalances.ts";
+import { parseTao, TAO } from "./rebalance/tao.ts";
 import type {
 	BatchResult,
 	OperationResult,
@@ -6,8 +7,7 @@ import type {
 	RebalancePlan,
 } from "./rebalance/types.ts";
 
-const TAO = 1_000_000_000n;
-const LOW_PROXY_THRESHOLD = TAO / 100n; // 0.01 TAO
+const LOW_PROXY_THRESHOLD = parseTao(0.05);
 
 function formatTao(rao: bigint): string {
 	const whole = rao / TAO;
