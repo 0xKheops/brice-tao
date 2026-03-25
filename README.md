@@ -2,6 +2,8 @@
 
 Automated portfolio rebalancer for Bittensor subnets.
 
+https://www.youtube.com/watch?v=jBHYiRT_Zz0
+
 ## Prerequisites
 
 - [Bun](https://bun.sh) (for local development)
