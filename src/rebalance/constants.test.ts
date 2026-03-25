@@ -4,6 +4,7 @@ import {
 	MAX_SUBNETS,
 	MIN_OPERATION_TAO,
 	MIN_POSITION_TAO,
+	MIN_REBALANCE_TAO,
 	MIN_STAKE_TAO,
 	SLIPPAGE_BUFFER,
 	SWAP_SLIPPAGE_BUFFER,
@@ -17,10 +18,13 @@ describe("rebalance constants", () => {
 		expect(FREE_RESERVE_TAO).toBe(TAO / 20n);
 		expect(MIN_STAKE_TAO).toBe(TAO / 100n);
 		expect(MIN_OPERATION_TAO).toBe(TAO / 100n);
+		expect(MIN_REBALANCE_TAO).toBe(TAO / 4n);
 	});
 
 	it("uses safe ordering for operational amounts", () => {
 		expect(MIN_POSITION_TAO).toBeGreaterThan(MIN_STAKE_TAO);
+		expect(MIN_REBALANCE_TAO).toBeGreaterThanOrEqual(MIN_OPERATION_TAO);
+		expect(MIN_POSITION_TAO).toBeGreaterThanOrEqual(MIN_REBALANCE_TAO);
 		expect(MIN_STAKE_TAO).toBe(MIN_OPERATION_TAO);
 		expect(FREE_RESERVE_TAO).toBeGreaterThan(0n);
 		expect(MAX_SUBNETS).toBeGreaterThan(0);

@@ -36,10 +36,13 @@ From these, it produces a **rebalance plan**: a list of target allocations and t
 | `FREE_RESERVE_TAO` | **0.05 TAO** | Always kept liquid for transaction fees — never allocated |
 | `MIN_POSITION_TAO` | **0.5 TAO** | Minimum allocation per subnet — controls how many targets the portfolio can spread across |
 | `MAX_SUBNETS` | **10** | Hard cap on number of target subnets |
+| `MIN_REBALANCE_TAO` | **0.25 TAO** | Minimum adjustment size for reductions and stakes — operations below this are skipped to save fees |
 | `MIN_STAKE_TAO` | **0.01 TAO** | Floor for existing positions — a reduction must not leave a position below this |
-| `MIN_OPERATION_TAO` | **0.01 TAO** | Minimum operation size — operations smaller than this are skipped (not worth the fees) |
+| `MIN_OPERATION_TAO` | **0.01 TAO** | Dust threshold for exits — positions below this in non-target subnets are not worth exiting |
 
 All amounts are in RAO internally (1 TAO = 1,000,000,000 RAO).
+
+Threshold ordering: `MIN_OPERATION_TAO` (0.01) ≤ `MIN_STAKE_TAO` (0.01) < `MIN_REBALANCE_TAO` (0.25) ≤ `MIN_POSITION_TAO` (0.5)
 
 ---
 
@@ -97,9 +100,9 @@ For each "exit" position:
 For each "keep" position that exceeds its target allocation:
 
 1. `excess = taoValue − targetTaoValue`
-2. **Skip** if `excess < MIN_OPERATION_TAO`
+2. **Skip** if `excess < MIN_REBALANCE_TAO` (adjustment too small to justify fees)
 3. Cap the reduction: `min(excess, taoValue − MIN_STAKE_TAO)` — never reduce a position below `MIN_STAKE_TAO`
-4. **Skip** if the capped reduction < `MIN_OPERATION_TAO`
+4. **Skip** if the capped reduction < `MIN_REBALANCE_TAO`
 5. **Try swap** to an underweight target with matching hotkey and sufficient deficit
 6. **Otherwise** → partial unstake
 
@@ -110,9 +113,9 @@ The alpha amount to reduce is derived from the TAO amount: `reduceAlpha = (reduc
 1. Pool the available capital: `freeBalance − FREE_RESERVE_TAO + Σ(unstake proceeds from phases 1 & 2)`
 2. For each underweight target (ordered by deficit, largest first):
    - `deficit = targetTaoValue − currentFulfilled`
-   - **Skip** if `deficit < MIN_OPERATION_TAO`
+   - **Skip** if `deficit < MIN_REBALANCE_TAO` (adjustment too small to justify fees)
    - Stake `min(deficit, availableFree)`
-   - **Skip** if that amount < `MIN_OPERATION_TAO`
+   - **Skip** if that amount < `MIN_REBALANCE_TAO`
    - Deduct from the available pool
 
 **Why this order?** Exits and reductions run first to unlock capital. Stakes then deploy the accumulated free balance. This avoids needing upfront liquidity.
@@ -138,6 +141,7 @@ Operations can be skipped for several reasons, logged in the plan:
 |--------|------|
 | Position too small to exit | Position value < `MIN_OPERATION_TAO` (0.01 TAO) |
 | Would leave position below minimum | Reducing would breach `MIN_STAKE_TAO` (0.01 TAO) |
+| Excess/deficit too small | Adjustment < `MIN_REBALANCE_TAO` (0.25 TAO) — not worth the fees |
 | No validator selected | Validator selection failed and no `VALIDATOR_HOTKEY` fallback |
 | Insufficient free balance | Not enough free TAO to fund the target's deficit |
 
@@ -224,7 +228,7 @@ Target hotkeys: SN1→C, SN2→D, SN3→C
 | 2 | Overweight | UNSTAKE_PARTIAL SN1 | Excess = 1.5 − 0.967 = 0.533. SN3 already partially filled by swap, remaining deficit < excess or hotkey mismatch → partial unstake |
 | 3 | Stake | STAKE SN3 | Remaining deficit after swap: 0.967 − 0.6 = 0.367 TAO from free pool |
 
-SN2 is at 0.8 vs. target 0.967 — deficit is `0.167 TAO` which is above `MIN_OPERATION_TAO`, so a stake operation fills it from the free pool (unstake proceeds + original free).
+SN2 is at 0.8 vs. target 0.967 — deficit is `0.167 TAO` which is below `MIN_REBALANCE_TAO` (0.25 TAO), so no stake operation is generated. The position is close enough to target.
 
 ---
 
@@ -278,4 +282,4 @@ Profitable subnets (ranked): SN1, SN2
 
 **Classification:** SN1 → keep (deficit 0.005), SN2 → keep (excess 0.005).
 
-Both the deficit and excess are below `MIN_OPERATION_TAO` (0.01 TAO) → all operations are skipped. The plan has zero operations, and the rebalancer reports "Portfolio Balanced".
+Both the deficit and excess are below `MIN_REBALANCE_TAO` (0.25 TAO) → all adjustments are skipped. The plan has zero operations, and the rebalancer reports "Portfolio Balanced".

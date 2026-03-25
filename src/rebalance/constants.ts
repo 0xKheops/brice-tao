@@ -26,3 +26,6 @@ export const MIN_STAKE_TAO = TAO / 100n; // 0.01 TAO
 
 /** Minimum operation size — skip operations worth less than this (on-chain min is 0.002 TAO) */
 export const MIN_OPERATION_TAO = TAO / 100n; // 0.01 TAO
+
+/** Minimum adjustment size for reductions/stakes to justify fees — exits use the lower MIN_OPERATION_TAO */
+export const MIN_REBALANCE_TAO = TAO / 4n; // 0.25 TAO

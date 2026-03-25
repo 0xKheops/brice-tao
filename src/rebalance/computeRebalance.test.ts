@@ -7,6 +7,7 @@ import {
 	MAX_SUBNETS,
 	MIN_OPERATION_TAO,
 	MIN_POSITION_TAO,
+	MIN_REBALANCE_TAO,
 	MIN_STAKE_TAO,
 	TAO,
 } from "./constants.ts";
@@ -219,14 +220,14 @@ describe("computeRebalance target choice and weird cases", () => {
 				makeStake({
 					netuid: 9,
 					hotkey: "5beta".padEnd(48, "b"),
-					taoValue: TAO / 5n,
-					stake: TAO / 5n,
+					taoValue: TAO / 20n,
+					stake: TAO / 20n,
 				}),
 				makeStake({
 					netuid: 9,
 					hotkey: "5alpha".padEnd(48, "a"),
-					taoValue: TAO / 5n,
-					stake: TAO / 5n,
+					taoValue: TAO / 20n,
+					stake: TAO / 20n,
 				}),
 				makeStake({
 					netuid: 50,
@@ -482,7 +483,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const available = 3n * MIN_POSITION_TAO;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + available,
-			free: FREE_RESERVE_TAO + MIN_OPERATION_TAO,
+			free: FREE_RESERVE_TAO + MIN_REBALANCE_TAO,
 			stakes: [],
 		});
 
@@ -492,5 +493,114 @@ describe("computeRebalance target choice and weird cases", () => {
 		);
 
 		expect(insufficient.length).toBeGreaterThan(0);
+	});
+
+	it("skips overweight reduction below MIN_REBALANCE_TAO", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("picked"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("picked"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+		const targetPerSubnet = 2n * TAO;
+		const smallExcess = MIN_REBALANCE_TAO - 1n;
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + targetPerSubnet,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 5,
+					hotkey: hotkey("picked"),
+					taoValue: targetPerSubnet + smallExcess,
+					stake: targetPerSubnet + smallExcess,
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(fakeApi, balances, profitable(5));
+
+		expect(
+			plan.operations.find(
+				(op) =>
+					(op.kind === "unstake_partial" && op.netuid === 5) ||
+					(op.kind === "swap" && op.originNetuid === 5),
+			),
+		).toBeUndefined();
+	});
+
+	it("skips stake when deficit is below MIN_REBALANCE_TAO", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("picked"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("picked"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+		const targetPerSubnet = 2n * TAO;
+		const smallDeficit = MIN_REBALANCE_TAO - 1n;
+		const positionValue = targetPerSubnet - smallDeficit;
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + targetPerSubnet,
+			free: FREE_RESERVE_TAO + TAO,
+			stakes: [
+				makeStake({
+					netuid: 5,
+					hotkey: hotkey("picked"),
+					taoValue: positionValue,
+					stake: positionValue,
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(fakeApi, balances, profitable(5));
+
+		expect(
+			plan.operations.find((op) => op.kind === "stake" && op.netuid === 5),
+		).toBeUndefined();
+	});
+
+	it("still exits small non-target positions above MIN_OPERATION_TAO", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("picked"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("picked"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+		const smallPosition = MIN_OPERATION_TAO * 10n; // 0.1 TAO — above MIN_OPERATION_TAO but below MIN_REBALANCE_TAO
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + TAO,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 44,
+					hotkey: hotkey("exit"),
+					taoValue: smallPosition,
+					stake: smallPosition,
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(fakeApi, balances, profitable(2));
+
+		expect(
+			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 44),
+		).toBeDefined();
 	});
 });

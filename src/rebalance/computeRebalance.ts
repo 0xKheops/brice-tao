@@ -7,6 +7,7 @@ import {
 	MAX_SUBNETS,
 	MIN_OPERATION_TAO,
 	MIN_POSITION_TAO,
+	MIN_REBALANCE_TAO,
 	MIN_STAKE_TAO,
 	TAO,
 } from "./constants.ts";
@@ -202,12 +203,12 @@ function generateOperations(
 		);
 		for (const pos of keepPositions) {
 			const excess = pos.taoValue - target.targetTaoValue;
-			if (excess < MIN_OPERATION_TAO) continue;
+			if (excess < MIN_REBALANCE_TAO) continue;
 
 			// Ensure remaining position stays above MIN_STAKE_TAO
 			const maxReducible = pos.taoValue - MIN_STAKE_TAO;
 			const reduceAmount = excess < maxReducible ? excess : maxReducible;
-			if (reduceAmount < MIN_OPERATION_TAO) {
+			if (reduceAmount < MIN_REBALANCE_TAO) {
 				skipped.push({
 					netuid: pos.netuid,
 					reason: `Cannot reduce: would leave position below minimum (${formatTao(pos.taoValue - reduceAmount)} τ)`,
@@ -280,7 +281,7 @@ function generateOperations(
 	for (const target of targets) {
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
 		const deficit = target.targetTaoValue - currentFulfilled;
-		if (deficit < MIN_OPERATION_TAO) continue;
+		if (deficit < MIN_REBALANCE_TAO) continue;
 
 		const targetHotkey = targetHotkeys.get(target.netuid);
 		if (!targetHotkey) {
@@ -292,7 +293,7 @@ function generateOperations(
 		}
 
 		const stakeAmount = deficit < availableFree ? deficit : availableFree;
-		if (stakeAmount < MIN_OPERATION_TAO) {
+		if (stakeAmount < MIN_REBALANCE_TAO) {
 			skipped.push({
 				netuid: target.netuid,
 				reason: `Insufficient free balance for target (need ${formatTao(deficit)} τ, have ${formatTao(availableFree)} τ)`,
