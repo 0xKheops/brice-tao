@@ -33,7 +33,7 @@ bun rebalance.ts --dry-run  # simulate without submitting transactions
 
 ## Docker
 
-The container runs `bun rebalance.ts` every 10 minutes via cron.
+The container runs `bun rebalance.ts` every 12 hours via cron.
 
 ### Start
 
