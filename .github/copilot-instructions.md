@@ -10,10 +10,10 @@ Automated Bittensor portfolio rebalancer: monitors subnet holdings, scores momen
 | Run portfolio dashboard | `bun run index.ts` |
 | Run rebalancer | `bun run rebalance.ts` |
 | Test slippage simulation | `bun run test-slippage.ts` |
-| Lint / format | `pnpm check` (fix: `pnpm check --fix --unsafe`) |
-| Type-check | `pnpm typecheck` |
-| Dead code detection | `pnpm knip` |
-| Regenerate API clients | `pnpm generate-clients` |
+| Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
+| Type-check | `bun typecheck` |
+| Dead code detection | `bun knip` |
+| Regenerate API clients | `bun generate-clients` |
 
 ## Code Conventions
 
@@ -82,7 +82,7 @@ Domain-specific knowledge is available in `.github/skills/`:
 
 ## Pitfalls
 
-- `src/api/generated/` is auto-generated — never edit manually; regenerate with `pnpm generate-clients`
+- `src/api/generated/` is auto-generated — never edit manually; regenerate with `bun generate-clients`
 - All amounts are in RAO (`bigint`), not TAO — always use `TAO` constant for conversions
 - Price limits are U64F64 fixed-point — see bittensor-staking skill for encoding
 - The rebalancer uses a proxy account (not the coldkey directly) to sign transactions
@@ -90,8 +90,11 @@ Domain-specific knowledge is available in `.github/skills/`:
 ## Quality Gates
 
 Before completing work on any task, ensure that the following checks pass:
-- `pnpm check --fix` (linter)
-- `pnpm typecheck` (TypeScript type-checking)
-- `pnpm knip` (dead code detection)
+- `bun check --fix` (linter)
+- `bun typecheck` (TypeScript type-checking)
+- `bun knip` (dead code detection)
+- `bun test` (unit tests, if applicable)
 
-Also ensure that this file stays up to date with any new conventions or architectural changes.
+Also ensure that this file and tests stays up to date with any new conventions or architectural changes.
+
+Keep documents in the docs folder up to date with any changes done in the code.

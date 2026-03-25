@@ -40,10 +40,12 @@ export async function computeRebalance(
 		return { targets: [], operations: [], skipped: [] };
 	}
 
-	// Determine X: how many subnets to target
+	// Determine X: use total portfolio size for spread count and apply reserve only
+	// to per-target sizing. This helps keep allocations more evened out (e.g. ~0.5τ
+	// per subnet) without changing profitable-subnet priority.
 	const x = Math.min(
 		MAX_SUBNETS,
-		Number(available / MIN_POSITION_TAO),
+		Math.max(Number(balances.totalTaoValue / MIN_POSITION_TAO), 1),
 		Math.max(profitable.length, 1), // at least 1 target (netuid 0)
 	);
 
@@ -148,7 +150,7 @@ function generateOperations(
 		const bestSwapTarget = targets
 			.filter((t) => {
 				const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
-				if (deficit < MIN_OPERATION_TAO) return false;
+				if (deficit < pos.taoValue) return false;
 				const targetHotkey = targetHotkeys.get(t.netuid);
 				return targetHotkey === pos.hotkey;
 			})
@@ -217,14 +219,13 @@ function generateOperations(
 				pos.alphaPrice > 0n ? (reduceAmount * TAO) / pos.alphaPrice : 0n;
 			if (reduceAlpha <= 0n) continue;
 
-			let swapped = false;
-			const matchingDestTargets = targets
+			const fullSwapTarget = targets
 				.filter((destTarget) => {
 					if (targetHotkeys.get(destTarget.netuid) !== pos.hotkey) return false;
 					const destDeficit =
 						destTarget.targetTaoValue -
 						(fulfilled.get(destTarget.netuid) ?? 0n);
-					return destDeficit >= MIN_OPERATION_TAO;
+					return destDeficit >= reduceAmount;
 				})
 				.sort((a, b) =>
 					Number(
@@ -232,36 +233,25 @@ function generateOperations(
 							(fulfilled.get(b.netuid) ?? 0n) -
 							(a.targetTaoValue - (fulfilled.get(a.netuid) ?? 0n)),
 					),
-				);
+				)[0];
 
-			for (const destTarget of matchingDestTargets) {
-				const destFulfilled = fulfilled.get(destTarget.netuid) ?? 0n;
-				const destDeficit = destTarget.targetTaoValue - destFulfilled;
-				const swapTaoValue =
-					reduceAmount < destDeficit ? reduceAmount : destDeficit;
-				const swapAlpha =
-					pos.alphaPrice > 0n ? (swapTaoValue * TAO) / pos.alphaPrice : 0n;
-				if (swapAlpha <= 0n) continue;
-
+			if (fullSwapTarget) {
+				const destFulfilled = fulfilled.get(fullSwapTarget.netuid) ?? 0n;
 				operations.push({
 					kind: "swap",
 					originNetuid: pos.netuid,
-					destinationNetuid: destTarget.netuid,
+					destinationNetuid: fullSwapTarget.netuid,
 					hotkey: pos.hotkey,
-					alphaAmount: swapAlpha,
-					estimatedTaoValue: swapTaoValue,
+					alphaAmount: reduceAlpha,
+					estimatedTaoValue: reduceAmount,
 					limitPrice: 0n,
 				});
-				fulfilled.set(destTarget.netuid, destFulfilled + swapTaoValue);
-				swapped = true;
+				fulfilled.set(fullSwapTarget.netuid, destFulfilled + reduceAmount);
 
 				log.verbose(
-					`  OP: swap overweight SN${pos.netuid}→SN${destTarget.netuid}: ~${formatTao(swapTaoValue)} τ (matching hotkey)`,
+					`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ (matching hotkey)`,
 				);
-				break;
-			}
-
-			if (!swapped) {
+			} else {
 				operations.push({
 					kind: "unstake_partial",
 					netuid: pos.netuid,
