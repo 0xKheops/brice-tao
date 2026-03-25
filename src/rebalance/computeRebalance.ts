@@ -270,13 +270,15 @@ function generateOperations(
 
 	// 3. Stake from free balance — remaining underweight targets
 	let availableFree = freeBalance - FREE_RESERVE_TAO;
-	if (availableFree < 0n) availableFree = 0n;
 
 	for (const op of operations) {
 		if (op.kind === "unstake" || op.kind === "unstake_partial") {
 			availableFree += op.estimatedTaoValue;
 		}
 	}
+
+	// Clamp after unstake proceeds so the reserve "debt" is repaid first
+	if (availableFree < 0n) availableFree = 0n;
 
 	for (const target of targets) {
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;

@@ -466,6 +466,50 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(plan.operations.some((op) => op.kind === "stake")).toBe(true);
 	});
 
+	it("reserves FREE_RESERVE_TAO from unstake proceeds when free balance is zero", async () => {
+		vi.spyOn(
+			pickValidatorModule,
+			"pickBestValidatorByYield",
+		).mockImplementation(async (_api, netuid) => ({
+			hotkey: hotkey(String(netuid)),
+			candidate: {
+				uid: netuid,
+				hotkey: hotkey(String(netuid)),
+				alphaStake: TAO,
+				alphaDividends: 1n,
+				yieldPerAlpha: 1,
+			},
+		}));
+		const unstakeValue = 2n * TAO;
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + unstakeValue,
+			free: 0n,
+			stakes: [
+				makeStake({
+					netuid: 70,
+					hotkey: hotkey("70"),
+					taoValue: unstakeValue,
+					stake: unstakeValue,
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(fakeApi, balances, profitable(1));
+
+		const unstake = plan.operations.find(
+			(op) => op.kind === "unstake" && op.netuid === 70,
+		);
+		expect(unstake).toBeDefined();
+
+		const stake = plan.operations.find(
+			(op) => op.kind === "stake" && op.netuid === 1,
+		);
+		expect(stake).toBeDefined();
+		expect(stake?.kind === "stake" && stake?.taoAmount).toBe(
+			unstakeValue - FREE_RESERVE_TAO,
+		);
+	});
+
 	it("reports insufficient free balance per target when deficits cannot be funded", async () => {
 		vi.spyOn(
 			pickValidatorModule,
