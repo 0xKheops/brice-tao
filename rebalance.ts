@@ -118,11 +118,13 @@ try {
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");
-		await sendNoRebalanceNotification(
-			discordWebhookUrl,
-			balances,
-			proxyFreeBalance,
-		);
+		if (!dryRun) {
+			await sendNoRebalanceNotification(
+				discordWebhookUrl,
+				balances,
+				proxyFreeBalance,
+			);
+		}
 	} else {
 		log.info(
 			`Plan: ${plan.operations.length} operations across ${plan.targets.length} target subnets`,
@@ -162,22 +164,25 @@ try {
 					return [b, proxyAccount.data.free] as const;
 				})();
 
-		await sendRebalanceNotification(discordWebhookUrl, {
-			plan,
-			balancesBefore: balances,
-			balancesAfter: postBalances,
-			proxyFreeBalance: postProxyFreeBalance,
-			batchResult,
-			dryRun,
-		});
+		if (!dryRun) {
+			await sendRebalanceNotification(discordWebhookUrl, {
+				plan,
+				balancesBefore: balances,
+				balancesAfter: postBalances,
+				proxyFreeBalance: postProxyFreeBalance,
+				batchResult,
+			});
+		}
 	}
 
 	log.info(`Log file: ${log.filePath()}`);
 } catch (err) {
 	log.error("Rebalance failed", err);
-	await sendErrorNotification(discordWebhookUrl, err).catch((e) =>
-		log.error("Failed to send Discord error notification", e),
-	);
+	if (!dryRun) {
+		await sendErrorNotification(discordWebhookUrl, err).catch((e) =>
+			log.error("Failed to send Discord error notification", e),
+		);
+	}
 	process.exit(1);
 } finally {
 	client.destroy();

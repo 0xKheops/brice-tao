@@ -141,24 +141,14 @@ export async function sendRebalanceNotification(
 		balancesAfter: Balances;
 		proxyFreeBalance: bigint;
 		batchResult: BatchResult | null;
-		dryRun: boolean;
 	},
 ): Promise<void> {
-	const {
-		plan,
-		balancesBefore,
-		balancesAfter,
-		proxyFreeBalance,
-		batchResult,
-		dryRun,
-	} = opts;
+	const { plan, balancesBefore, balancesAfter, proxyFreeBalance, batchResult } =
+		opts;
 
 	let title: string;
 	let color: number;
-	if (dryRun) {
-		title = "🧪 Rebalance Dry Run";
-		color = 0xf0b232;
-	} else if (batchResult?.status === "partial_failure") {
+	if (batchResult?.status === "partial_failure") {
 		title = "⚠️ Rebalance Partial Failure";
 		color = 0xf0b232;
 	} else if (batchResult?.status === "timeout") {

@@ -88,7 +88,6 @@ describe("discord notifications", () => {
 			balancesAfter: makeBalances(),
 			proxyFreeBalance: 20_000_000n,
 			batchResult,
-			dryRun: false,
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -124,7 +123,6 @@ describe("discord notifications", () => {
 			balancesAfter: makeBalances(),
 			proxyFreeBalance: 5_000_000n,
 			batchResult: { status: "timeout", wrapperFee: 4_000_000n },
-			dryRun: false,
 		});
 
 		const body = parsePostedBody(fetchMock);
