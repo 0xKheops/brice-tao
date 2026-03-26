@@ -31,3 +31,10 @@ export const MIN_OPERATION_TAO = parseTao(0.01);
 
 /** Minimum adjustment size for reductions/stakes to justify fees — exits use the lower MIN_OPERATION_TAO */
 export const MIN_REBALANCE_TAO = parseTao(0.25);
+
+/**
+ * Score bonus added to subnets already held in the portfolio.
+ * Prevents churn when top subnet scores are close together — a new subnet
+ * must outscore a held one by at least this margin to displace it.
+ */
+export const INCUMBENCY_BONUS = 3;

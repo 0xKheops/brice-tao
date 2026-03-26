@@ -39,6 +39,7 @@ From these, it produces a **rebalance plan**: a list of target allocations and t
 | `MIN_REBALANCE_TAO` | **0.25 TAO** | Minimum adjustment size for reductions and stakes — operations below this are skipped to save fees |
 | `MIN_STAKE_TAO` | **0.01 TAO** | Floor for existing positions — a reduction must not leave a position below this |
 | `MIN_OPERATION_TAO` | **0.01 TAO** | Dust threshold for exits — positions below this in non-target subnets are not worth exiting |
+| `INCUMBENCY_BONUS` | **5 points** | Score bonus for subnets already held — a new subnet must outscore a held one by this margin to displace it |
 
 All amounts are in RAO internally (1 TAO = 1,000,000,000 RAO).
 
@@ -72,9 +73,11 @@ targetTaoPerSubnet = available / X
 
 ### 2. Target Subnet Selection
 
-1. Take the top **X** subnets from the momentum-ranked list
-2. If fewer than X profitable subnets exist, pad remaining slots with **netuid 0** (root subnet)
-3. Each target gets an equal allocation of `targetTaoPerSubnet`
+1. **Apply incumbency bias** — subnets already held in the portfolio receive a score bonus of `INCUMBENCY_BONUS` (5 points). This stabilises the target set when top scores are close together (e.g., 81, 74, 74, 73…) — a new subnet must outscore a held one by at least 5 points to displace it.
+2. Re-sort subnets by adjusted score (descending)
+3. Take the top **X** subnets from the re-ranked list
+4. If fewer than X profitable subnets exist, pad remaining slots with **netuid 0** (root subnet)
+5. Each target gets an equal allocation of `targetTaoPerSubnet`
 
 ### 3. Position Classification
 
