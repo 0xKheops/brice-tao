@@ -13,7 +13,6 @@ import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "./src/api/generated/Sn45Api.ts";
 import {
 	sendErrorNotification,
-	sendNoRebalanceNotification,
 	sendRebalanceNotification,
 } from "./src/discord.ts";
 import type { Balances } from "./src/getBalances.ts";
@@ -123,14 +122,6 @@ try {
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");
-		if (!dryRun) {
-			await sendNoRebalanceNotification(
-				discordWebhookUrl,
-				balances,
-				proxyFreeBalance,
-				performance.now() - startedAt,
-			);
-		}
 	} else {
 		log.info(
 			`Plan: ${plan.operations.length} operations across ${plan.targets.length} target subnets`,
