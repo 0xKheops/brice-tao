@@ -4,7 +4,6 @@ import type { Balances, StakeEntry } from "../getBalances.ts";
 import type { SubnetScore } from "../pickBestSubnets.ts";
 import {
 	FREE_RESERVE_TAO,
-	INCUMBENCY_BONUS,
 	MAX_SUBNETS,
 	MIN_OPERATION_TAO,
 	MIN_POSITION_TAO,
@@ -56,12 +55,8 @@ export async function computeRebalance(
 		return { targets: [], operations: [], skipped: [] };
 	}
 
-	// Apply incumbency bias: held subnets get a score bonus so they aren't
-	// displaced by newcomers with marginally higher scores.
-	const ranked = applyIncumbencyBias(profitable, balances.stakes);
-
 	// Select target subnets — fill with netuid 0 if fewer profitable than X
-	const targetNetuids = ranked.slice(0, x).map((s) => s.netuid);
+	const targetNetuids = profitable.slice(0, x).map((s) => s.netuid);
 	while (targetNetuids.length < x) {
 		if (!targetNetuids.includes(0)) {
 			targetNetuids.push(0);
@@ -108,36 +103,6 @@ export async function computeRebalance(
 	);
 	plan.skipped = [...hotkeySelectionSkips, ...plan.skipped];
 	return plan;
-}
-
-/**
- * Re-rank profitable subnets with an incumbency bonus for currently-held positions.
- * This stabilises the target set when scores are close — a new subnet must outscore
- * a held one by at least INCUMBENCY_BONUS points to displace it.
- */
-function applyIncumbencyBias(
-	profitable: SubnetScore[],
-	currentStakes: StakeEntry[],
-): SubnetScore[] {
-	const heldNetuids = new Set(currentStakes.map((s) => s.netuid));
-	if (heldNetuids.size === 0) return profitable;
-
-	const adjusted = profitable.map((s) => ({
-		...s,
-		score: heldNetuids.has(s.netuid) ? s.score + INCUMBENCY_BONUS : s.score,
-	}));
-	adjusted.sort((a, b) => b.score - a.score);
-
-	const changed = adjusted.some((s, i) => s.netuid !== profitable[i]?.netuid);
-	if (changed) {
-		log.verbose("Incumbency bias adjusted ranking:");
-		for (const s of adjusted) {
-			const held = heldNetuids.has(s.netuid) ? " [held]" : "";
-			log.verbose(`  SN${s.netuid}: score ${s.score}${held}`);
-		}
-	}
-
-	return adjusted;
 }
 
 function classifyPositions(

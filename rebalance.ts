@@ -100,12 +100,14 @@ try {
 		);
 	}
 
+	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
 	const profitable = await pickBestSubnets(
 		sn45,
 		undefined,
 		healthyNetuids,
 		log,
 		subnetNames,
+		heldNetuids,
 	);
 
 	log.info(

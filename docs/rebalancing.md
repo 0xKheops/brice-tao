@@ -23,7 +23,7 @@ How the rebalancer decides **what to do** given a set of current balances and a 
 The algorithm receives two inputs:
 
 1. **Current balances** — the portfolio's free TAO balance and all existing stake positions (each with a netuid, hotkey, alpha amount, alpha price, and computed TAO value)
-2. **Ranked profitable subnets** — an ordered list of subnet netuids scored by momentum (best first), already filtered for health and liquidity
+2. **Ranked profitable subnets** — an ordered list of subnet netuids scored by momentum (best first), already filtered for health and liquidity. The score gate uses hysteresis: held subnets only need `minScore − INCUMBENCY_BONUS` (65) to stay in the candidate pool, while new subnets need `minScore` (70) to enter.
 
 From these, it produces a **rebalance plan**: a list of target allocations and the operations (stake, unstake, swap) needed to reach them.
 

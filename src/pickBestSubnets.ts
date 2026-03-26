@@ -1,4 +1,5 @@
 import type { Sn45Api } from "./api/generated/Sn45Api.ts";
+import { INCUMBENCY_BONUS } from "./rebalance/constants.ts";
 
 const RAO = 1_000_000_000;
 
@@ -58,6 +59,7 @@ export async function pickBestSubnets(
 	activeNetuids?: Set<number>,
 	logger?: Logger,
 	subnetNames?: Map<number, string>,
+	heldNetuids?: Set<number>,
 ): Promise<SubnetScore[]> {
 	const cfg = {
 		minScore: config?.minScore ?? DEFAULT_CONFIG.minScore,
@@ -94,11 +96,22 @@ export async function pickBestSubnets(
 			(activeNetuids === undefined || activeNetuids.has(s.netuid)),
 	);
 
-	// Score gate — first real quality filter
-	const aboveScore = complete.filter((s) => {
+	// Incumbency bias — boost held subnets' scores before any filtering/sorting.
+	// This gives held subnets a lower effective entry threshold and higher ranking,
+	// preventing churn when scores are close together.
+	const biased = heldNetuids?.size
+		? complete.map((s) =>
+				heldNetuids.has(s.netuid)
+					? { ...s, score: s.score + INCUMBENCY_BONUS }
+					: s,
+			)
+		: complete;
+
+	// Score gate — applied after bias so held subnets effectively need minScore − INCUMBENCY_BONUS
+	const aboveScore = biased.filter((s) => {
 		if (s.score < cfg.minScore) {
 			logger?.verbose(
-				`${label(s.netuid)} excluded: score ${s.score} < ${cfg.minScore}`,
+				`${label(s.netuid)} excluded: score ${s.score}${heldNetuids?.has(s.netuid) ? ` (includes +${INCUMBENCY_BONUS} bias)` : ""} < ${cfg.minScore}`,
 			);
 			return false;
 		}
