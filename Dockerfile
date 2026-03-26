@@ -21,7 +21,7 @@ FROM alpine:3
 
 WORKDIR /app
 
-RUN apk add --no-cache bash ca-certificates
+RUN apk add --no-cache bash ca-certificates libstdc++ libgcc
 
 COPY --from=build /app/rebalance /app/rebalance
 COPY scripts/ ./scripts/

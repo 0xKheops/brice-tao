@@ -195,6 +195,12 @@ export async function pickBestSubnets(
 	// Sort by SN45 leaderboard score descending
 	filtered.sort((a, b) => b.score - a.score);
 
+	for (const s of filtered) {
+		const id = `SN${s.netuid}`.padEnd(5);
+		const name = (subnetNames?.get(s.netuid) ?? "unknown").padEnd(20);
+		logger?.verbose(`${id} - ${name} : ${s.score}`);
+	}
+
 	return filtered.map((s) => ({
 		netuid: s.netuid,
 		name: subnetNames?.get(s.netuid) ?? `SN${s.netuid}`,
