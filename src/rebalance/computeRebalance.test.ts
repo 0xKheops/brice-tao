@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Balances, StakeEntry } from "../getBalances.ts";
-import type { SubnetMomentum } from "../getMostProfitableSubnets.ts";
+import type { SubnetScore } from "../pickBestSubnets.ts";
 import { computeRebalance } from "./computeRebalance.ts";
 import {
 	FREE_RESERVE_TAO,
@@ -39,15 +39,11 @@ function makeBalances(partial?: Partial<Balances>): Balances {
 	};
 }
 
-function profitable(...netuids: number[]): SubnetMomentum[] {
+function profitable(...netuids: number[]): SubnetScore[] {
 	return netuids.map((netuid, i) => ({
 		netuid,
-		momentumScore: 100 - i,
-		priceChange: 0,
-		emaTaoFlow: 0,
-		volumeMcapRatio: 0,
-		volume: 0,
-		mcap: 0,
+		name: `SN${netuid}`,
+		score: 100 - i,
 	}));
 }
 

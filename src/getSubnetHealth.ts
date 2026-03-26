@@ -7,6 +7,7 @@ const MIN_SUBNET_POOL_TAO = 1_000n * TAO;
 
 export interface SubnetHealth {
 	netuid: number;
+	name: string;
 	taoInEmission: bigint;
 	taoIn: bigint;
 	subnetVolume: bigint;
@@ -27,18 +28,28 @@ export interface SubnetHealth {
 export async function getHealthySubnets(
 	api: TypedApi<typeof bittensor>,
 	minPoolTao: bigint = MIN_SUBNET_POOL_TAO,
-): Promise<{ healthyNetuids: Set<number>; allHealth: SubnetHealth[] }> {
+): Promise<{
+	healthyNetuids: Set<number>;
+	allHealth: SubnetHealth[];
+	subnetNames: Map<number, string>;
+}> {
 	const dynamicInfos =
 		await api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info();
 
 	const allHealth: SubnetHealth[] = [];
 	const healthyNetuids = new Set<number>();
+	const subnetNames = new Map<number, string>();
+	const decoder = new TextDecoder();
 
 	for (const info of dynamicInfos) {
 		if (info === undefined) continue;
 
+		const name = decoder.decode(new Uint8Array(info.subnet_name)).trim();
+		subnetNames.set(info.netuid, name);
+
 		const health: SubnetHealth = {
 			netuid: info.netuid,
+			name,
 			taoInEmission: info.tao_in_emission,
 			taoIn: info.tao_in,
 			subnetVolume: info.subnet_volume,
@@ -58,5 +69,5 @@ export async function getHealthySubnets(
 		}
 	}
 
-	return { healthyNetuids, allHealth };
+	return { healthyNetuids, allHealth, subnetNames };
 }

@@ -18,8 +18,8 @@ import {
 } from "./src/discord.ts";
 import type { Balances } from "./src/getBalances.ts";
 import { getBalances } from "./src/getBalances.ts";
-import { getMostProfitableSubnets } from "./src/getMostProfitableSubnets.ts";
 import { getHealthySubnets } from "./src/getSubnetHealth.ts";
+import { pickBestSubnets } from "./src/pickBestSubnets.ts";
 import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
 import { log } from "./src/rebalance/logger.ts";
@@ -80,7 +80,7 @@ try {
 	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
 	log.info("Fetching balances, subnet health, and profitable subnets...");
-	const [balances, { healthyNetuids, allHealth }, proxyAccount] =
+	const [balances, { healthyNetuids, allHealth, subnetNames }, proxyAccount] =
 		await Promise.all([
 			getBalances(api, coldkey),
 			getHealthySubnets(api),
@@ -98,10 +98,12 @@ try {
 		);
 	}
 
-	const profitable = await getMostProfitableSubnets(
+	const profitable = await pickBestSubnets(
 		sn45,
 		undefined,
 		healthyNetuids,
+		log,
+		subnetNames,
 	);
 
 	log.info(

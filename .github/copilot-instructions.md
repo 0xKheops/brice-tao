@@ -40,7 +40,7 @@ src/
   getBalances.ts      → TAO/Alpha balance queries via polkadot-api
   getSubnets.ts       → Subnet registry
   getSubnetHealth.ts  → Liquidity & emission health checks
-  getMostProfitableSubnets.ts → Momentum scoring (price change, volume, EMA)
+  pickBestSubnets.ts  → Subnet selection (SN45 score ranking + quality gates)
   discord.ts          → Discord webhook notifications
 
   rebalance/

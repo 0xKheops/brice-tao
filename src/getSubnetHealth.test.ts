@@ -6,6 +6,7 @@ import { TAO } from "./rebalance/constants.ts";
 
 interface DynamicInfoFixture {
 	netuid: number;
+	subnet_name: number[];
 	tao_in_emission: bigint;
 	tao_in: bigint;
 	subnet_volume: bigint;
@@ -18,6 +19,9 @@ function makeDynamicInfo(
 ): DynamicInfoFixture {
 	return {
 		netuid: partial.netuid,
+		subnet_name:
+			partial.subnet_name ??
+			Array.from(new TextEncoder().encode(`SN${partial.netuid}`)),
 		tao_in_emission: partial.tao_in_emission ?? 0n,
 		tao_in: partial.tao_in ?? 0n,
 		subnet_volume: partial.subnet_volume ?? 0n,
@@ -93,6 +97,7 @@ describe("getHealthySubnets health filtering", () => {
 		expect(result.allHealth).toEqual([
 			{
 				netuid: 9,
+				name: "SN9",
 				taoInEmission: 11n,
 				taoIn: 2_000n * TAO,
 				subnetVolume: 321n,
@@ -101,6 +106,7 @@ describe("getHealthySubnets health filtering", () => {
 			},
 		]);
 		expect([...result.healthyNetuids]).toEqual([9]);
+		expect(result.subnetNames.get(9)).toBe("SN9");
 	});
 
 	it("returns empty structures when runtime API returns no dynamic info", async () => {
@@ -110,5 +116,6 @@ describe("getHealthySubnets health filtering", () => {
 
 		expect(result.allHealth).toEqual([]);
 		expect([...result.healthyNetuids]).toEqual([]);
+		expect(result.subnetNames.size).toBe(0);
 	});
 });

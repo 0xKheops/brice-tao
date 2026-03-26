@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { Sn45Api } from "./api/generated/Sn45Api.ts";
-import {
-	getMostProfitableSubnets,
-	type MomentumConfig,
-} from "./getMostProfitableSubnets.ts";
+import { pickBestSubnets, type StrategyConfig } from "./pickBestSubnets.ts";
 
 interface LeaderboardEntryFixture {
 	netuid: number;
@@ -15,6 +12,7 @@ interface LeaderboardEntryFixture {
 	buyCount?: number;
 	sellCount?: number;
 	emissionPct?: number | null;
+	score?: number;
 }
 
 function makeEntry(partial: LeaderboardEntryFixture): LeaderboardEntryFixture {
@@ -30,6 +28,7 @@ function makeEntry(partial: LeaderboardEntryFixture): LeaderboardEntryFixture {
 		buyCount: partial.buyCount === undefined ? 100 : partial.buyCount,
 		sellCount: partial.sellCount === undefined ? 100 : partial.sellCount,
 		emissionPct: partial.emissionPct === undefined ? 0.9 : partial.emissionPct,
+		score: partial.score === undefined ? 80 : partial.score,
 	};
 }
 
@@ -49,7 +48,7 @@ function makeSn45(entries: LeaderboardEntryFixture[]): {
 	return { sn45, getSubnetLeaderboard };
 }
 
-describe("getMostProfitableSubnets filtering and ranking", () => {
+describe("pickBestSubnets filtering and ranking", () => {
 	it("keeps only entries that pass all quality gates and respects active subnet filtering", async () => {
 		const entries = [
 			makeEntry({ netuid: 0 }),
@@ -62,19 +61,15 @@ describe("getMostProfitableSubnets filtering and ranking", () => {
 			makeEntry({ netuid: 7, buyCount: 10, sellCount: 21 }),
 			makeEntry({ netuid: 8, emissionPct: 0.49 }),
 			makeEntry({ netuid: 9, buyCount: 0, sellCount: 9999 }),
-			makeEntry({ netuid: 10 }),
+			makeEntry({ netuid: 10, score: 90 }),
 		];
 		const { sn45, getSubnetLeaderboard } = makeSn45(entries);
 
-		const result = await getMostProfitableSubnets(
-			sn45,
-			undefined,
-			new Set([9]),
-		);
+		const result = await pickBestSubnets(sn45, undefined, new Set([10]));
 
 		expect(getSubnetLeaderboard).toHaveBeenCalledWith({ period: "1d" });
 		expect(result).toHaveLength(1);
-		expect(result[0]).toMatchObject({ netuid: 9, volume: 1500, mcap: 3000 });
+		expect(result[0]).toMatchObject({ netuid: 10, score: 90 });
 	});
 
 	it("returns empty list when no subnet survives required data and quality gates", async () => {
@@ -86,7 +81,7 @@ describe("getMostProfitableSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getMostProfitableSubnets(sn45);
+		const result = await pickBestSubnets(sn45);
 
 		expect(result).toEqual([]);
 	});
@@ -97,37 +92,33 @@ describe("getMostProfitableSubnets filtering and ranking", () => {
 				netuid: 1,
 				volume: "100000000000",
 				mcap: "1000000000000",
-				priceChange: 100,
-				emaTaoFlow: "1000000000000",
+				score: 95,
 			}),
 			makeEntry({
 				netuid: 2,
 				volume: "500000000000",
 				mcap: "1000000000000",
-				priceChange: 10,
-				emaTaoFlow: "500000000000",
+				score: 85,
 			}),
 			makeEntry({
 				netuid: 3,
 				volume: "900000000000",
 				mcap: "1000000000000",
-				priceChange: 20,
-				emaTaoFlow: "600000000000",
+				score: 90,
 			}),
 			makeEntry({
 				netuid: 4,
 				volume: "1200000000000",
 				mcap: "1000000000000",
-				priceChange: 30,
-				emaTaoFlow: "700000000000",
+				score: 80,
 			}),
 		];
-		const config: MomentumConfig = {
+		const config: StrategyConfig = {
 			bottomPercentileCutoff: 25,
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getMostProfitableSubnets(sn45, config);
+		const result = await pickBestSubnets(sn45, config);
 
 		expect(result.map((s) => s.netuid)).not.toContain(1);
 		expect(result.map((s) => s.netuid).sort((a, b) => a - b)).toEqual([
@@ -135,75 +126,31 @@ describe("getMostProfitableSubnets filtering and ranking", () => {
 		]);
 	});
 
-	it("ranks by weighted z-score and honors custom weights that emphasize a single signal", async () => {
+	it("sorts subnets by SN45 leaderboard score descending", async () => {
 		const entries = [
-			makeEntry({
-				netuid: 11,
-				priceChange: 5,
-				emaTaoFlow: "900000000000",
-				volume: "1100000000000",
-				mcap: "1000000000000",
-			}),
-			makeEntry({
-				netuid: 12,
-				priceChange: 80,
-				emaTaoFlow: "100000000000",
-				volume: "100000000000",
-				mcap: "1000000000000",
-			}),
-			makeEntry({
-				netuid: 13,
-				priceChange: 30,
-				emaTaoFlow: "500000000000",
-				volume: "500000000000",
-				mcap: "1000000000000",
-			}),
+			makeEntry({ netuid: 11, score: 72 }),
+			makeEntry({ netuid: 12, score: 95 }),
+			makeEntry({ netuid: 13, score: 88 }),
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getMostProfitableSubnets(sn45, {
-			weights: {
-				priceChange: 1,
-				emaTaoFlow: 0,
-				volumeMcapRatio: 0,
-			},
+		const result = await pickBestSubnets(sn45, {
 			bottomPercentileCutoff: 0,
 		});
 
 		expect(result.map((s) => s.netuid)).toEqual([12, 13, 11]);
-		expect(result[0]?.momentumScore).toBeGreaterThan(
-			result[1]?.momentumScore ?? 0,
-		);
-		expect(result[1]?.momentumScore).toBeGreaterThan(
-			result[2]?.momentumScore ?? 0,
-		);
+		expect(result[0]?.score).toBeGreaterThan(result[1]?.score ?? 0);
+		expect(result[1]?.score).toBeGreaterThan(result[2]?.score ?? 0);
 	});
 
-	it("returns zero momentum scores when every surviving subnet has identical signals", async () => {
+	it("excludes subnets below minScore threshold", async () => {
 		const entries = [
-			makeEntry({
-				netuid: 21,
-				priceChange: 12,
-				emaTaoFlow: "300",
-				volume: "900",
-				mcap: "3000",
-			}),
-			makeEntry({
-				netuid: 22,
-				priceChange: 12,
-				emaTaoFlow: "300",
-				volume: "900",
-				mcap: "3000",
-			}),
-			makeEntry({
-				netuid: 23,
-				priceChange: 12,
-				emaTaoFlow: "300",
-				volume: "900",
-				mcap: "3000",
-			}),
+			makeEntry({ netuid: 21, score: 80 }),
+			makeEntry({ netuid: 22, score: 60 }),
+			makeEntry({ netuid: 23, score: 90 }),
 		];
-		const config: MomentumConfig = {
+		const config: StrategyConfig = {
+			minScore: 70,
 			minVolumeTao: 0,
 			minMcapTao: 0,
 			minHolders: 0,
@@ -212,9 +159,63 @@ describe("getMostProfitableSubnets filtering and ranking", () => {
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getMostProfitableSubnets(sn45, config);
+		const result = await pickBestSubnets(sn45, config);
 
-		expect(result).toHaveLength(3);
-		expect(result.every((s) => s.momentumScore === 0)).toBe(true);
+		expect(result).toHaveLength(2);
+		expect(result.map((s) => s.netuid)).toEqual([23, 21]);
+		expect(result.find((s) => s.netuid === 22)).toBeUndefined();
+	});
+
+	it("logs exclusion reasons for each quality gate", async () => {
+		const entries = [
+			makeEntry({ netuid: 1, score: 50 }),
+			makeEntry({ netuid: 2, volume: "1" }),
+			makeEntry({ netuid: 3, mcap: "1" }),
+			makeEntry({ netuid: 4, totalHolders: 1 }),
+			makeEntry({ netuid: 5, buyCount: 10, sellCount: 21 }),
+			makeEntry({ netuid: 6, emissionPct: 0.1 }),
+		];
+		const logger = { verbose: vi.fn() };
+		const { sn45 } = makeSn45(entries);
+
+		await pickBestSubnets(sn45, undefined, undefined, logger);
+
+		const calls = logger.verbose.mock.calls.map(
+			(c: unknown[]) => c[0] as string,
+		);
+		expect(calls.some((m) => m.includes("SN1") && m.includes("score"))).toBe(
+			true,
+		);
+		expect(calls.some((m) => m.includes("SN2") && m.includes("volume"))).toBe(
+			true,
+		);
+		expect(calls.some((m) => m.includes("SN3") && m.includes("mcap"))).toBe(
+			true,
+		);
+		expect(calls.some((m) => m.includes("SN4") && m.includes("holders"))).toBe(
+			true,
+		);
+		expect(calls.some((m) => m.includes("SN5") && m.includes("sell/buy"))).toBe(
+			true,
+		);
+		expect(calls.some((m) => m.includes("SN6") && m.includes("emission"))).toBe(
+			true,
+		);
+	});
+
+	it("includes subnet names in output when subnetNames map is provided", async () => {
+		const entries = [makeEntry({ netuid: 7, score: 85 })];
+		const { sn45 } = makeSn45(entries);
+		const names = new Map([[7, "Apex"]]);
+
+		const result = await pickBestSubnets(
+			sn45,
+			{ bottomPercentileCutoff: 0 },
+			undefined,
+			undefined,
+			names,
+		);
+
+		expect(result[0]).toMatchObject({ netuid: 7, name: "Apex", score: 85 });
 	});
 });

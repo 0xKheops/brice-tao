@@ -1,7 +1,7 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
 import type { Balances, StakeEntry } from "../getBalances.ts";
-import type { SubnetMomentum } from "../getMostProfitableSubnets.ts";
+import type { SubnetScore } from "../pickBestSubnets.ts";
 import {
 	FREE_RESERVE_TAO,
 	MAX_SUBNETS,
@@ -32,7 +32,7 @@ interface ClassifiedPosition extends StakeEntry {
 export async function computeRebalance(
 	api: Api,
 	balances: Balances,
-	profitable: SubnetMomentum[],
+	profitable: SubnetScore[],
 	fallbackValidatorHotkey?: string,
 ): Promise<RebalancePlan> {
 	const available = balances.totalTaoValue - FREE_RESERVE_TAO;
