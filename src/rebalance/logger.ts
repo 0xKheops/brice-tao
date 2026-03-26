@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const LOGS_ROOT = join(import.meta.dirname, "../../logs");
+const LOGS_ROOT = join(process.cwd(), "logs");
 const ENABLE_TEST_TERMINAL_LOGS = false;
 const IS_TEST_ENV =
 	process.env.NODE_ENV === "test" ||

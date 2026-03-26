@@ -14,5 +14,5 @@ printf 'PATH=/usr/local/bin:/usr/bin:/bin\n%s /app/scripts/run-rebalance.sh >> /
 
 echo "Rebalance cron started — schedule: $CRON_SCHEDULE"
 
-# Start cron in foreground as PID 1
-exec cron -f
+# Start crond in foreground as PID 1
+exec crond -f

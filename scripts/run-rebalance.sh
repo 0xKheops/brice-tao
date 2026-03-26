@@ -25,4 +25,4 @@ fi
 find /app/logs -name "rebalance-*.log" -mtime +7 -delete 2>/dev/null || true
 
 cd /app
-bun rebalance.ts
+./rebalance
