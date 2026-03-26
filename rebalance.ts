@@ -22,12 +22,13 @@ import { getHealthySubnets } from "./src/getSubnetHealth.ts";
 import { pickBestSubnets } from "./src/pickBestSubnets.ts";
 import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
-import { log } from "./src/rebalance/logger.ts";
+import { initLog, log } from "./src/rebalance/logger.ts";
 import { simulateAllOperations } from "./src/rebalance/simulateSlippage.ts";
 import { TAO } from "./src/rebalance/tao.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
+initLog({ dryRun });
 
 // --- Environment validation ---
 const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
@@ -73,6 +74,8 @@ const sn45 = new Sn45Api({
 	baseUrl: "https://sn45api.talisman.xyz",
 	baseApiParams: { headers: { "X-API-Key": sn45ApiKey } },
 });
+
+const startedAt = performance.now();
 
 try {
 	const api = client.getTypedApi(bittensor);
@@ -125,6 +128,7 @@ try {
 				discordWebhookUrl,
 				balances,
 				proxyFreeBalance,
+				performance.now() - startedAt,
 			);
 		}
 	} else {
@@ -173,6 +177,7 @@ try {
 				balancesAfter: postBalances,
 				proxyFreeBalance: postProxyFreeBalance,
 				batchResult,
+				durationMs: performance.now() - startedAt,
 			});
 		}
 	}
@@ -181,9 +186,11 @@ try {
 } catch (err) {
 	log.error("Rebalance failed", err);
 	if (!dryRun) {
-		await sendErrorNotification(discordWebhookUrl, err).catch((e) =>
-			log.error("Failed to send Discord error notification", e),
-		);
+		await sendErrorNotification(
+			discordWebhookUrl,
+			err,
+			performance.now() - startedAt,
+		).catch((e) => log.error("Failed to send Discord error notification", e));
 	}
 	process.exit(1);
 } finally {

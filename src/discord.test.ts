@@ -88,6 +88,7 @@ describe("discord notifications", () => {
 			balancesAfter: makeBalances(),
 			proxyFreeBalance: 20_000_000n,
 			batchResult,
+			durationMs: 12_500,
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -123,6 +124,7 @@ describe("discord notifications", () => {
 			balancesAfter: makeBalances(),
 			proxyFreeBalance: 5_000_000n,
 			batchResult: { status: "timeout", wrapperFee: 4_000_000n },
+			durationMs: 60_000,
 		});
 
 		const body = parsePostedBody(fetchMock);
@@ -147,7 +149,7 @@ describe("discord notifications", () => {
 		const error = new Error("rebalance exploded");
 		error.stack = "Error: rebalance exploded\n  at line 1";
 
-		await sendErrorNotification(webhookUrl, error);
+		await sendErrorNotification(webhookUrl, error, 3_200);
 
 		const body = parsePostedBody(fetchMock);
 		expect(body.embeds[0]?.title).toBe("❌ Rebalance Failed");
@@ -169,7 +171,12 @@ describe("discord notifications", () => {
 		});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		await sendNoRebalanceNotification(webhookUrl, makeBalances(), 100_000_000n);
+		await sendNoRebalanceNotification(
+			webhookUrl,
+			makeBalances(),
+			100_000_000n,
+			5_000,
+		);
 
 		expect(errorSpy).toHaveBeenCalledWith(
 			"Discord webhook failed: 500 internal error",

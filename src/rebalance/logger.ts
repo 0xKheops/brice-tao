@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-const LOG_DIR = join(import.meta.dirname, "../../logs");
+const LOGS_ROOT = join(import.meta.dirname, "../../logs");
 const ENABLE_TEST_TERMINAL_LOGS = false;
 const IS_TEST_ENV =
 	process.env.NODE_ENV === "test" ||
@@ -12,15 +12,17 @@ const FILE_LOGGING_ENABLED =
 	process.env.NODE_ENV !== "test" &&
 	process.env.VITEST !== "true" &&
 	process.env.DISABLE_FILE_LOGS !== "1";
-const LOG_FILE = FILE_LOGGING_ENABLED
-	? join(
-			LOG_DIR,
-			`rebalance-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
-		)
-	: undefined;
 
-if (FILE_LOGGING_ENABLED) {
-	mkdirSync(LOG_DIR, { recursive: true });
+let LOG_FILE: string | undefined;
+
+function initLogFile(subdir: string): void {
+	if (!FILE_LOGGING_ENABLED) return;
+	const logDir = join(LOGS_ROOT, subdir);
+	mkdirSync(logDir, { recursive: true });
+	LOG_FILE = join(
+		logDir,
+		`rebalance-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
+	);
 }
 
 function timestamp(): string {
@@ -32,6 +34,10 @@ function writeToFile(level: string, message: string): void {
 		return;
 	}
 	appendFileSync(LOG_FILE, `[${timestamp()}] [${level}] ${message}\n`);
+}
+
+export function initLog(options: { dryRun: boolean }): void {
+	initLogFile(options.dryRun ? "rebalance-dryrun" : "rebalance");
 }
 
 export const log = {

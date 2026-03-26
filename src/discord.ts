@@ -9,6 +9,14 @@ import type {
 
 const LOW_PROXY_THRESHOLD = parseTao(0.05);
 
+function formatDuration(ms: number): string {
+	const totalSeconds = Math.round(ms / 1000);
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (minutes > 0) return `${minutes}m ${seconds}s`;
+	return `${seconds}s`;
+}
+
 function formatTao(rao: bigint): string {
 	const whole = rao / TAO;
 	const frac = ((rao % TAO) * 1000n) / TAO;
@@ -141,10 +149,17 @@ export async function sendRebalanceNotification(
 		balancesAfter: Balances;
 		proxyFreeBalance: bigint;
 		batchResult: BatchResult | null;
+		durationMs: number;
 	},
 ): Promise<void> {
-	const { plan, balancesBefore, balancesAfter, proxyFreeBalance, batchResult } =
-		opts;
+	const {
+		plan,
+		balancesBefore,
+		balancesAfter,
+		proxyFreeBalance,
+		batchResult,
+		durationMs,
+	} = opts;
 
 	let title: string;
 	let color: number;
@@ -199,6 +214,7 @@ export async function sendRebalanceNotification(
 					inline: false,
 				},
 			],
+			footer: { text: `Completed in ${formatDuration(durationMs)}` },
 			timestamp: new Date().toISOString(),
 		},
 	];
@@ -210,6 +226,7 @@ export async function sendNoRebalanceNotification(
 	webhookUrl: string,
 	balances: Balances,
 	proxyFreeBalance: bigint,
+	durationMs: number,
 ): Promise<void> {
 	const embeds = [
 		{
@@ -229,6 +246,7 @@ export async function sendNoRebalanceNotification(
 					inline: false,
 				},
 			],
+			footer: { text: `Completed in ${formatDuration(durationMs)}` },
 			timestamp: new Date().toISOString(),
 		},
 	];
@@ -239,6 +257,7 @@ export async function sendNoRebalanceNotification(
 export async function sendErrorNotification(
 	webhookUrl: string,
 	error: unknown,
+	durationMs: number,
 ): Promise<void> {
 	const message = error instanceof Error ? error.message : String(error);
 	const stack =
@@ -254,6 +273,7 @@ export async function sendErrorNotification(
 				{ name: "Error", value: message, inline: false },
 				...(stack ? [{ name: "Stack", value: stack, inline: false }] : []),
 			],
+			footer: { text: `Failed after ${formatDuration(durationMs)}` },
 			timestamp: new Date().toISOString(),
 		},
 	];
