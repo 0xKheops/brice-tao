@@ -363,10 +363,42 @@ try {
 	const outPath = `reports/subnet-report-${ts}.md`;
 	await Bun.write(outPath, md);
 
-	const qualifiedCount = rows.filter((r) => r.passesAllGates).length;
+	const qualified = rows.filter((r) => r.passesAllGates);
+	const maxSubnets = appConfig.rebalance.maxSubnets;
+	const eligible = qualified.slice(0, maxSubnets);
+
 	console.log(
-		`Report written to ${outPath} — ${qualifiedCount} qualifying / ${rows.length} total subnets`,
+		`Report written to ${outPath} — ${qualified.length} qualifying / ${rows.length} total subnets\n`,
 	);
+
+	console.log(`Rebalance-eligible subnets (top ${maxSubnets} by score):\n`);
+	console.log(
+		`${"#".padStart(3)}  ${"SN".padEnd(5)}  ${"Name".padEnd(20)}  ${"Score".padStart(5)}  ${"Price Δ".padStart(8)}  ${"Vol (τ)".padStart(10)}  ${"Mcap (τ)".padStart(10)}`,
+	);
+	console.log("─".repeat(72));
+	for (const r of eligible) {
+		const name = r.name.length > 20 ? `${r.name.slice(0, 19)}…` : r.name;
+		const price =
+			r.priceChange !== null
+				? `${r.priceChange >= 0 ? "+" : ""}${r.priceChange.toFixed(1)}%`
+				: "—";
+		const vol = r.volumeTao.toLocaleString("en-US", {
+			maximumFractionDigits: 0,
+		});
+		const mcap =
+			r.mcapTao !== null
+				? r.mcapTao.toLocaleString("en-US", { maximumFractionDigits: 0 })
+				: "—";
+		console.log(
+			`${String(r.rank).padStart(3)}  ${`SN${r.netuid}`.padEnd(5)}  ${name.padEnd(20)}  ${String(Math.round(r.score)).padStart(5)}  ${price.padStart(8)}  ${vol.padStart(10)}  ${mcap.padStart(10)}`,
+		);
+	}
+
+	if (qualified.length > maxSubnets) {
+		console.log(
+			`\n… ${qualified.length - maxSubnets} more qualifying subnets not included (maxSubnets = ${maxSubnets})`,
+		);
+	}
 } finally {
 	client.destroy();
 	process.exit(0);
