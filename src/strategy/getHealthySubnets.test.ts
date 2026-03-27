@@ -16,6 +16,7 @@ function makeSubnet(
 		tempo: partial.tempo ?? 12,
 		networkRegisteredAt: partial.networkRegisteredAt ?? 0n,
 		isImmune: partial.isImmune ?? false,
+		isPruneTarget: partial.isPruneTarget ?? false,
 	};
 }
 
@@ -28,7 +29,7 @@ describe("getHealthySubnets health filtering", () => {
 			makeSubnet({ netuid: 3, taoIn: 999n * TAO }),
 		];
 
-		const result = getHealthySubnets(subnets, undefined);
+		const result = getHealthySubnets(subnets);
 
 		expect([...result].sort((a, b) => a - b)).toEqual([0, 1, 2]);
 	});
@@ -39,26 +40,42 @@ describe("getHealthySubnets health filtering", () => {
 			makeSubnet({ netuid: 6, taoIn: 5_000n * TAO }),
 		];
 
-		const result = getHealthySubnets(subnets, undefined, 4_000n * TAO);
+		const result = getHealthySubnets(subnets, 4_000n * TAO);
 
 		expect([...result]).toEqual([6]);
 	});
 
-	it("excludes the subnet-to-prune from healthy netuids", () => {
+	it("excludes prune targets from healthy netuids", () => {
 		const subnets = [
 			makeSubnet({ netuid: 0, taoIn: 1n }),
 			makeSubnet({ netuid: 10, taoIn: 5_000n * TAO }),
-			makeSubnet({ netuid: 20, taoIn: 5_000n * TAO }),
+			makeSubnet({ netuid: 20, taoIn: 5_000n * TAO, isPruneTarget: true }),
 		];
 
-		const result = getHealthySubnets(subnets, 20);
+		const result = getHealthySubnets(subnets);
 
 		expect([...result].sort((a, b) => a - b)).toEqual([0, 10]);
 	});
 
 	it("returns empty set when no subnets are provided", () => {
-		const result = getHealthySubnets([], undefined);
+		const result = getHealthySubnets([]);
 
 		expect([...result]).toEqual([]);
+	});
+
+	it("includes immune subnets regardless of pool liquidity and prune risk", () => {
+		const subnets = [
+			makeSubnet({
+				netuid: 42,
+				taoIn: 1n,
+				isPruneTarget: true,
+				isImmune: true,
+			}),
+			makeSubnet({ netuid: 43, taoIn: 1n, isPruneTarget: false }),
+		];
+
+		const result = getHealthySubnets(subnets);
+
+		expect([...result]).toEqual([42]);
 	});
 });

@@ -70,7 +70,7 @@ describe("fetchAllSubnets data fetching", () => {
 
 		const result = await fetchAllSubnets(api);
 
-		expect(result.subnets).toEqual([
+		expect(result).toEqual([
 			{
 				netuid: 9,
 				name: "SN9",
@@ -81,19 +81,17 @@ describe("fetchAllSubnets data fetching", () => {
 				tempo: 42,
 				networkRegisteredAt: 500n,
 				isImmune: true,
+				isPruneTarget: false,
 			},
 		]);
-		expect(result.subnetNames.get(9)).toBe("SN9");
 	});
 
-	it("returns empty structures when runtime API returns no dynamic info", async () => {
+	it("returns empty array when runtime API returns no dynamic info", async () => {
 		const api = makeApi([]);
 
 		const result = await fetchAllSubnets(api);
 
-		expect(result.subnets).toEqual([]);
-		expect(result.subnetNames.size).toBe(0);
-		expect(result.subnetToPrune).toBeUndefined();
+		expect(result).toEqual([]);
 	});
 
 	it("computes immunity status based on registration age vs immunity period", async () => {
@@ -120,22 +118,24 @@ describe("fetchAllSubnets data fetching", () => {
 
 		const result = await fetchAllSubnets(api);
 
-		const sn1 = result.subnets.find((s) => s.netuid === 1);
-		const sn2 = result.subnets.find((s) => s.netuid === 2);
+		const sn1 = result.find((s) => s.netuid === 1);
+		const sn2 = result.find((s) => s.netuid === 2);
 		expect(sn1?.isImmune).toBe(true);
 		expect(sn2?.isImmune).toBe(false);
 	});
 
-	it("forwards the subnet-to-prune value from the runtime API", async () => {
+	it("marks the subnet-to-prune as isPruneTarget", async () => {
 		const api = makeApi(
-			[makeDynamicInfo({ netuid: 10, tao_in: 5_000n * TAO })],
+			[
+				makeDynamicInfo({ netuid: 10, tao_in: 5_000n * TAO }),
+				makeDynamicInfo({ netuid: 20, tao_in: 5_000n * TAO }),
+			],
 			{ subnetToPrune: 10 },
 		);
 
 		const result = await fetchAllSubnets(api);
 
-		expect(result.subnetToPrune).toBe(10);
-		// Subnet data is still returned — pruning is a consumer concern
-		expect(result.subnets).toHaveLength(1);
+		expect(result.find((s) => s.netuid === 10)?.isPruneTarget).toBe(true);
+		expect(result.find((s) => s.netuid === 20)?.isPruneTarget).toBe(false);
 	});
 });

@@ -84,26 +84,23 @@ try {
 	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
 	log.info("Fetching balances, subnet health, and profitable subnets...");
-	const [
-		balances,
-		{ subnets: allSubnets, subnetNames, subnetToPrune },
-		proxyAccount,
-	] = await Promise.all([
+	const [balances, allSubnets, proxyAccount] = await Promise.all([
 		getBalances(api, coldkey),
 		fetchAllSubnets(api),
 		api.query.System.Account.getValue(proxyAddress),
 	]);
-	const healthyNetuids = getHealthySubnets(allSubnets, subnetToPrune);
+	const healthyNetuids = getHealthySubnets(allSubnets);
 	const proxyFreeBalance = proxyAccount.data.free;
 
+	const pruneTarget = allSubnets.find((s) => s.isPruneTarget);
 	log.verbose(
-		`Subnet health: ${healthyNetuids.size} healthy out of ${allSubnets.length} total${subnetToPrune !== undefined ? ` (SN${subnetToPrune} next to prune)` : ""}`,
+		`Subnet health: ${healthyNetuids.size} healthy out of ${allSubnets.length} total${pruneTarget ? ` (SN${pruneTarget.netuid} next to prune)` : ""}`,
 	);
 	for (const h of allSubnets) {
 		const healthy = healthyNetuids.has(h.netuid) ? "✓" : "✗";
 		const flags = [
 			h.isImmune ? "immune" : null,
-			subnetToPrune === h.netuid ? "PRUNE_RISK" : null,
+			h.isPruneTarget ? "PRUNE_RISK" : null,
 		]
 			.filter(Boolean)
 			.join(",");
@@ -112,7 +109,11 @@ try {
 		);
 	}
 
+	const subnetNames = new Map(allSubnets.map((s) => [s.netuid, s.name]));
 	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
+	const immuneNetuids = new Set(
+		allSubnets.filter((s) => s.isImmune).map((s) => s.netuid),
+	);
 	const profitable = await getBestSubnets(
 		sn45,
 		undefined,
@@ -120,6 +121,7 @@ try {
 		log,
 		subnetNames,
 		heldNetuids,
+		immuneNetuids,
 	);
 
 	log.info(

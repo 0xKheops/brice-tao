@@ -13,6 +13,8 @@ export interface SubnetInfo {
 	networkRegisteredAt: bigint;
 	/** Whether this subnet is still within its network immunity period */
 	isImmune: boolean;
+	/** Whether this subnet is the next candidate for deregistration */
+	isPruneTarget: boolean;
 }
 
 /**
@@ -24,12 +26,7 @@ export interface SubnetInfo {
  */
 export async function fetchAllSubnets(
 	api: TypedApi<typeof bittensor>,
-): Promise<{
-	subnets: SubnetInfo[];
-	subnetNames: Map<number, string>;
-	/** Netuid that would be deregistered next, if any */
-	subnetToPrune: number | undefined;
-}> {
+): Promise<SubnetInfo[]> {
 	const [dynamicInfos, immunityPeriod, subnetToPrune] = await Promise.all([
 		api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(),
 		api.query.SubtensorModule.NetworkImmunityPeriod.getValue(),
@@ -46,14 +43,12 @@ export async function fetchAllSubnets(
 	}
 
 	const subnets: SubnetInfo[] = [];
-	const subnetNames = new Map<number, string>();
 	const decoder = new TextDecoder();
 
 	for (const info of dynamicInfos) {
 		if (info === undefined) continue;
 
 		const name = decoder.decode(new Uint8Array(info.subnet_name)).trim();
-		subnetNames.set(info.netuid, name);
 
 		subnets.push({
 			netuid: info.netuid,
@@ -65,8 +60,10 @@ export async function fetchAllSubnets(
 			tempo: info.tempo,
 			networkRegisteredAt: info.network_registered_at,
 			isImmune: currentBlock - info.network_registered_at < immunityPeriod,
+			isPruneTarget:
+				subnetToPrune !== undefined && info.netuid === subnetToPrune,
 		});
 	}
 
-	return { subnets, subnetNames, subnetToPrune };
+	return subnets;
 }

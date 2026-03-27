@@ -61,6 +61,7 @@ export async function getBestSubnets(
 	logger?: Logger,
 	subnetNames?: Map<number, string>,
 	heldNetuids?: Set<number>,
+	immuneNetuids?: Set<number>,
 ): Promise<SubnetScore[]> {
 	const cfg = {
 		minScore: config?.minScore ?? STRATEGY_DEFAULTS.minScore,
@@ -122,6 +123,7 @@ export async function getBestSubnets(
 	// Absolute volume floor
 	const minVolumeRao = cfg.minVolumeTao * RAO;
 	const aboveFloor = aboveScore.filter((s) => {
+		if (immuneNetuids?.has(s.netuid)) return true;
 		if (Number(s.volume) < minVolumeRao) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: volume ${(Number(s.volume) / RAO).toFixed(0)} τ < ${cfg.minVolumeTao} τ`,
@@ -134,6 +136,7 @@ export async function getBestSubnets(
 	// Minimum mcap floor — reject micro-cap subnets susceptible to noise
 	const minMcapRao = cfg.minMcapTao * RAO;
 	const aboveMcap = aboveFloor.filter((s) => {
+		if (immuneNetuids?.has(s.netuid)) return true;
 		if (Number(s.mcap) < minMcapRao) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: mcap ${(Number(s.mcap) / RAO).toFixed(0)} τ < ${cfg.minMcapTao} τ`,
@@ -145,6 +148,7 @@ export async function getBestSubnets(
 
 	// Minimum holder count — reject concentrated/fragile subnets
 	const enoughHolders = aboveMcap.filter((s) => {
+		if (immuneNetuids?.has(s.netuid)) return true;
 		if (s.totalHolders < cfg.minHolders) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: ${s.totalHolders} holders < ${cfg.minHolders}`,
@@ -156,6 +160,7 @@ export async function getBestSubnets(
 
 	// Minimum emission % — reject subnets not valued by root validators
 	const enoughEmission = enoughHolders.filter((s) => {
+		if (immuneNetuids?.has(s.netuid)) return true;
 		if (s.emissionPct === null || s.emissionPct < cfg.minEmissionPct) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: emission ${s.emissionPct ?? 0}% < ${cfg.minEmissionPct}%`,
@@ -180,6 +185,7 @@ export async function getBestSubnets(
 	);
 	const cutoffValue = ratios[cutoffIdx] ?? 0;
 	const filtered = withRatio.filter((s) => {
+		if (immuneNetuids?.has(s.netuid)) return true;
 		if (s.volumeMcapRatio < cutoffValue) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: vol/mcap ratio ${s.volumeMcapRatio.toFixed(4)} in bottom ${cfg.bottomPercentileCutoff}%`,

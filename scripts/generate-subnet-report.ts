@@ -106,14 +106,14 @@ try {
 
 	console.log("Fetching on-chain subnet info and SN45 leaderboard…");
 
-	const [{ subnets, subnetNames, subnetToPrune }, leaderboardRes] =
-		await Promise.all([
-			fetchAllSubnets(api),
-			sn45.v1.getSubnetLeaderboard({ period: "1d" }),
-		]);
+	const [subnets, leaderboardRes] = await Promise.all([
+		fetchAllSubnets(api),
+		sn45.v1.getSubnetLeaderboard({ period: "1d" }),
+	]);
 
-	const healthyNetuids = getHealthySubnets(subnets, subnetToPrune);
+	const healthyNetuids = getHealthySubnets(subnets);
 	const subnetMap = new Map(subnets.map((s) => [s.netuid, s]));
+	const subnetNames = new Map(subnets.map((s) => [s.netuid, s.name]));
 
 	const leaderboard = leaderboardRes.data.subnets as LeaderboardEntry[];
 
@@ -126,6 +126,7 @@ try {
 		const hasFullData =
 			hasPriceData && s.mcap !== null && s.emaTaoFlow !== null;
 		const isHealthy = healthyNetuids.has(s.netuid);
+		const isImmune = health?.isImmune ?? false;
 
 		const volumeTao = Number(s.volume) / RAO;
 		const mcapTao = s.mcap !== null ? Number(s.mcap) / RAO : null;
@@ -142,14 +143,16 @@ try {
 			volMcapRatio:
 				mcapTao !== null && mcapTao > 0 ? volumeTao / mcapTao : null,
 			passesPriceGate: hasPriceData,
-			passesDataGate: hasFullData && isHealthy,
-			passesHealthGate: isHealthy,
+			passesDataGate: isImmune || (hasFullData && isHealthy),
+			passesHealthGate: isImmune || isHealthy,
 			passesScoreGate: s.score >= GATES.minScore,
-			passesVolumeGate: volumeTao >= GATES.minVolumeTao,
-			passesMcapGate: mcapTao !== null && mcapTao >= GATES.minMcapTao,
-			passesHoldersGate: s.totalHolders >= GATES.minHolders,
+			passesVolumeGate: isImmune || volumeTao >= GATES.minVolumeTao,
+			passesMcapGate:
+				isImmune || (mcapTao !== null && mcapTao >= GATES.minMcapTao),
+			passesHoldersGate: isImmune || s.totalHolders >= GATES.minHolders,
 			passesEmissionGate:
-				s.emissionPct !== null && s.emissionPct >= GATES.minEmissionPct,
+				isImmune ||
+				(s.emissionPct !== null && s.emissionPct >= GATES.minEmissionPct),
 		};
 	});
 
@@ -175,8 +178,9 @@ try {
 	// Build rows
 	// -----------------------------------------------------------------------
 	const rows: ReportRow[] = evaluated.map((e) => {
+		const isImmune = e.health?.isImmune ?? false;
 		const passesVolMcapGate =
-			e.volMcapRatio !== null && e.volMcapRatio >= cutoffValue;
+			isImmune || (e.volMcapRatio !== null && e.volMcapRatio >= cutoffValue);
 		const passesAllGates =
 			e.passesDataGate &&
 			e.passesScoreGate &&
@@ -209,8 +213,7 @@ try {
 				? Number(e.health.blocksSinceLastStep)
 				: null,
 			isImmune: e.health?.isImmune ?? null,
-			isNextToPrune:
-				subnetToPrune !== undefined && e.entry.netuid === subnetToPrune,
+			isNextToPrune: e.health?.isPruneTarget ?? false,
 			passesPriceGate: e.passesPriceGate,
 			passesHealthGate: e.passesHealthGate,
 			passesScoreGate: e.passesScoreGate,

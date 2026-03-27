@@ -209,4 +209,52 @@ describe("getBestSubnets filtering and ranking", () => {
 
 		expect(result[0]).toMatchObject({ netuid: 7, name: "Apex", score: 85 });
 	});
+
+	it("immune subnets bypass all quality gates except score", async () => {
+		const entries = [
+			makeEntry({
+				netuid: 50,
+				volume: "1",
+				mcap: "1",
+				totalHolders: 0,
+				emissionPct: null,
+				score: 85,
+			}),
+			makeEntry({
+				netuid: 51,
+				volume: "1",
+				mcap: "1",
+				totalHolders: 0,
+				emissionPct: null,
+				score: 85,
+			}),
+			makeEntry({
+				netuid: 52,
+				volume: "1",
+				mcap: "1",
+				totalHolders: 0,
+				emissionPct: null,
+				score: 40,
+			}),
+		];
+		const { sn45 } = makeSn45(entries);
+		const immuneNetuids = new Set([50, 52]);
+
+		const result = await getBestSubnets(
+			sn45,
+			{ bottomPercentileCutoff: 0 },
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			immuneNetuids,
+		);
+
+		// SN50 passes (immune, score above default minScore)
+		expect(result.map((s) => s.netuid)).toContain(50);
+		// SN51 fails (not immune, all gates fail)
+		expect(result.map((s) => s.netuid)).not.toContain(51);
+		// SN52 fails (immune but score too low)
+		expect(result.map((s) => s.netuid)).not.toContain(52);
+	});
 });
