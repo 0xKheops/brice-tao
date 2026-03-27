@@ -1,7 +1,7 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import type { Balances, StakeEntry } from "../getBalances.ts";
-import type { SubnetScore } from "../pickBestSubnets.ts";
+import type { SubnetScore } from "../strategy/getBestSubnets.ts";
+import type { Balances, StakeEntry } from "../utils/getBalances.ts";
 import {
 	FREE_RESERVE_TAO,
 	MAX_SUBNETS,

@@ -1,5 +1,5 @@
-import type { Sn45Api } from "./api/generated/Sn45Api.ts";
-import { INCUMBENCY_BONUS } from "./rebalance/constants.ts";
+import type { Sn45Api } from "../api/generated/Sn45Api.ts";
+import { INCUMBENCY_BONUS } from "../rebalance/constants.ts";
 
 const RAO = 1_000_000_000;
 
@@ -22,7 +22,7 @@ const DEFAULT_CONFIG = {
 	minMcapTao: 1_000,
 	minHolders: 500,
 	maxSellBuyRatio: 2,
-	minEmissionPct: 0.5,
+	minEmissionPct: 0,
 	bottomPercentileCutoff: 10,
 } as const;
 
@@ -37,7 +37,7 @@ export interface StrategyConfig {
 	minHolders?: number;
 	/** Maximum sell/buy event ratio — rejects subnets with exodus-like selling pressure (default: 2) */
 	maxSellBuyRatio?: number;
-	/** Minimum emission % from root validators — rejects subnets not valued by the network (default: 0.5) */
+	/** Minimum emission % from root validators (default: 0 — all emission levels accepted) */
 	minEmissionPct?: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
 	bottomPercentileCutoff?: number;
@@ -53,7 +53,7 @@ interface Logger {
 	verbose: (msg: string) => void;
 }
 
-export async function pickBestSubnets(
+export async function getBestSubnets(
 	sn45: Sn45Api<unknown>,
 	config?: StrategyConfig,
 	activeNetuids?: Set<number>,

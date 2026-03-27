@@ -1,6 +1,6 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import { TAO } from "./rebalance/tao.ts";
+import { TAO } from "../rebalance/tao.ts";
 
 export interface StakeEntry {
 	hotkey: string;

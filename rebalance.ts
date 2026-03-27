@@ -11,19 +11,19 @@ import {
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "./src/api/generated/Sn45Api.ts";
-import {
-	sendErrorNotification,
-	sendRebalanceNotification,
-} from "./src/discord.ts";
-import type { Balances } from "./src/getBalances.ts";
-import { getBalances } from "./src/getBalances.ts";
-import { getHealthySubnets } from "./src/getSubnetHealth.ts";
-import { pickBestSubnets } from "./src/pickBestSubnets.ts";
 import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
 import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
 import { initLog, log } from "./src/rebalance/logger.ts";
 import { simulateAllOperations } from "./src/rebalance/simulateSlippage.ts";
 import { TAO } from "./src/rebalance/tao.ts";
+import { getBestSubnets } from "./src/strategy/getBestSubnets.ts";
+import { getHealthySubnets } from "./src/strategy/getSubnetHealth.ts";
+import {
+	sendErrorNotification,
+	sendRebalanceNotification,
+} from "./src/utils/discord.ts";
+import type { Balances } from "./src/utils/getBalances.ts";
+import { getBalances } from "./src/utils/getBalances.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -75,6 +75,7 @@ const sn45 = new Sn45Api({
 });
 
 const startedAt = performance.now();
+let exitCode = 0;
 
 try {
 	const api = client.getTypedApi(bittensor);
@@ -101,7 +102,7 @@ try {
 	}
 
 	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
-	const profitable = await pickBestSubnets(
+	const profitable = await getBestSubnets(
 		sn45,
 		undefined,
 		healthyNetuids,
@@ -186,9 +187,10 @@ try {
 			performance.now() - startedAt,
 		).catch((e) => log.error("Failed to send Discord error notification", e));
 	}
-	process.exit(1);
+	exitCode = 1;
 } finally {
 	client.destroy();
+	process.exit(exitCode);
 }
 
 function formatTao(rao: bigint): string {

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
+import { TAO } from "../rebalance/constants.ts";
 import { getHealthySubnets } from "./getSubnetHealth.ts";
-import { TAO } from "./rebalance/constants.ts";
 
 interface DynamicInfoFixture {
 	netuid: number;
@@ -47,7 +47,7 @@ function makeApi(dynamicInfos: Array<DynamicInfoFixture | undefined>): {
 }
 
 describe("getHealthySubnets health filtering", () => {
-	it("marks root as healthy and includes only subnets with emission and sufficient pool", async () => {
+	it("marks root as healthy and includes subnets with sufficient pool regardless of emission", async () => {
 		const dynamicInfos = [
 			makeDynamicInfo({ netuid: 0, tao_in_emission: 0n, tao_in: 1n }),
 			makeDynamicInfo({ netuid: 1, tao_in_emission: 1n, tao_in: 1_500n * TAO }),
@@ -63,7 +63,7 @@ describe("getHealthySubnets health filtering", () => {
 		const result = await getHealthySubnets(api);
 
 		expect(getAllDynamicInfo).toHaveBeenCalledTimes(1);
-		expect([...result.healthyNetuids].sort((a, b) => a - b)).toEqual([0, 1]);
+		expect([...result.healthyNetuids].sort((a, b) => a - b)).toEqual([0, 1, 2]);
 	});
 
 	it("respects custom minimum pool threshold for non-root subnet eligibility", async () => {

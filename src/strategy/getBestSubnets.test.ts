@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
-import type { Sn45Api } from "./api/generated/Sn45Api.ts";
-import { pickBestSubnets, type StrategyConfig } from "./pickBestSubnets.ts";
+import type { Sn45Api } from "../api/generated/Sn45Api.ts";
+import { getBestSubnets, type StrategyConfig } from "./getBestSubnets.ts";
 
 interface LeaderboardEntryFixture {
 	netuid: number;
@@ -48,7 +48,7 @@ function makeSn45(entries: LeaderboardEntryFixture[]): {
 	return { sn45, getSubnetLeaderboard };
 }
 
-describe("pickBestSubnets filtering and ranking", () => {
+describe("getBestSubnets filtering and ranking", () => {
 	it("keeps only entries that pass all quality gates and respects active subnet filtering", async () => {
 		const entries = [
 			makeEntry({ netuid: 0 }),
@@ -59,13 +59,13 @@ describe("pickBestSubnets filtering and ranking", () => {
 			makeEntry({ netuid: 5, mcap: "999999999999" }),
 			makeEntry({ netuid: 6, totalHolders: 499 }),
 			makeEntry({ netuid: 7, buyCount: 10, sellCount: 21 }),
-			makeEntry({ netuid: 8, emissionPct: 0.49 }),
+			makeEntry({ netuid: 8, emissionPct: null }),
 			makeEntry({ netuid: 9, buyCount: 0, sellCount: 9999 }),
 			makeEntry({ netuid: 10, score: 90 }),
 		];
 		const { sn45, getSubnetLeaderboard } = makeSn45(entries);
 
-		const result = await pickBestSubnets(sn45, undefined, new Set([10]));
+		const result = await getBestSubnets(sn45, undefined, new Set([10]));
 
 		expect(getSubnetLeaderboard).toHaveBeenCalledWith({ period: "1d" });
 		expect(result).toHaveLength(1);
@@ -81,7 +81,7 @@ describe("pickBestSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await pickBestSubnets(sn45);
+		const result = await getBestSubnets(sn45);
 
 		expect(result).toEqual([]);
 	});
@@ -118,7 +118,7 @@ describe("pickBestSubnets filtering and ranking", () => {
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await pickBestSubnets(sn45, config);
+		const result = await getBestSubnets(sn45, config);
 
 		expect(result.map((s) => s.netuid)).not.toContain(1);
 		expect(result.map((s) => s.netuid).sort((a, b) => a - b)).toEqual([
@@ -134,7 +134,7 @@ describe("pickBestSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await pickBestSubnets(sn45, {
+		const result = await getBestSubnets(sn45, {
 			bottomPercentileCutoff: 0,
 		});
 
@@ -154,12 +154,11 @@ describe("pickBestSubnets filtering and ranking", () => {
 			minVolumeTao: 0,
 			minMcapTao: 0,
 			minHolders: 0,
-			minEmissionPct: 0,
 			bottomPercentileCutoff: 0,
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await pickBestSubnets(sn45, config);
+		const result = await getBestSubnets(sn45, config);
 
 		expect(result).toHaveLength(2);
 		expect(result.map((s) => s.netuid)).toEqual([23, 21]);
@@ -173,12 +172,12 @@ describe("pickBestSubnets filtering and ranking", () => {
 			makeEntry({ netuid: 3, mcap: "1" }),
 			makeEntry({ netuid: 4, totalHolders: 1 }),
 			makeEntry({ netuid: 5, buyCount: 10, sellCount: 21 }),
-			makeEntry({ netuid: 6, emissionPct: 0.1 }),
+			makeEntry({ netuid: 6, emissionPct: null }),
 		];
 		const logger = { verbose: vi.fn() };
 		const { sn45 } = makeSn45(entries);
 
-		await pickBestSubnets(sn45, undefined, undefined, logger);
+		await getBestSubnets(sn45, undefined, undefined, logger);
 
 		const calls = logger.verbose.mock.calls.map(
 			(c: unknown[]) => c[0] as string,
@@ -208,7 +207,7 @@ describe("pickBestSubnets filtering and ranking", () => {
 		const { sn45 } = makeSn45(entries);
 		const names = new Map([[7, "Apex"]]);
 
-		const result = await pickBestSubnets(
+		const result = await getBestSubnets(
 			sn45,
 			{ bottomPercentileCutoff: 0 },
 			undefined,

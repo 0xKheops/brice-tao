@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { parseTao, TAO } from "../rebalance/tao.ts";
+import type { BatchResult, RebalancePlan } from "../rebalance/types.ts";
 import {
 	sendErrorNotification,
 	sendNoRebalanceNotification,
 	sendRebalanceNotification,
 } from "./discord.ts";
 import type { Balances } from "./getBalances.ts";
-import { parseTao, TAO } from "./rebalance/tao.ts";
-import type { BatchResult, RebalancePlan } from "./rebalance/types.ts";
 
 const webhookUrl = "https://discord.example/webhook";
 const originalFetch = globalThis.fetch;
