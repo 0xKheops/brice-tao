@@ -4,13 +4,20 @@ import {
 } from "@polkadot-api/descriptors";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "../src/api/generated/Sn45Api.ts";
+import { getBalances } from "../src/balances/getBalances.ts";
 import { loadConfig } from "../src/config/loadConfig.ts";
+import { TAO } from "../src/rebalance/tao.ts";
+import type { SubnetInfo } from "../src/subnets/fetchAllSubnets.ts";
 import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
-import { STRATEGY_DEFAULTS } from "../src/subnets/getBestSubnets.ts";
+import {
+	getBestSubnets,
+	STRATEGY_DEFAULTS,
+	type SubnetEvaluation,
+} from "../src/subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
 
 // ---------------------------------------------------------------------------
-// Config — sourced from YAML config and strategy defaults
+// Config
 // ---------------------------------------------------------------------------
 const appConfig = loadConfig(
 	new URL("../src/config.yaml", import.meta.url).pathname,
@@ -20,70 +27,22 @@ const GATES = {
 	...appConfig.strategy,
 };
 const INCUMBENCY_BONUS = appConfig.rebalance.incumbencyBonus;
+const MAX_SUBNETS = appConfig.rebalance.maxSubnets;
 
 const RAO = 1_000_000_000;
-
-// ---------------------------------------------------------------------------
-// SN45 leaderboard entry shape
-// ---------------------------------------------------------------------------
-interface LeaderboardEntry {
-	netuid: number;
-	priceChange: number | null;
-	mcap: string | null;
-	emaTaoFlow: string | null;
-	volume: string;
-	totalHolders: number;
-	buyCount: number;
-	sellCount: number;
-	emissionPct: number | null;
-	score: number;
-}
-
-// Row in the final report
-interface ReportRow {
-	rank: number;
-	netuid: number;
-	name: string;
-	score: number;
-	priceChange: number | null;
-	volumeTao: number;
-	mcapTao: number | null;
-	emaTaoFlow: number | null;
-	totalHolders: number;
-	buyCount: number;
-	sellCount: number;
-	sellBuyRatio: number | null;
-	emissionPct: number | null;
-	volMcapRatio: number | null;
-	taoInPool: number | null;
-	subnetVolume: number | null;
-	taoInEmission: number | null;
-	tempo: number | null;
-	blocksSinceLastStep: number | null;
-	isImmune: boolean | null;
-	isNextToPrune: boolean;
-	passesPriceGate: boolean;
-	passesHealthGate: boolean;
-	passesScoreGate: boolean;
-	passesVolumeGate: boolean;
-	passesMcapGate: boolean;
-	passesHoldersGate: boolean;
-	passesEmissionGate: boolean;
-	passesVolMcapGate: boolean;
-	passesAllGates: boolean;
-}
 
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
 const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
 const sn45ApiKey = process.env.SN45_API_KEY;
+const coldkey = process.env.COLDKEY_ADDRESS;
 
 if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
 if (!sn45ApiKey) throw new Error("SN45_API_KEY is not set");
 
 // ---------------------------------------------------------------------------
-// Metadata caching (same pattern as rebalance.ts)
+// Metadata caching
 // ---------------------------------------------------------------------------
 const CACHE_DIR = ".papi/cache";
 await Bun.write(Bun.file(`${CACHE_DIR}/.gitkeep`), "");
@@ -113,172 +72,102 @@ try {
 
 	console.log("Fetching on-chain subnet info and SN45 leaderboard…");
 
-	const [subnets, leaderboardRes] = await Promise.all([
-		fetchAllSubnets(api),
-		sn45.v1.getSubnetLeaderboard({ period: "1d" }),
-	]);
-
-	const healthyNetuids = getHealthySubnets(subnets);
+	// Fetch on-chain data
+	const subnets = await fetchAllSubnets(api);
+	const healthyNetuids = getHealthySubnets(
+		subnets,
+		BigInt(appConfig.health.minPoolTao) * TAO,
+	);
 	const subnetMap = new Map(subnets.map((s) => [s.netuid, s]));
 	const subnetNames = new Map(subnets.map((s) => [s.netuid, s.name]));
-
-	const leaderboard = leaderboardRes.data.subnets as LeaderboardEntry[];
-
-	// -----------------------------------------------------------------------
-	// Evaluate every gate for every subnet and compute vol/mcap percentile
-	// -----------------------------------------------------------------------
-	const evaluated = leaderboard.map((s) => {
-		const health = subnetMap.get(s.netuid);
-		const hasPriceData = s.netuid !== 0 && s.priceChange !== null;
-		const hasFullData =
-			hasPriceData && s.mcap !== null && s.emaTaoFlow !== null;
-		const isHealthy = healthyNetuids.has(s.netuid);
-		const isImmune = health?.isImmune ?? false;
-
-		const volumeTao = Number(s.volume) / RAO;
-		const mcapTao = s.mcap !== null ? Number(s.mcap) / RAO : null;
-		const sellBuyRatio =
-			s.buyCount > 0 ? s.sellCount / s.buyCount : s.sellCount > 0 ? null : 0;
-
-		return {
-			entry: s,
-			health,
-			volumeTao,
-			mcapTao,
-			emaTaoFlow: s.emaTaoFlow !== null ? Number(s.emaTaoFlow) / RAO : null,
-			sellBuyRatio,
-			volMcapRatio:
-				mcapTao !== null && mcapTao > 0 ? volumeTao / mcapTao : null,
-			passesPriceGate: hasPriceData,
-			passesDataGate: isImmune || (hasFullData && isHealthy),
-			passesHealthGate: isImmune || isHealthy,
-			passesScoreGate: s.score >= GATES.minScore,
-			passesVolumeGate: isImmune || volumeTao >= GATES.minVolumeTao,
-			passesMcapGate:
-				isImmune || (mcapTao !== null && mcapTao >= GATES.minMcapTao),
-			passesHoldersGate: isImmune || s.totalHolders >= GATES.minHolders,
-			passesEmissionGate:
-				isImmune ||
-				(s.emissionPct !== null && s.emissionPct >= GATES.minEmissionPct),
-		};
-	});
-
-	// Volume/mcap percentile gate (computed from the set that passed prior gates)
-	const priorPassers = evaluated.filter(
-		(e) =>
-			e.passesDataGate &&
-			e.passesScoreGate &&
-			e.passesVolumeGate &&
-			e.passesMcapGate &&
-			e.passesHoldersGate &&
-			e.passesEmissionGate,
+	const immuneNetuids = new Set(
+		subnets.filter((s) => s.isImmune).map((s) => s.netuid),
 	);
-	const ratios = priorPassers
-		.map((e) => e.volMcapRatio ?? 0)
-		.sort((a, b) => a - b);
-	const cutoffIdx = Math.floor(
-		(GATES.bottomPercentileCutoff / 100) * ratios.length,
-	);
-	const cutoffValue = ratios[cutoffIdx] ?? 0;
 
-	// -----------------------------------------------------------------------
-	// Build rows
-	// -----------------------------------------------------------------------
-	const rows: ReportRow[] = evaluated.map((e) => {
-		const isImmune = e.health?.isImmune ?? false;
-		const passesVolMcapGate =
-			isImmune || (e.volMcapRatio !== null && e.volMcapRatio >= cutoffValue);
-		const passesAllGates =
-			e.passesDataGate &&
-			e.passesScoreGate &&
-			e.passesVolumeGate &&
-			e.passesMcapGate &&
-			e.passesHoldersGate &&
-			e.passesEmissionGate &&
-			passesVolMcapGate;
-
-		return {
-			rank: 0,
-			netuid: e.entry.netuid,
-			name: subnetNames.get(e.entry.netuid) ?? `SN${e.entry.netuid}`,
-			score: e.entry.score,
-			priceChange: e.entry.priceChange,
-			volumeTao: e.volumeTao,
-			mcapTao: e.mcapTao,
-			emaTaoFlow: e.emaTaoFlow,
-			totalHolders: e.entry.totalHolders,
-			buyCount: e.entry.buyCount,
-			sellCount: e.entry.sellCount,
-			sellBuyRatio: e.sellBuyRatio,
-			emissionPct: e.entry.emissionPct,
-			volMcapRatio: e.volMcapRatio,
-			taoInPool: e.health ? Number(e.health.taoIn) / RAO : null,
-			subnetVolume: e.health ? Number(e.health.subnetVolume) / RAO : null,
-			taoInEmission: e.health ? Number(e.health.taoInEmission) / RAO : null,
-			tempo: e.health?.tempo ?? null,
-			blocksSinceLastStep: e.health
-				? Number(e.health.blocksSinceLastStep)
-				: null,
-			isImmune: e.health?.isImmune ?? null,
-			isNextToPrune: e.health?.isPruneTarget ?? false,
-			passesPriceGate: e.passesPriceGate,
-			passesHealthGate: e.passesHealthGate,
-			passesScoreGate: e.passesScoreGate,
-			passesVolumeGate: e.passesVolumeGate,
-			passesMcapGate: e.passesMcapGate,
-			passesHoldersGate: e.passesHoldersGate,
-			passesEmissionGate: e.passesEmissionGate,
-			passesVolMcapGate: passesVolMcapGate,
-			passesAllGates,
-		};
-	});
-
-	// Sort: passing subnets first (by score desc), then non-passing (by score desc)
-	rows.sort((a, b) => {
-		if (a.passesAllGates !== b.passesAllGates) return a.passesAllGates ? -1 : 1;
-		return b.score - a.score;
-	});
-
-	// Assign ranks only to passing subnets
-	let rank = 1;
-	for (const row of rows) {
-		if (row.passesAllGates) row.rank = rank++;
+	// Optionally fetch balances for incumbency section
+	let heldNetuids: Set<number> | undefined;
+	if (coldkey) {
+		const balances = await getBalances(api, coldkey);
+		heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
 	}
 
-	// -----------------------------------------------------------------------
-	// Format helpers
-	// -----------------------------------------------------------------------
-	const n = (v: number | null, decimals = 1) =>
-		v !== null
-			? v.toLocaleString("en-US", {
-					maximumFractionDigits: decimals,
-					minimumFractionDigits: decimals,
-				})
-			: "—";
+	// --- Eligible list: call getBestSubnets() (no incumbency bias) ---
+	const { winners, evaluations } = await getBestSubnets(
+		sn45,
+		appConfig.strategy,
+		healthyNetuids,
+		undefined,
+		subnetNames,
+		undefined,
+		immuneNetuids,
+		0,
+	);
 
-	const compact = (v: number | null) =>
-		v !== null
-			? v.toLocaleString("en-US", {
-					notation: "compact",
-					maximumSignificantDigits: 4,
-				})
-			: "—";
+	// --- Terminal output ---
+	const active = winners.slice(0, MAX_SUBNETS);
+	const activeSet = new Set(active.map((s) => s.netuid));
 
-	const pct = (v: number | null) => (v !== null ? `${v.toFixed(2)}%` : "—");
+	console.log(
+		`\nEligible subnets (${winners.length} qualifying, top ${MAX_SUBNETS} active):\n`,
+	);
+	console.log(
+		`${"".padStart(4)}${"#".padStart(3)}  ${"SN".padEnd(6)}  ${"Name".padEnd(20)}  ${"Score".padStart(5)}  ${"Price Δ".padStart(8)}  ${"Vol (τ)".padStart(10)}  ${"Mcap (τ)".padStart(10)}`,
+	);
+	console.log("─".repeat(76));
 
-	const gate = (passes: boolean, value: string) =>
-		`${passes ? "✅" : "❌"} ${value}`;
+	for (let i = 0; i < winners.length; i++) {
+		const w = winners[i]!;
+		const ev = evaluations.find((e) => e.netuid === w.netuid)!;
+		const icon = activeSet.has(w.netuid) ? "🟢" : "⚪";
+		const rank = i + 1;
+		const name = ev.name.length > 20 ? `${ev.name.slice(0, 19)}…` : ev.name;
+		const price =
+			ev.priceChange !== null
+				? `${ev.priceChange >= 0 ? "+" : ""}${ev.priceChange.toFixed(1)}%`
+				: "—";
+		const vol = ev.volumeTao.toLocaleString("en-US", {
+			maximumFractionDigits: 0,
+		});
+		const mcap =
+			ev.mcapTao !== null
+				? ev.mcapTao.toLocaleString("en-US", { maximumFractionDigits: 0 })
+				: "—";
+		console.log(
+			`${icon} ${String(rank).padStart(3)}  ${`SN${ev.netuid}`.padEnd(6)}  ${name.padEnd(20)}  ${String(Math.round(ev.score)).padStart(5)}  ${price.padStart(8)}  ${vol.padStart(10)}  ${mcap.padStart(10)}`,
+		);
+	}
 
-	const registration = (immune: boolean | null, pruneRisk: boolean) => {
-		if (pruneRisk) return "⚠️ prune risk";
-		if (immune === true) return "🛡️ immune";
-		if (immune === false) return "—";
-		return "—";
-	};
+	if (winners.length === 0) {
+		console.log("  (no subnets qualify)");
+	}
 
-	// -----------------------------------------------------------------------
-	// Build markdown
-	// -----------------------------------------------------------------------
+	// --- Incumbency section (if COLDKEY_ADDRESS is set) ---
+	if (heldNetuids && heldNetuids.size > 0) {
+		console.log(
+			`\nIncumbency bonus effect (+${INCUMBENCY_BONUS} pts for held subnets):`,
+		);
+		for (const netuid of heldNetuids) {
+			const ev = evaluations.find((e) => e.netuid === netuid);
+			if (!ev) continue;
+			const effective = ev.score + INCUMBENCY_BONUS;
+			const alreadyQualifies = ev.passesAllGates;
+			const wouldQualify = !alreadyQualifies && effective >= GATES.minScore;
+			const label = alreadyQualifies
+				? "already qualifies"
+				: wouldQualify
+					? `would qualify (${ev.score} + ${INCUMBENCY_BONUS} = ${effective})`
+					: `still excluded (${ev.score} + ${INCUMBENCY_BONUS} = ${effective})`;
+			console.log(
+				`  SN${String(netuid).padEnd(4)} ${ev.name.padEnd(20)} — ${label}`,
+			);
+		}
+	} else if (!coldkey) {
+		console.log(
+			"\nNote: Set COLDKEY_ADDRESS to see incumbency bonus effect on held subnets.",
+		);
+	}
+
+	// --- Build markdown audit table from evaluations + on-chain data ---
 	const now = new Date()
 		.toISOString()
 		.replace("T", " ")
@@ -295,13 +184,26 @@ try {
 	md += `| Min Holders | ${GATES.minHolders} |\n`;
 	md += `| Min Emission % | ${GATES.minEmissionPct}% |\n`;
 	md += `| Vol/Mcap Bottom Percentile Cutoff | ${GATES.bottomPercentileCutoff}% |\n`;
-	md += `| Min Pool Liquidity | ${GATES.minPoolTao} τ |\n`;
+	md += `| Min Pool Liquidity | ${appConfig.health.minPoolTao} τ |\n`;
 	md += `| Incumbency Bonus | +${INCUMBENCY_BONUS} pts |\n`;
+	md += `| Max Subnets | ${MAX_SUBNETS} |\n`;
 	md += `\n`;
 
-	md += `## All Subnets (${rows.filter((r) => r.passesAllGates).length} qualifying / ${rows.length} total)\n\n`;
+	// Build rows by merging evaluations with on-chain data
+	const qualifyingCount = evaluations.filter((e) => e.passesAllGates).length;
+	md += `## All Subnets (${qualifyingCount} qualifying / ${evaluations.length} total)\n\n`;
 
-	// Header
+	const sorted = [...evaluations].sort((a, b) => {
+		if (a.passesAllGates !== b.passesAllGates) return a.passesAllGates ? -1 : 1;
+		return b.score - a.score;
+	});
+
+	let rank = 1;
+	const rankedRows = sorted.map((ev) => ({
+		...ev,
+		rank: ev.passesAllGates ? rank++ : 0,
+	}));
+
 	const cols = [
 		"Rank",
 		"SN",
@@ -327,11 +229,13 @@ try {
 	md += `| ${cols.join(" | ")} |\n`;
 	md += `| ${cols.map(() => "---").join(" | ")} |\n`;
 
-	for (const r of rows) {
+	for (const r of rankedRows) {
+		const health = subnetMap.get(r.netuid);
 		const rankStr = r.rank > 0 ? `**${r.rank}**` : "—";
 		const nameStr = r.name.length > 18 ? `${r.name.slice(0, 18)}…` : r.name;
-
 		const allIcon = r.passesAllGates ? "✅" : "❌";
+		const sellBuyRatio =
+			r.buyCount > 0 ? r.sellCount / r.buyCount : r.sellCount > 0 ? null : 0;
 
 		const values = [
 			rankStr,
@@ -345,15 +249,18 @@ try {
 			gate(r.passesHoldersGate, n(r.totalHolders, 0)),
 			n(r.buyCount, 0),
 			n(r.sellCount, 0),
-			r.sellBuyRatio !== null ? n(r.sellBuyRatio, 2) : "∞",
+			sellBuyRatio !== null ? n(sellBuyRatio, 2) : "∞",
 			gate(r.passesEmissionGate, pct(r.emissionPct)),
 			gate(r.passesVolMcapGate, n(r.volMcapRatio, 4)),
-			registration(r.isImmune, r.isNextToPrune),
-			gate(r.passesHealthGate, compact(r.taoInPool)),
-			compact(r.subnetVolume),
-			n(r.taoInEmission, 0),
-			r.tempo !== null ? String(r.tempo) : "—",
-			r.blocksSinceLastStep !== null ? String(r.blocksSinceLastStep) : "—",
+			formatRegistration(health),
+			gate(
+				r.passesHealthGate,
+				compact(health ? Number(health.taoIn) / RAO : null),
+			),
+			compact(health ? Number(health.subnetVolume) / RAO : null),
+			n(health ? Number(health.taoInEmission) / RAO : null, 0),
+			health?.tempo !== undefined ? String(health.tempo) : "—",
+			health ? String(Number(health.blocksSinceLastStep)) : "—",
 		];
 		md += `| ${values.join(" | ")} |\n`;
 	}
@@ -363,43 +270,46 @@ try {
 	const outPath = `reports/subnet-report-${ts}.md`;
 	await Bun.write(outPath, md);
 
-	const qualified = rows.filter((r) => r.passesAllGates);
-	const maxSubnets = appConfig.rebalance.maxSubnets;
-	const eligible = qualified.slice(0, maxSubnets);
-
 	console.log(
-		`Report written to ${outPath} — ${qualified.length} qualifying / ${rows.length} total subnets\n`,
+		`\nReport written to ${outPath} — ${qualifyingCount} qualifying / ${evaluations.length} total subnets`,
 	);
-
-	console.log(`Rebalance-eligible subnets (top ${maxSubnets} by score):\n`);
-	console.log(
-		`${"#".padStart(3)}  ${"SN".padEnd(5)}  ${"Name".padEnd(20)}  ${"Score".padStart(5)}  ${"Price Δ".padStart(8)}  ${"Vol (τ)".padStart(10)}  ${"Mcap (τ)".padStart(10)}`,
-	);
-	console.log("─".repeat(72));
-	for (const r of eligible) {
-		const name = r.name.length > 20 ? `${r.name.slice(0, 19)}…` : r.name;
-		const price =
-			r.priceChange !== null
-				? `${r.priceChange >= 0 ? "+" : ""}${r.priceChange.toFixed(1)}%`
-				: "—";
-		const vol = r.volumeTao.toLocaleString("en-US", {
-			maximumFractionDigits: 0,
-		});
-		const mcap =
-			r.mcapTao !== null
-				? r.mcapTao.toLocaleString("en-US", { maximumFractionDigits: 0 })
-				: "—";
-		console.log(
-			`${String(r.rank).padStart(3)}  ${`SN${r.netuid}`.padEnd(5)}  ${name.padEnd(20)}  ${String(Math.round(r.score)).padStart(5)}  ${price.padStart(8)}  ${vol.padStart(10)}  ${mcap.padStart(10)}`,
-		);
-	}
-
-	if (qualified.length > maxSubnets) {
-		console.log(
-			`\n… ${qualified.length - maxSubnets} more qualifying subnets not included (maxSubnets = ${maxSubnets})`,
-		);
-	}
 } finally {
 	client.destroy();
 	process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Format helpers
+// ---------------------------------------------------------------------------
+function n(v: number | null, decimals = 1): string {
+	return v !== null
+		? v.toLocaleString("en-US", {
+				maximumFractionDigits: decimals,
+				minimumFractionDigits: decimals,
+			})
+		: "—";
+}
+
+function compact(v: number | null): string {
+	return v !== null
+		? v.toLocaleString("en-US", {
+				notation: "compact",
+				maximumSignificantDigits: 4,
+			})
+		: "—";
+}
+
+function pct(v: number | null): string {
+	return v !== null ? `${v.toFixed(2)}%` : "—";
+}
+
+function gate(passes: boolean, value: string): string {
+	return `${passes ? "✅" : "❌"} ${value}`;
+}
+
+function formatRegistration(health: SubnetInfo | undefined): string {
+	if (!health) return "—";
+	if (health.isPruneTarget) return "⚠️ prune risk";
+	if (health.isImmune) return "🛡️ immune";
+	return "—";
 }

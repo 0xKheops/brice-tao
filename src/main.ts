@@ -123,7 +123,7 @@ try {
 	const immuneNetuids = new Set(
 		allSubnets.filter((s) => s.isImmune).map((s) => s.netuid),
 	);
-	const profitable = await getBestSubnets(
+	const { winners: profitable } = await getBestSubnets(
 		sn45,
 		config.strategy,
 		healthyNetuids,

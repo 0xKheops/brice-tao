@@ -65,14 +65,14 @@ describe("getBestSubnets filtering and ranking", () => {
 		];
 		const { sn45, getSubnetLeaderboard } = makeSn45(entries);
 
-		const result = await getBestSubnets(sn45, undefined, new Set([10]));
+		const { winners } = await getBestSubnets(sn45, undefined, new Set([10]));
 
 		expect(getSubnetLeaderboard).toHaveBeenCalledWith({ period: "1d" });
-		expect(result).toHaveLength(1);
-		expect(result[0]).toMatchObject({ netuid: 10, score: 90 });
+		expect(winners).toHaveLength(1);
+		expect(winners[0]).toMatchObject({ netuid: 10, score: 90 });
 	});
 
-	it("returns empty list when no subnet survives required data and quality gates", async () => {
+	it("returns empty winners when no subnet survives required data and quality gates", async () => {
 		const entries = [
 			makeEntry({ netuid: 1, priceChange: null }),
 			makeEntry({ netuid: 2, mcap: null }),
@@ -81,9 +81,9 @@ describe("getBestSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getBestSubnets(sn45);
+		const { winners } = await getBestSubnets(sn45);
 
-		expect(result).toEqual([]);
+		expect(winners).toEqual([]);
 	});
 
 	it("drops the bottom percentile by volume to market-cap ratio before ranking", async () => {
@@ -118,10 +118,10 @@ describe("getBestSubnets filtering and ranking", () => {
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getBestSubnets(sn45, config);
+		const { winners } = await getBestSubnets(sn45, config);
 
-		expect(result.map((s) => s.netuid)).not.toContain(1);
-		expect(result.map((s) => s.netuid).sort((a, b) => a - b)).toEqual([
+		expect(winners.map((s) => s.netuid)).not.toContain(1);
+		expect(winners.map((s) => s.netuid).sort((a, b) => a - b)).toEqual([
 			2, 3, 4,
 		]);
 	});
@@ -134,13 +134,13 @@ describe("getBestSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getBestSubnets(sn45, {
+		const { winners } = await getBestSubnets(sn45, {
 			bottomPercentileCutoff: 0,
 		});
 
-		expect(result.map((s) => s.netuid)).toEqual([12, 13, 11]);
-		expect(result[0]?.score).toBeGreaterThan(result[1]?.score ?? 0);
-		expect(result[1]?.score).toBeGreaterThan(result[2]?.score ?? 0);
+		expect(winners.map((s) => s.netuid)).toEqual([12, 13, 11]);
+		expect(winners[0]?.score).toBeGreaterThan(winners[1]?.score ?? 0);
+		expect(winners[1]?.score).toBeGreaterThan(winners[2]?.score ?? 0);
 	});
 
 	it("excludes subnets below minScore threshold", async () => {
@@ -158,11 +158,11 @@ describe("getBestSubnets filtering and ranking", () => {
 		};
 		const { sn45 } = makeSn45(entries);
 
-		const result = await getBestSubnets(sn45, config);
+		const { winners } = await getBestSubnets(sn45, config);
 
-		expect(result).toHaveLength(2);
-		expect(result.map((s) => s.netuid)).toEqual([23, 21]);
-		expect(result.find((s) => s.netuid === 22)).toBeUndefined();
+		expect(winners).toHaveLength(2);
+		expect(winners.map((s) => s.netuid)).toEqual([23, 21]);
+		expect(winners.find((s) => s.netuid === 22)).toBeUndefined();
 	});
 
 	it("logs exclusion reasons for each quality gate", async () => {
@@ -199,7 +199,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		const { sn45 } = makeSn45(entries);
 		const names = new Map([[7, "Apex"]]);
 
-		const result = await getBestSubnets(
+		const { winners } = await getBestSubnets(
 			sn45,
 			{ bottomPercentileCutoff: 0 },
 			undefined,
@@ -207,7 +207,7 @@ describe("getBestSubnets filtering and ranking", () => {
 			names,
 		);
 
-		expect(result[0]).toMatchObject({ netuid: 7, name: "Apex", score: 85 });
+		expect(winners[0]).toMatchObject({ netuid: 7, name: "Apex", score: 85 });
 	});
 
 	it("immune subnets bypass all quality gates except score", async () => {
@@ -240,7 +240,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		const { sn45 } = makeSn45(entries);
 		const immuneNetuids = new Set([50, 52]);
 
-		const result = await getBestSubnets(
+		const { winners } = await getBestSubnets(
 			sn45,
 			{ bottomPercentileCutoff: 0 },
 			undefined,
@@ -251,10 +251,76 @@ describe("getBestSubnets filtering and ranking", () => {
 		);
 
 		// SN50 passes (immune, score above default minScore)
-		expect(result.map((s) => s.netuid)).toContain(50);
+		expect(winners.map((s) => s.netuid)).toContain(50);
 		// SN51 fails (not immune, all gates fail)
-		expect(result.map((s) => s.netuid)).not.toContain(51);
+		expect(winners.map((s) => s.netuid)).not.toContain(51);
 		// SN52 fails (immune but score too low)
-		expect(result.map((s) => s.netuid)).not.toContain(52);
+		expect(winners.map((s) => s.netuid)).not.toContain(52);
+	});
+});
+
+describe("getBestSubnets evaluations", () => {
+	it("returns evaluations for all leaderboard entries including non-qualifying ones", async () => {
+		const entries = [
+			makeEntry({ netuid: 0 }),
+			makeEntry({ netuid: 1, priceChange: null }),
+			makeEntry({ netuid: 2, score: 90 }),
+		];
+		const { sn45 } = makeSn45(entries);
+
+		const { evaluations } = await getBestSubnets(sn45);
+
+		expect(evaluations).toHaveLength(3);
+		expect(evaluations.map((e) => e.netuid).sort()).toEqual([0, 1, 2]);
+	});
+
+	it("sets correct gate pass/fail values for each subnet", async () => {
+		const entries = [
+			makeEntry({ netuid: 1, score: 90 }),
+			makeEntry({ netuid: 2, priceChange: null, score: 90 }),
+			makeEntry({ netuid: 3, totalHolders: 10, score: 90 }),
+		];
+		const { sn45 } = makeSn45(entries);
+		const config: StrategyConfig = {
+			bottomPercentileCutoff: 0,
+			minHolders: 500,
+		};
+
+		const { evaluations } = await getBestSubnets(sn45, config);
+
+		const sn1 = evaluations.find((e) => e.netuid === 1)!;
+		expect(sn1.passesAllGates).toBe(true);
+		expect(sn1.passesPriceGate).toBe(true);
+		expect(sn1.passesScoreGate).toBe(true);
+
+		const sn2 = evaluations.find((e) => e.netuid === 2)!;
+		expect(sn2.passesPriceGate).toBe(false);
+		expect(sn2.passesAllGates).toBe(false);
+
+		const sn3 = evaluations.find((e) => e.netuid === 3)!;
+		expect(sn3.passesHoldersGate).toBe(false);
+		expect(sn3.passesAllGates).toBe(false);
+	});
+
+	it("applies incumbency bias to biasedScore but not raw score", async () => {
+		const entries = [makeEntry({ netuid: 1, score: 65 })];
+		const { sn45 } = makeSn45(entries);
+		const heldNetuids = new Set([1]);
+
+		const { evaluations } = await getBestSubnets(
+			sn45,
+			{ bottomPercentileCutoff: 0 },
+			undefined,
+			undefined,
+			undefined,
+			heldNetuids,
+			undefined,
+			5,
+		);
+
+		const sn1 = evaluations.find((e) => e.netuid === 1)!;
+		expect(sn1.score).toBe(65);
+		expect(sn1.biasedScore).toBe(70);
+		expect(sn1.passesScoreGate).toBe(true);
 	});
 });

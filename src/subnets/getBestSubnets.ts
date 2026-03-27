@@ -49,6 +49,37 @@ export interface SubnetScore {
 	score: number;
 }
 
+/** Per-subnet gate evaluation with metrics and pass/fail for each gate. */
+export interface SubnetEvaluation {
+	netuid: number;
+	name: string;
+	score: number;
+	biasedScore: number;
+	priceChange: number | null;
+	volumeTao: number;
+	mcapTao: number | null;
+	emaTaoFlow: number | null;
+	totalHolders: number;
+	buyCount: number;
+	sellCount: number;
+	emissionPct: number | null;
+	volMcapRatio: number | null;
+	passesPriceGate: boolean;
+	passesHealthGate: boolean;
+	passesScoreGate: boolean;
+	passesVolumeGate: boolean;
+	passesMcapGate: boolean;
+	passesHoldersGate: boolean;
+	passesEmissionGate: boolean;
+	passesVolMcapGate: boolean;
+	passesAllGates: boolean;
+}
+
+export interface GetBestSubnetsResult {
+	winners: SubnetScore[];
+	evaluations: SubnetEvaluation[];
+}
+
 interface Logger {
 	verbose: (msg: string) => void;
 }
@@ -62,7 +93,7 @@ export async function getBestSubnets(
 	heldNetuids?: Set<number>,
 	immuneNetuids?: Set<number>,
 	incumbencyBonus?: number,
-): Promise<SubnetScore[]> {
+): Promise<GetBestSubnetsResult> {
 	const cfg = {
 		minScore: config?.minScore ?? STRATEGY_DEFAULTS.minScore,
 		minVolumeTao: config?.minVolumeTao ?? STRATEGY_DEFAULTS.minVolumeTao,
@@ -74,138 +105,161 @@ export async function getBestSubnets(
 			STRATEGY_DEFAULTS.bottomPercentileCutoff,
 	};
 
+	const getName = (netuid: number) => subnetNames?.get(netuid) ?? `SN${netuid}`;
 	const label = (netuid: number) =>
 		subnetNames?.get(netuid)
 			? `SN${netuid} (${subnetNames.get(netuid)})`
 			: `SN${netuid}`;
 
+	const bias = incumbencyBonus ?? 3;
+
 	const res = await sn45.v1.getSubnetLeaderboard({ period: "1d" });
 	const leaderboard = res.data.subnets as LeaderboardEntry[];
 
-	// Exclude SN0 (root), subnets missing essential data, and non-active subnets
-	const complete = leaderboard.filter(
-		(
-			s,
-		): s is LeaderboardEntry & {
-			priceChange: number;
-			mcap: string;
-			emaTaoFlow: string;
-		} =>
-			s.netuid !== 0 &&
-			s.priceChange !== null &&
-			s.mcap !== null &&
-			s.emaTaoFlow !== null &&
-			(activeNetuids === undefined || activeNetuids.has(s.netuid)),
+	// --- Phase 1: evaluate per-gate results for every subnet ---
+	const evaluations: SubnetEvaluation[] = leaderboard.map((s) => {
+		const isImmune = immuneNetuids?.has(s.netuid) ?? false;
+		const hasCompleteData =
+			s.priceChange !== null && s.mcap !== null && s.emaTaoFlow !== null;
+		const isHealthy =
+			activeNetuids === undefined || activeNetuids.has(s.netuid);
+		const biasedScore = heldNetuids?.has(s.netuid) ? s.score + bias : s.score;
+
+		const volumeTao = Number(s.volume) / RAO;
+		const mcapTao = s.mcap !== null ? Number(s.mcap) / RAO : null;
+		const emaTaoFlow =
+			s.emaTaoFlow !== null ? Number(s.emaTaoFlow) / RAO : null;
+
+		const passesPriceGate = s.netuid !== 0 && s.priceChange !== null;
+		const passesHealthGate = isImmune || isHealthy;
+		const passesScoreGate = biasedScore >= cfg.minScore;
+		const passesVolumeGate = isImmune || volumeTao >= cfg.minVolumeTao;
+		const passesMcapGate =
+			isImmune || (mcapTao !== null && mcapTao >= cfg.minMcapTao);
+		const passesHoldersGate = isImmune || s.totalHolders >= cfg.minHolders;
+		const passesEmissionGate =
+			isImmune ||
+			(s.emissionPct !== null && s.emissionPct >= cfg.minEmissionPct);
+
+		return {
+			netuid: s.netuid,
+			name: getName(s.netuid),
+			score: s.score,
+			biasedScore,
+			priceChange: s.priceChange,
+			volumeTao,
+			mcapTao,
+			emaTaoFlow,
+			totalHolders: s.totalHolders,
+			buyCount: s.buyCount,
+			sellCount: s.sellCount,
+			emissionPct: s.emissionPct,
+			volMcapRatio: null,
+			passesPriceGate,
+			passesHealthGate,
+			passesScoreGate,
+			passesVolumeGate,
+			passesMcapGate,
+			passesHoldersGate,
+			passesEmissionGate,
+			passesVolMcapGate: false,
+			passesAllGates: false,
+		};
+	});
+
+	// --- Phase 2: vol/mcap percentile cutoff (from subnets passing all prior gates) ---
+	const priorPassers = evaluations.filter(
+		(e) =>
+			e.passesPriceGate &&
+			e.passesHealthGate &&
+			e.mcapTao !== null &&
+			e.emaTaoFlow !== null &&
+			e.passesScoreGate &&
+			e.passesVolumeGate &&
+			e.passesMcapGate &&
+			e.passesHoldersGate &&
+			e.passesEmissionGate,
 	);
 
-	// Incumbency bias — boost held subnets' scores before any filtering/sorting.
-	// This gives held subnets a lower effective entry threshold and higher ranking,
-	// preventing churn when scores are close together.
-	const bias = incumbencyBonus ?? 3;
-	const biased = heldNetuids?.size
-		? complete.map((s) =>
-				heldNetuids.has(s.netuid) ? { ...s, score: s.score + bias } : s,
-			)
-		: complete;
-
-	// Score gate — applied after bias so held subnets effectively need minScore − incumbencyBonus
-	const aboveScore = biased.filter((s) => {
-		if (s.score < cfg.minScore) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: score ${s.score}${heldNetuids?.has(s.netuid) ? ` (includes +${bias} bias)` : ""} < ${cfg.minScore}`,
-			);
-			return false;
-		}
-		return true;
-	});
-
-	// Absolute volume floor
-	const minVolumeRao = cfg.minVolumeTao * RAO;
-	const aboveFloor = aboveScore.filter((s) => {
-		if (immuneNetuids?.has(s.netuid)) return true;
-		if (Number(s.volume) < minVolumeRao) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: volume ${(Number(s.volume) / RAO).toFixed(0)} τ < ${cfg.minVolumeTao} τ`,
-			);
-			return false;
-		}
-		return true;
-	});
-
-	// Minimum mcap floor — reject micro-cap subnets susceptible to noise
-	const minMcapRao = cfg.minMcapTao * RAO;
-	const aboveMcap = aboveFloor.filter((s) => {
-		if (immuneNetuids?.has(s.netuid)) return true;
-		if (Number(s.mcap) < minMcapRao) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: mcap ${(Number(s.mcap) / RAO).toFixed(0)} τ < ${cfg.minMcapTao} τ`,
-			);
-			return false;
-		}
-		return true;
-	});
-
-	// Minimum holder count — reject concentrated/fragile subnets
-	const enoughHolders = aboveMcap.filter((s) => {
-		if (immuneNetuids?.has(s.netuid)) return true;
-		if (s.totalHolders < cfg.minHolders) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: ${s.totalHolders} holders < ${cfg.minHolders}`,
-			);
-			return false;
-		}
-		return true;
-	});
-
-	// Minimum emission % — reject subnets not valued by root validators
-	const enoughEmission = enoughHolders.filter((s) => {
-		if (immuneNetuids?.has(s.netuid)) return true;
-		if (s.emissionPct === null || s.emissionPct < cfg.minEmissionPct) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: emission ${s.emissionPct ?? 0}% < ${cfg.minEmissionPct}%`,
-			);
-			return false;
-		}
-		return true;
-	});
-
-	// Compute volume/mcap ratio for bottom-percentile dropout
-	const withRatio = enoughEmission.map((s) => ({
-		...s,
-		volumeMcapRatio: Number(s.volume) / Number(s.mcap),
-	}));
-
-	if (withRatio.length === 0) return [];
-
-	// Drop bottom percentile by volume/mcap ratio
-	const ratios = withRatio.map((s) => s.volumeMcapRatio).sort((a, b) => a - b);
+	const ratioValues = priorPassers
+		.map((e) =>
+			e.mcapTao !== null && e.mcapTao > 0 ? e.volumeTao / e.mcapTao : 0,
+		)
+		.sort((a, b) => a - b);
 	const cutoffIdx = Math.floor(
-		(cfg.bottomPercentileCutoff / 100) * ratios.length,
+		(cfg.bottomPercentileCutoff / 100) * ratioValues.length,
 	);
-	const cutoffValue = ratios[cutoffIdx] ?? 0;
-	const filtered = withRatio.filter((s) => {
-		if (immuneNetuids?.has(s.netuid)) return true;
-		if (s.volumeMcapRatio < cutoffValue) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: vol/mcap ratio ${s.volumeMcapRatio.toFixed(4)} in bottom ${cfg.bottomPercentileCutoff}%`,
-			);
-			return false;
-		}
-		return true;
-	});
+	const cutoffValue = ratioValues[cutoffIdx] ?? 0;
 
-	// Sort by SN45 leaderboard score descending
-	filtered.sort((a, b) => b.score - a.score);
-
-	for (const s of filtered) {
-		const id = `SN${s.netuid}`.padEnd(5);
-		const name = (subnetNames?.get(s.netuid) ?? "unknown").padEnd(20);
-		logger?.verbose(`${id} - ${name} : ${s.score}`);
+	for (const e of evaluations) {
+		const isImmune = immuneNetuids?.has(e.netuid) ?? false;
+		const ratio =
+			e.mcapTao !== null && e.mcapTao > 0 ? e.volumeTao / e.mcapTao : null;
+		e.volMcapRatio = ratio;
+		e.passesVolMcapGate = isImmune || (ratio !== null && ratio >= cutoffValue);
+		e.passesAllGates =
+			e.passesPriceGate &&
+			e.passesHealthGate &&
+			e.mcapTao !== null &&
+			e.emaTaoFlow !== null &&
+			e.passesScoreGate &&
+			e.passesVolumeGate &&
+			e.passesMcapGate &&
+			e.passesHoldersGate &&
+			e.passesEmissionGate &&
+			e.passesVolMcapGate;
 	}
 
-	return filtered.map((s) => ({
-		netuid: s.netuid,
-		name: subnetNames?.get(s.netuid) ?? `SN${s.netuid}`,
-		score: s.score,
-	}));
+	// --- Phase 3: build winners & log ---
+	const winners = evaluations
+		.filter((e) => e.passesAllGates)
+		.sort((a, b) => b.biasedScore - a.biasedScore);
+
+	for (const e of evaluations) {
+		if (e.passesAllGates) continue;
+		if (e.netuid === 0 || !e.passesPriceGate) continue;
+		if (!e.passesHealthGate || e.mcapTao === null || e.emaTaoFlow === null)
+			continue;
+
+		if (!e.passesScoreGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: score ${e.biasedScore}${heldNetuids?.has(e.netuid) ? ` (includes +${bias} bias)` : ""} < ${cfg.minScore}`,
+			);
+		} else if (!e.passesVolumeGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: volume ${e.volumeTao.toFixed(0)} τ < ${cfg.minVolumeTao} τ`,
+			);
+		} else if (!e.passesMcapGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: mcap ${(e.mcapTao ?? 0).toFixed(0)} τ < ${cfg.minMcapTao} τ`,
+			);
+		} else if (!e.passesHoldersGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: ${e.totalHolders} holders < ${cfg.minHolders}`,
+			);
+		} else if (!e.passesEmissionGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: emission ${e.emissionPct ?? 0}% < ${cfg.minEmissionPct}%`,
+			);
+		} else if (!e.passesVolMcapGate) {
+			logger?.verbose(
+				`${label(e.netuid)} excluded: vol/mcap ratio ${(e.volMcapRatio ?? 0).toFixed(4)} in bottom ${cfg.bottomPercentileCutoff}%`,
+			);
+		}
+	}
+
+	for (const e of winners) {
+		const id = `SN${e.netuid}`.padEnd(5);
+		const name = e.name.padEnd(20);
+		logger?.verbose(`${id} - ${name} : ${e.biasedScore}`);
+	}
+
+	return {
+		winners: winners.map((e) => ({
+			netuid: e.netuid,
+			name: e.name,
+			score: e.biasedScore,
+		})),
+		evaluations,
+	};
 }
