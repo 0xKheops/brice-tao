@@ -13,7 +13,7 @@ COPY src/ ./src/
 RUN bun build --compile --minify --sourcemap \
     --compile-exec-argv="--smol" \
     --target=bun-linux-arm64-musl \
-    src/rebalance.ts --outfile rebalance
+    src/main.ts --outfile rebalance
 
 # --- Runtime stage: minimal image with just the binary ---
 FROM alpine:3

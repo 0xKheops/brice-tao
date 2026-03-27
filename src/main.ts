@@ -11,20 +11,20 @@ import {
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "./api/generated/Sn45Api.ts";
+import type { Balances } from "./balances/getBalances.ts";
+import { getBalances } from "./balances/getBalances.ts";
+import {
+	sendErrorNotification,
+	sendRebalanceNotification,
+} from "./notifications/discord.ts";
 import { computeRebalance } from "./rebalance/computeRebalance.ts";
 import { executeRebalance } from "./rebalance/executeRebalance.ts";
 import { initLog, log } from "./rebalance/logger.ts";
 import { simulateAllOperations } from "./rebalance/simulateSlippage.ts";
 import { TAO } from "./rebalance/tao.ts";
-import { fetchAllSubnets } from "./strategy/fetchAllSubnets.ts";
-import { getBestSubnets } from "./strategy/getBestSubnets.ts";
-import { getHealthySubnets } from "./strategy/getHealthySubnets.ts";
-import {
-	sendErrorNotification,
-	sendRebalanceNotification,
-} from "./utils/discord.ts";
-import type { Balances } from "./utils/getBalances.ts";
-import { getBalances } from "./utils/getBalances.ts";
+import { fetchAllSubnets } from "./subnets/fetchAllSubnets.ts";
+import { getBestSubnets } from "./subnets/getBestSubnets.ts";
+import { getHealthySubnets } from "./subnets/getHealthySubnets.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");

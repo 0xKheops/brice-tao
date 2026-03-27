@@ -1,6 +1,6 @@
 {
 	"name": "brice-tao",
-	"module": "src/rebalance.ts",
+	"module": "src/main.ts",
 	"type": "module",
 	"private": true,
 	"scripts": {
@@ -15,7 +15,7 @@
 		"generate-clients:tda": "bunx swagger-typescript-api generate -p https://tda.talisman.xyz/openapi.json -o ./src/api/generated -n TaoDataApi --api-class-name TaoDataApi",
 		"generate-clients": "bun generate-clients:sn45 && bun generate-clients:tda",
 		"subnet-report": "bun run scripts/generate-subnet-report.ts",
-		"rebalance": "bun run src/rebalance.ts"
+		"rebalance": "bun run src/main.ts"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched"

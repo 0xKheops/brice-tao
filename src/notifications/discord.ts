@@ -1,3 +1,4 @@
+import type { Balances } from "../balances/getBalances.ts";
 import { parseTao, TAO } from "../rebalance/tao.ts";
 import type {
 	BatchResult,
@@ -5,7 +6,6 @@ import type {
 	RebalanceOperation,
 	RebalancePlan,
 } from "../rebalance/types.ts";
-import type { Balances } from "./getBalances.ts";
 
 const LOW_PROXY_THRESHOLD = parseTao(0.05);
 

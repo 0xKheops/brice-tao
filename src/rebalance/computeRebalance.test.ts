@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import type { SubnetScore } from "../strategy/getBestSubnets.ts";
-import type { Balances, StakeEntry } from "../utils/getBalances.ts";
+import type { Balances, StakeEntry } from "../balances/getBalances.ts";
+import type { SubnetScore } from "../subnets/getBestSubnets.ts";
 import { computeRebalance } from "./computeRebalance.ts";
 import {
 	FREE_RESERVE_TAO,
