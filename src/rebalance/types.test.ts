@@ -48,13 +48,17 @@ describe("rebalance type contracts (runtime-safe assertions)", () => {
 	});
 
 	it("supports timeout and settled batch result variants", () => {
-		const timeout: BatchResult = { status: "timeout" };
+		const timeout: BatchResult = {
+			status: "timeout",
+			innerTxHash: "0xdef",
+		};
 		const partialFailure: BatchResult = {
 			status: "partial_failure",
 			blockNumber: 10,
 			operationResults: [{ index: 0, success: false, error: "boom" }],
 			wrapperFee: 1n,
 			innerBatchFee: 2n,
+			innerTxHash: "0xabc",
 		};
 
 		expect(timeout.status).toBe("timeout");

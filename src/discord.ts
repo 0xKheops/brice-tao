@@ -56,15 +56,23 @@ function getOperationResult(
 	return batchResult.operationResults[index] ?? null;
 }
 
-function buildPositionsTable(balances: Balances): string {
-	if (balances.stakes.length === 0) return "*No positions*";
+function buildBalancesTable(balances: Balances): string {
+	const lines: string[] = [];
 
-	const lines = balances.stakes
-		.sort((a, b) => Number(b.taoValue - a.taoValue))
-		.map(
-			(s) =>
-				`SN${s.netuid.toString().padStart(3)} │ ${formatTao(s.taoValue)} τ`,
+	if (balances.free > 0n) {
+		lines.push(`${"TAO".padEnd(5)} │ ${formatTao(balances.free)} τ`);
+	}
+
+	const sortedStakes = balances.stakes.sort((a, b) =>
+		Number(b.taoValue - a.taoValue),
+	);
+	for (const s of sortedStakes) {
+		lines.push(
+			`SN${s.netuid.toString().padStart(3)} │ ${formatTao(s.taoValue)} τ`,
 		);
+	}
+
+	if (lines.length === 0) return "*No balances*";
 	return `\`\`\`\n${lines.join("\n")}\n\`\`\``;
 }
 
@@ -141,13 +149,25 @@ function feesField(
 	};
 }
 
+function txLinkField(
+	result: BatchResult | null,
+): { name: string; value: string; inline: boolean } | null {
+	if (!result) return null;
+	return {
+		name: "🔗 Transaction",
+		value: `[View on Taostats](https://taostats.io/transaction/${result.innerTxHash})`,
+		inline: false,
+	};
+}
+
 export async function sendRebalanceNotification(
 	webhookUrl: string,
 	opts: {
 		plan: RebalancePlan;
 		balancesBefore: Balances;
 		balancesAfter: Balances;
-		proxyFreeBalance: bigint;
+		proxyFreeBalanceBefore: bigint;
+		proxyFreeBalanceAfter: bigint;
 		batchResult: BatchResult | null;
 		durationMs: number;
 	},
@@ -156,7 +176,8 @@ export async function sendRebalanceNotification(
 		plan,
 		balancesBefore,
 		balancesAfter,
-		proxyFreeBalance,
+		proxyFreeBalanceBefore,
+		proxyFreeBalanceAfter,
 		batchResult,
 		durationMs,
 	} = opts;
@@ -184,11 +205,19 @@ export async function sendRebalanceNotification(
 					.join("\n")
 			: "Portfolio is balanced — no operations needed.";
 
-	const valueBefore = formatTao(balancesBefore.totalTaoValue);
-	const valueAfter = formatTao(balancesAfter.totalTaoValue);
+	const valueBefore = formatTao(
+		balancesBefore.totalTaoValue + proxyFreeBalanceBefore,
+	);
+	const valueAfter = formatTao(
+		balancesAfter.totalTaoValue + proxyFreeBalanceAfter,
+	);
 
 	const batchField = batchResultField(batchResult, plan.operations.length);
 	const feeField = feesField(batchResult);
+	const txLink = txLinkField(batchResult);
+
+	const balancesCount =
+		balancesAfter.stakes.length + (balancesAfter.free > 0n ? 1 : 0);
 
 	const embeds = [
 		{
@@ -200,8 +229,9 @@ export async function sendRebalanceNotification(
 					value: `${valueBefore} τ → ${valueAfter} τ`,
 					inline: false,
 				},
-				proxyBalanceField(proxyFreeBalance),
+				proxyBalanceField(proxyFreeBalanceAfter),
 				...(batchField ? [batchField] : []),
+				...(txLink ? [txLink] : []),
 				...(feeField ? [feeField] : []),
 				{
 					name: `📋 Operations (${plan.operations.length})`,
@@ -209,8 +239,8 @@ export async function sendRebalanceNotification(
 					inline: false,
 				},
 				{
-					name: `📊 Positions (${balancesAfter.stakes.length})`,
-					value: buildPositionsTable(balancesAfter),
+					name: `📊 Balances (${balancesCount})`,
+					value: buildBalancesTable(balancesAfter),
 					inline: false,
 				},
 			],
@@ -228,6 +258,8 @@ export async function sendNoRebalanceNotification(
 	proxyFreeBalance: bigint,
 	durationMs: number,
 ): Promise<void> {
+	const balancesCount = balances.stakes.length + (balances.free > 0n ? 1 : 0);
+
 	const embeds = [
 		{
 			title: "⚖️ Portfolio Balanced",
@@ -236,13 +268,13 @@ export async function sendNoRebalanceNotification(
 			fields: [
 				{
 					name: "💰 Portfolio Value",
-					value: `${formatTao(balances.totalTaoValue)} τ`,
+					value: `${formatTao(balances.totalTaoValue + proxyFreeBalance)} τ`,
 					inline: false,
 				},
 				proxyBalanceField(proxyFreeBalance),
 				{
-					name: `📊 Positions (${balances.stakes.length})`,
-					value: buildPositionsTable(balances),
+					name: `📊 Balances (${balancesCount})`,
+					value: buildBalancesTable(balances),
 					inline: false,
 				},
 			],

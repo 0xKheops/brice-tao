@@ -1,3 +1,4 @@
+import { blake2AsHex } from "@polkadot/util-crypto";
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { PolkadotClient, TypedApi } from "polkadot-api";
 import { timeout as rxTimeout } from "rxjs/operators";
@@ -21,7 +22,10 @@ export async function waitForInnerBatch(
 	wrapperFee: bigint,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<BatchResult> {
-	log.verbose("Watching finalized blocks for inner batch transaction...");
+	const innerTxHash = blake2AsHex(innerSignedBytes, 256);
+	log.verbose(
+		`Watching finalized blocks for inner batch transaction (${innerTxHash})...`,
+	);
 
 	try {
 		const found = await findTxInFinalizedBlocks(
@@ -54,6 +58,7 @@ export async function waitForInnerBatch(
 				operationResults,
 				wrapperFee,
 				innerBatchFee,
+				innerTxHash,
 			};
 		}
 
@@ -71,13 +76,14 @@ export async function waitForInnerBatch(
 			operationResults,
 			wrapperFee,
 			innerBatchFee,
+			innerTxHash,
 		};
 	} catch (err) {
 		if (err instanceof TxSearchTimeoutError) {
 			log.warn(
 				`Timed out waiting for inner batch execution after ${timeoutMs / 1000}s`,
 			);
-			return { status: "timeout", wrapperFee };
+			return { status: "timeout", wrapperFee, innerTxHash };
 		}
 		throw err;
 	}

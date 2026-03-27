@@ -80,6 +80,8 @@ export type BatchResult =
 			wrapperFee: bigint;
 			/** Fee paid for the inner batch tx (RAO) */
 			innerBatchFee: bigint;
+			/** Blake2-256 hash of the inner batch extrinsic */
+			innerTxHash: string;
 	  }
 	| {
 			status: "partial_failure";
@@ -89,9 +91,13 @@ export type BatchResult =
 			wrapperFee: bigint;
 			/** Fee paid for the inner batch tx (RAO) */
 			innerBatchFee: bigint;
+			/** Blake2-256 hash of the inner batch extrinsic */
+			innerTxHash: string;
 	  }
 	| {
 			status: "timeout";
 			/** Fee paid for the MEV-shield wrapper tx (RAO), if known */
 			wrapperFee?: bigint;
+			/** Blake2-256 hash of the inner batch extrinsic */
+			innerTxHash: string;
 	  };

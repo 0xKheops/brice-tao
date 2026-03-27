@@ -199,6 +199,7 @@ describe("executeRebalance", () => {
 			operationResults: [{ index: 0, success: true }],
 			wrapperFee: 7n,
 			innerBatchFee: 2n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
 		});
 	});
 });

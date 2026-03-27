@@ -168,7 +168,8 @@ try {
 				plan,
 				balancesBefore: balances,
 				balancesAfter: postBalances,
-				proxyFreeBalance: postProxyFreeBalance,
+				proxyFreeBalanceBefore: proxyFreeBalance,
+				proxyFreeBalanceAfter: postProxyFreeBalance,
 				batchResult,
 				durationMs: performance.now() - startedAt,
 			});

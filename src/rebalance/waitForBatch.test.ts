@@ -72,6 +72,7 @@ describe("waitForInnerBatch", () => {
 			],
 			wrapperFee: 5n,
 			innerBatchFee: 12n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
 		});
 	});
 
@@ -142,6 +143,7 @@ describe("waitForInnerBatch", () => {
 			],
 			wrapperFee: 1n,
 			innerBatchFee: 3n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
 		});
 	});
 
@@ -161,7 +163,11 @@ describe("waitForInnerBatch", () => {
 			10,
 		);
 
-		expect(result).toEqual({ status: "timeout", wrapperFee: 9n });
+		expect(result).toEqual({
+			status: "timeout",
+			wrapperFee: 9n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+		});
 	});
 
 	it("throws when block body retrieval fails", async () => {

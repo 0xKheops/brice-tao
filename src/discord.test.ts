@@ -80,13 +80,15 @@ describe("discord notifications", () => {
 			],
 			wrapperFee: 1_500_000n,
 			innerBatchFee: 500_000n,
+			innerTxHash: "0xdeadbeef",
 		};
 
 		await sendRebalanceNotification(webhookUrl, {
 			plan,
 			balancesBefore: makeBalances(),
 			balancesAfter: makeBalances(),
-			proxyFreeBalance: 20_000_000n,
+			proxyFreeBalanceBefore: 20_000_000n,
+			proxyFreeBalanceAfter: 20_000_000n,
 			batchResult,
 			durationMs: 12_500,
 		});
@@ -122,8 +124,13 @@ describe("discord notifications", () => {
 			plan: { targets: [], operations: [], skipped: [] },
 			balancesBefore: makeBalances(),
 			balancesAfter: makeBalances(),
-			proxyFreeBalance: 5_000_000n,
-			batchResult: { status: "timeout", wrapperFee: 4_000_000n },
+			proxyFreeBalanceBefore: 5_000_000n,
+			proxyFreeBalanceAfter: 5_000_000n,
+			batchResult: {
+				status: "timeout",
+				wrapperFee: 4_000_000n,
+				innerTxHash: "0xabc",
+			},
 			durationMs: 60_000,
 		});
 
