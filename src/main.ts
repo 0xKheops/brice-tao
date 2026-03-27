@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
 	bittensor,
 	getMetadata as getDescriptorsMetadata,
@@ -33,7 +34,7 @@ const dryRun = process.argv.includes("--dry-run");
 initLog({ dryRun });
 
 // --- Load configuration ---
-const configPath = new URL("./config.yaml", import.meta.url).pathname;
+const configPath = join(process.cwd(), "src", "config.yaml");
 const config = loadConfig(configPath);
 
 // --- Environment validation ---
