@@ -1,6 +1,7 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import { SLIPPAGE_BUFFER, SWAP_SLIPPAGE_BUFFER, TAO } from "./constants.ts";
+import type { AppConfig } from "../config/types.ts";
+import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import type {
 	RebalanceOperation,
@@ -22,29 +23,34 @@ type Api = TypedApi<typeof bittensor>;
 export async function simulateAllOperations(
 	api: Api,
 	operations: RebalanceOperation[],
+	config: Pick<AppConfig["rebalance"], "slippageBuffer" | "swapSlippageBuffer">,
 ): Promise<RebalanceOperation[]> {
-	return Promise.all(operations.map((op) => simulateOperation(api, op)));
+	return Promise.all(
+		operations.map((op) => simulateOperation(api, op, config)),
+	);
 }
 
 function simulateOperation(
 	api: Api,
 	op: RebalanceOperation,
+	config: Pick<AppConfig["rebalance"], "slippageBuffer" | "swapSlippageBuffer">,
 ): Promise<RebalanceOperation> {
 	switch (op.kind) {
 		case "stake":
-			return simulateStake(api, op);
+			return simulateStake(api, op, config.slippageBuffer);
 		case "unstake":
-			return simulateUnstake(api, op);
+			return simulateUnstake(api, op, config.slippageBuffer);
 		case "unstake_partial":
-			return simulateUnstakePartial(api, op);
+			return simulateUnstakePartial(api, op, config.slippageBuffer);
 		case "swap":
-			return simulateSwap(api, op);
+			return simulateSwap(api, op, config.swapSlippageBuffer);
 	}
 }
 
 async function simulateStake(
 	api: Api,
 	op: StakeOperation,
+	slippageBuffer: number,
 ): Promise<StakeOperation> {
 	const sim = await api.apis.SwapRuntimeApi.sim_swap_tao_for_alpha(
 		op.netuid,
@@ -57,7 +63,7 @@ async function simulateStake(
 	// effective price = TAO spent / alpha received (TAO per alpha)
 	const effectivePrice = (sim.tao_amount * TAO) / sim.alpha_amount;
 	// add_stake_limit: limit_price = max price to pay → buffer up
-	const limitPrice = bufferUp(effectivePrice);
+	const limitPrice = bufferUp(effectivePrice, slippageBuffer);
 	log.verbose(
 		`  Sim stake SN${op.netuid}: effective=${effectivePrice} limit=${limitPrice}`,
 	);
@@ -67,6 +73,7 @@ async function simulateStake(
 async function simulateUnstake(
 	api: Api,
 	op: UnstakeOperation,
+	slippageBuffer: number,
 ): Promise<UnstakeOperation> {
 	const sim = await api.apis.SwapRuntimeApi.sim_swap_alpha_for_tao(
 		op.netuid,
@@ -79,7 +86,7 @@ async function simulateUnstake(
 	// effective price = TAO received / alpha sold (TAO per alpha)
 	const effectivePrice = (sim.tao_amount * TAO) / sim.alpha_amount;
 	// remove_stake_limit: limit_price = min price to accept → buffer down
-	const limitPrice = bufferDown(effectivePrice);
+	const limitPrice = bufferDown(effectivePrice, slippageBuffer);
 	log.verbose(
 		`  Sim unstake SN${op.netuid}: effective=${effectivePrice} limit=${limitPrice}`,
 	);
@@ -89,6 +96,7 @@ async function simulateUnstake(
 async function simulateUnstakePartial(
 	api: Api,
 	op: UnstakePartialOperation,
+	slippageBuffer: number,
 ): Promise<UnstakePartialOperation> {
 	const sim = await api.apis.SwapRuntimeApi.sim_swap_alpha_for_tao(
 		op.netuid,
@@ -101,7 +109,7 @@ async function simulateUnstakePartial(
 		return op;
 	}
 	const effectivePrice = (sim.tao_amount * TAO) / sim.alpha_amount;
-	const limitPrice = bufferDown(effectivePrice);
+	const limitPrice = bufferDown(effectivePrice, slippageBuffer);
 	log.verbose(
 		`  Sim unstake_partial SN${op.netuid}: effective=${effectivePrice} limit=${limitPrice}`,
 	);
@@ -111,6 +119,7 @@ async function simulateUnstakePartial(
 async function simulateSwap(
 	api: Api,
 	op: SwapOperation,
+	swapSlippageBuffer: number,
 ): Promise<SwapOperation> {
 	// swap_stake_limit limit_price = min acceptable ratio (origin_price / dest_price)
 	// On-chain check: REJECT if limit_price / 1e9 > current ratio
@@ -128,7 +137,7 @@ async function simulateSwap(
 
 	const ratio = (originPrice * TAO) / destPrice;
 	// Use wider swap buffer to absorb intra-batch price compounding
-	const bps = BigInt(Math.round(SWAP_SLIPPAGE_BUFFER * 10_000));
+	const bps = BigInt(Math.round(swapSlippageBuffer * 10_000));
 	const limitPrice = ratio - (ratio * bps) / 10_000n;
 	log.verbose(
 		`  Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: ratio=${ratio} limit=${limitPrice}`,
@@ -136,12 +145,12 @@ async function simulateSwap(
 	return { ...op, limitPrice };
 }
 
-function bufferUp(price: bigint): bigint {
-	const bps = BigInt(Math.round(SLIPPAGE_BUFFER * 10_000));
+function bufferUp(price: bigint, slippageBuffer: number): bigint {
+	const bps = BigInt(Math.round(slippageBuffer * 10_000));
 	return price + (price * bps) / 10_000n;
 }
 
-function bufferDown(price: bigint): bigint {
-	const bps = BigInt(Math.round(SLIPPAGE_BUFFER * 10_000));
+function bufferDown(price: bigint, slippageBuffer: number): bigint {
+	const bps = BigInt(Math.round(slippageBuffer * 10_000));
 	return price - (price * bps) / 10_000n;
 }

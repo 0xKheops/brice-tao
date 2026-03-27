@@ -1,40 +1,95 @@
 import { describe, expect, it } from "bun:test";
-import {
-	FREE_RESERVE_TAO,
-	MAX_SUBNETS,
-	MIN_OPERATION_TAO,
-	MIN_POSITION_TAO,
-	MIN_REBALANCE_TAO,
-	MIN_STAKE_TAO,
-	SLIPPAGE_BUFFER,
-	SWAP_SLIPPAGE_BUFFER,
-	TAO,
-} from "./constants.ts";
-import { parseTao } from "./tao.ts";
+import { loadConfig } from "../config/loadConfig.ts";
+import type { AppConfig } from "../config/types.ts";
+import { parseTao, TAO } from "./tao.ts";
 
-describe("rebalance constants", () => {
-	it("keeps TAO conversion and minimum thresholds consistent", () => {
-		expect(TAO).toBe(1_000_000_000n);
-		expect(MIN_POSITION_TAO).toBe(parseTao(0.5));
-		expect(FREE_RESERVE_TAO).toBe(parseTao(0.05));
-		expect(MIN_STAKE_TAO).toBe(parseTao(0.01));
-		expect(MIN_OPERATION_TAO).toBe(parseTao(0.01));
-		expect(MIN_REBALANCE_TAO).toBe(parseTao(0.25));
+describe("config loading and validation", () => {
+	const configPath = new URL("../config.yaml", import.meta.url).pathname;
+	let config: AppConfig;
+
+	it("loads the default config.yaml successfully", () => {
+		config = loadConfig(configPath);
+		expect(config).toBeDefined();
+		expect(config.rebalance).toBeDefined();
+		expect(config.strategy).toBeDefined();
+		expect(config.health).toBeDefined();
+	});
+
+	it("resolves TAO amounts to RAO bigints", () => {
+		config = loadConfig(configPath);
+		expect(config.rebalance.minPositionTao).toBe(parseTao(0.5));
+		expect(config.rebalance.freeReserveTao).toBe(parseTao(0.05));
+		expect(config.rebalance.minStakeTao).toBe(parseTao(0.01));
+		expect(config.rebalance.minOperationTao).toBe(parseTao(0.01));
+		expect(config.rebalance.minRebalanceTao).toBe(parseTao(0.25));
+	});
+
+	it("converts percent slippage to decimal fractions", () => {
+		config = loadConfig(configPath);
+		expect(config.rebalance.slippageBuffer).toBeCloseTo(0.003, 6);
+		expect(config.rebalance.swapSlippageBuffer).toBeCloseTo(0.02, 6);
 	});
 
 	it("uses safe ordering for operational amounts", () => {
-		expect(MIN_POSITION_TAO).toBeGreaterThan(MIN_STAKE_TAO);
-		expect(MIN_REBALANCE_TAO).toBeGreaterThanOrEqual(MIN_OPERATION_TAO);
-		expect(MIN_POSITION_TAO).toBeGreaterThanOrEqual(MIN_REBALANCE_TAO);
-		expect(MIN_STAKE_TAO).toBe(MIN_OPERATION_TAO);
-		expect(FREE_RESERVE_TAO).toBeGreaterThan(0n);
-		expect(MAX_SUBNETS).toBeGreaterThan(0);
+		config = loadConfig(configPath);
+		expect(config.rebalance.minPositionTao).toBeGreaterThan(
+			config.rebalance.minStakeTao,
+		);
+		expect(config.rebalance.minRebalanceTao).toBeGreaterThanOrEqual(
+			config.rebalance.minOperationTao,
+		);
+		expect(config.rebalance.minPositionTao).toBeGreaterThanOrEqual(
+			config.rebalance.minRebalanceTao,
+		);
+		expect(config.rebalance.freeReserveTao).toBeGreaterThan(0n);
+		expect(config.rebalance.maxSubnets).toBeGreaterThan(0);
 	});
 
-	it("defines slippage buffers in sane ranges", () => {
-		expect(SLIPPAGE_BUFFER).toBeGreaterThan(0);
-		expect(SWAP_SLIPPAGE_BUFFER).toBeGreaterThan(0);
-		expect(SWAP_SLIPPAGE_BUFFER).toBeGreaterThan(SLIPPAGE_BUFFER);
-		expect(SWAP_SLIPPAGE_BUFFER).toBeLessThan(0.1);
+	it("keeps slippage buffers in sane ranges", () => {
+		config = loadConfig(configPath);
+		expect(config.rebalance.slippageBuffer).toBeGreaterThan(0);
+		expect(config.rebalance.swapSlippageBuffer).toBeGreaterThan(0);
+		expect(config.rebalance.swapSlippageBuffer).toBeGreaterThan(
+			config.rebalance.slippageBuffer,
+		);
+		expect(config.rebalance.swapSlippageBuffer).toBeLessThan(0.1);
+	});
+
+	it("throws on missing config file", () => {
+		expect(() => loadConfig("/nonexistent/path.yaml")).toThrow(
+			/Config file not found/,
+		);
+	});
+
+	it("throws on invalid YAML values", () => {
+		const tmpPath = `/tmp/brice-tao-test-config-${Date.now()}.yaml`;
+		const { writeFileSync } = require("node:fs") as typeof import("node:fs");
+		writeFileSync(
+			tmpPath,
+			[
+				"rebalance:",
+				"  maxSubnets: -1",
+				"  minPositionTao: 0.5",
+				"  freeReserveTao: 0.05",
+				"  minOperationTao: 0.01",
+				"  minStakeTao: 0.01",
+				"  minRebalanceTao: 0.25",
+				"  slippageBufferPercent: 0.3",
+				"  swapSlippageBufferPercent: 2",
+				"  incumbencyBonus: 3",
+				"strategy:",
+				"  minScore: 70",
+				"  minVolumeTao: 100",
+				"  minMcapTao: 0",
+				"  minHolders: 500",
+				"  minEmissionPct: 0",
+				"  bottomPercentileCutoff: 10",
+				"health:",
+				"  minPoolTao: 1000",
+			].join("\n"),
+		);
+		expect(() => loadConfig(tmpPath)).toThrow(
+			/must be (non-negative|a positive integer)/,
+		);
 	});
 });

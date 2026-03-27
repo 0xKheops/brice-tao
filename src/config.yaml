@@ -1,0 +1,24 @@
+# Rebalancer configuration
+# All TAO amounts are in TAO (not RAO). Slippage values are in percent.
+
+rebalance:
+  maxSubnets: 10
+  minPositionTao: 0.5
+  freeReserveTao: 0.05
+  minOperationTao: 0.01
+  minStakeTao: 0.01
+  minRebalanceTao: 0.25
+  slippageBufferPercent: 0.3       # 0.3% for stake/unstake
+  swapSlippageBufferPercent: 2     # 2% for swaps (absorbs intra-batch drift)
+  incumbencyBonus: 3
+
+strategy:
+  minScore: 70
+  minVolumeTao: 100
+  minMcapTao: 0
+  minHolders: 500
+  minEmissionPct: 0
+  bottomPercentileCutoff: 10       # drop bottom 10% by vol/mcap ratio
+
+health:
+  minPoolTao: 1000

@@ -1,16 +1,9 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
+import type { AppConfig } from "../config/types.ts";
 import type { SubnetScore } from "../subnets/getBestSubnets.ts";
-import {
-	FREE_RESERVE_TAO,
-	MAX_SUBNETS,
-	MIN_OPERATION_TAO,
-	MIN_POSITION_TAO,
-	MIN_REBALANCE_TAO,
-	MIN_STAKE_TAO,
-	TAO,
-} from "./constants.ts";
+import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import { pickBestValidatorByYield } from "./pickBestValidator.ts";
 import type {
@@ -33,9 +26,10 @@ export async function computeRebalance(
 	api: Api,
 	balances: Balances,
 	profitable: SubnetScore[],
+	config: AppConfig["rebalance"],
 	fallbackValidatorHotkey?: string,
 ): Promise<RebalancePlan> {
-	const available = balances.totalTaoValue - FREE_RESERVE_TAO;
+	const available = balances.totalTaoValue - config.freeReserveTao;
 	if (available <= 0n) {
 		log.warn("Portfolio too small to rebalance (below free reserve)");
 		return { targets: [], operations: [], skipped: [] };
@@ -45,8 +39,8 @@ export async function computeRebalance(
 	// to per-target sizing. This helps keep allocations more evened out (e.g. ~0.5τ
 	// per subnet) without changing profitable-subnet priority.
 	const x = Math.min(
-		MAX_SUBNETS,
-		Math.max(Number(balances.totalTaoValue / MIN_POSITION_TAO), 1),
+		config.maxSubnets,
+		Math.max(Number(balances.totalTaoValue / config.minPositionTao), 1),
 		Math.max(profitable.length, 1), // at least 1 target (netuid 0)
 	);
 
@@ -100,6 +94,7 @@ export async function computeRebalance(
 		targets,
 		hotkeysByTarget,
 		balances.free,
+		config,
 	);
 	plan.skipped = [...hotkeySelectionSkips, ...plan.skipped];
 	return plan;
@@ -124,6 +119,7 @@ function generateOperations(
 	targets: TargetSubnet[],
 	targetHotkeys: Map<number, string>,
 	freeBalance: bigint,
+	config: AppConfig["rebalance"],
 ): RebalancePlan {
 	const operations: RebalanceOperation[] = [];
 	const skipped: RebalancePlan["skipped"] = [];
@@ -140,7 +136,7 @@ function generateOperations(
 	// 1. Full exits — try swap to underweight target only when hotkeys match, otherwise unstake.
 	for (const pos of positions) {
 		if (pos.classification !== "exit") continue;
-		if (pos.taoValue < MIN_OPERATION_TAO) {
+		if (pos.taoValue < config.minOperationTao) {
 			skipped.push({
 				netuid: pos.netuid,
 				reason: `Position too small to exit (${formatTao(pos.taoValue)} τ)`,
@@ -203,12 +199,12 @@ function generateOperations(
 		);
 		for (const pos of keepPositions) {
 			const excess = pos.taoValue - target.targetTaoValue;
-			if (excess < MIN_REBALANCE_TAO) continue;
+			if (excess < config.minRebalanceTao) continue;
 
-			// Ensure remaining position stays above MIN_STAKE_TAO
-			const maxReducible = pos.taoValue - MIN_STAKE_TAO;
+			// Ensure remaining position stays above minStakeTao
+			const maxReducible = pos.taoValue - config.minStakeTao;
 			const reduceAmount = excess < maxReducible ? excess : maxReducible;
-			if (reduceAmount < MIN_REBALANCE_TAO) {
+			if (reduceAmount < config.minRebalanceTao) {
 				skipped.push({
 					netuid: pos.netuid,
 					reason: `Cannot reduce: would leave position below minimum (${formatTao(pos.taoValue - reduceAmount)} τ)`,
@@ -269,7 +265,7 @@ function generateOperations(
 	}
 
 	// 3. Stake from free balance — remaining underweight targets
-	let availableFree = freeBalance - FREE_RESERVE_TAO;
+	let availableFree = freeBalance - config.freeReserveTao;
 
 	for (const op of operations) {
 		if (op.kind === "unstake" || op.kind === "unstake_partial") {
@@ -283,7 +279,7 @@ function generateOperations(
 	for (const target of targets) {
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
 		const deficit = target.targetTaoValue - currentFulfilled;
-		if (deficit < MIN_REBALANCE_TAO) continue;
+		if (deficit < config.minRebalanceTao) continue;
 
 		const targetHotkey = targetHotkeys.get(target.netuid);
 		if (!targetHotkey) {
@@ -295,7 +291,7 @@ function generateOperations(
 		}
 
 		const stakeAmount = deficit < availableFree ? deficit : availableFree;
-		if (stakeAmount < MIN_REBALANCE_TAO) {
+		if (stakeAmount < config.minRebalanceTao) {
 			skipped.push({
 				netuid: target.netuid,
 				reason: `Insufficient free balance for target (need ${formatTao(deficit)} τ, have ${formatTao(availableFree)} τ)`,

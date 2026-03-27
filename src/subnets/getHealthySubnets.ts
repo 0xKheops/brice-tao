@@ -1,6 +1,5 @@
 import { TAO } from "../rebalance/constants.ts";
 import type { SubnetInfo } from "./fetchAllSubnets.ts";
-import { STRATEGY_DEFAULTS } from "./getBestSubnets.ts";
 
 /**
  * Filter subnets down to the "healthy" set — those with meaningful
@@ -13,7 +12,7 @@ import { STRATEGY_DEFAULTS } from "./getBestSubnets.ts";
  */
 export function getHealthySubnets(
 	subnets: SubnetInfo[],
-	minPoolTao: bigint = BigInt(STRATEGY_DEFAULTS.minPoolTao) * TAO,
+	minPoolTao: bigint = 1_000n * TAO,
 ): Set<number> {
 	const healthyNetuids = new Set<number>();
 

@@ -13,6 +13,7 @@ import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "./api/generated/Sn45Api.ts";
 import type { Balances } from "./balances/getBalances.ts";
 import { getBalances } from "./balances/getBalances.ts";
+import { loadConfig } from "./config/loadConfig.ts";
 import {
 	sendErrorNotification,
 	sendRebalanceNotification,
@@ -29,6 +30,10 @@ import { getHealthySubnets } from "./subnets/getHealthySubnets.ts";
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
 initLog({ dryRun });
+
+// --- Load configuration ---
+const configPath = new URL("./config.yaml", import.meta.url).pathname;
+const config = loadConfig(configPath);
 
 // --- Environment validation ---
 const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
@@ -89,7 +94,10 @@ try {
 		fetchAllSubnets(api),
 		api.query.System.Account.getValue(proxyAddress),
 	]);
-	const healthyNetuids = getHealthySubnets(allSubnets);
+	const healthyNetuids = getHealthySubnets(
+		allSubnets,
+		BigInt(config.health.minPoolTao) * TAO,
+	);
 	const proxyFreeBalance = proxyAccount.data.free;
 
 	const pruneTarget = allSubnets.find((s) => s.isPruneTarget);
@@ -116,12 +124,13 @@ try {
 	);
 	const profitable = await getBestSubnets(
 		sn45,
-		undefined,
+		config.strategy,
 		healthyNetuids,
 		log,
 		subnetNames,
 		heldNetuids,
 		immuneNetuids,
+		config.rebalance.incumbencyBonus,
 	);
 
 	log.info(
@@ -133,6 +142,7 @@ try {
 		api,
 		balances,
 		profitable,
+		config.rebalance,
 		validatorHotkey,
 	);
 
@@ -148,7 +158,11 @@ try {
 
 		// Simulate all operations to compute accurate limit prices
 		log.info("Simulating operations for limit prices...");
-		plan.operations = await simulateAllOperations(api, plan.operations);
+		plan.operations = await simulateAllOperations(
+			api,
+			plan.operations,
+			config.rebalance,
+		);
 
 		const batchResult = await executeRebalance(
 			client,

@@ -4,15 +4,22 @@ import {
 } from "@polkadot-api/descriptors";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "../src/api/generated/Sn45Api.ts";
-import { INCUMBENCY_BONUS } from "../src/rebalance/constants.ts";
+import { loadConfig } from "../src/config/loadConfig.ts";
 import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
 import { STRATEGY_DEFAULTS } from "../src/subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
 
 // ---------------------------------------------------------------------------
-// Config — sourced from the actual strategy module to stay in sync
+// Config — sourced from YAML config and strategy defaults
 // ---------------------------------------------------------------------------
-const GATES = STRATEGY_DEFAULTS;
+const appConfig = loadConfig(
+	new URL("../src/config.yaml", import.meta.url).pathname,
+);
+const GATES = {
+	...STRATEGY_DEFAULTS,
+	...appConfig.strategy,
+};
+const INCUMBENCY_BONUS = appConfig.rebalance.incumbencyBonus;
 
 const RAO = 1_000_000_000;
 

@@ -3,6 +3,11 @@ import { TAO } from "./constants.ts";
 import { simulateAllOperations } from "./simulateSlippage.ts";
 import type { RebalanceOperation } from "./types.ts";
 
+const TEST_SLIPPAGE = {
+	slippageBuffer: 0.003,
+	swapSlippageBuffer: 0.02,
+} as const;
+
 function makeApi() {
 	return {
 		apis: {
@@ -64,7 +69,11 @@ describe("simulateAllOperations", () => {
 			},
 		];
 
-		const simulated = await simulateAllOperations(api as never, operations);
+		const simulated = await simulateAllOperations(
+			api as never,
+			operations,
+			TEST_SLIPPAGE,
+		);
 
 		expect(simulated).toEqual([
 			{
@@ -151,7 +160,11 @@ describe("simulateAllOperations", () => {
 			},
 		];
 
-		const simulated = await simulateAllOperations(api as never, operations);
+		const simulated = await simulateAllOperations(
+			api as never,
+			operations,
+			TEST_SLIPPAGE,
+		);
 		expect(simulated).toEqual(operations);
 	});
 });

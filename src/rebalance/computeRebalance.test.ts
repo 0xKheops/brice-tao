@@ -1,17 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
+import type { AppConfig } from "../config/types.ts";
 import type { SubnetScore } from "../subnets/getBestSubnets.ts";
 import { computeRebalance } from "./computeRebalance.ts";
-import {
-	FREE_RESERVE_TAO,
-	MAX_SUBNETS,
-	MIN_OPERATION_TAO,
-	MIN_POSITION_TAO,
-	MIN_REBALANCE_TAO,
-	MIN_STAKE_TAO,
-} from "./constants.ts";
 import * as pickValidatorModule from "./pickBestValidator.ts";
 import { parseTao, TAO } from "./tao.ts";
+
+const TEST_CONFIG: AppConfig["rebalance"] = {
+	maxSubnets: 10,
+	minPositionTao: parseTao(0.5),
+	freeReserveTao: parseTao(0.05),
+	minOperationTao: parseTao(0.01),
+	minStakeTao: parseTao(0.01),
+	minRebalanceTao: parseTao(0.25),
+	slippageBuffer: 0.003,
+	swapSlippageBuffer: 0.02,
+	incumbencyBonus: 3,
+};
+
+const {
+	freeReserveTao: FREE_RESERVE_TAO,
+	maxSubnets: MAX_SUBNETS,
+	minOperationTao: MIN_OPERATION_TAO,
+	minPositionTao: MIN_POSITION_TAO,
+	minRebalanceTao: MIN_REBALANCE_TAO,
+	minStakeTao: MIN_STAKE_TAO,
+} = TEST_CONFIG;
 
 function hotkey(id: string): string {
 	return `5${id.padEnd(47, "a")}`;
@@ -61,7 +75,12 @@ describe("computeRebalance target choice and weird cases", () => {
 		});
 		const pickSpy = vi.spyOn(pickValidatorModule, "pickBestValidatorByYield");
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(1, 2, 3));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(1, 2, 3),
+			TEST_CONFIG,
+		);
 
 		expect(plan.targets).toEqual([]);
 		expect(plan.operations).toEqual([]);
@@ -83,6 +102,7 @@ describe("computeRebalance target choice and weird cases", () => {
 			fakeApi,
 			balances,
 			profitable(11, 22, 33),
+			TEST_CONFIG,
 			fallback,
 		);
 
@@ -114,7 +134,7 @@ describe("computeRebalance target choice and weird cases", () => {
 			...Array.from({ length: MAX_SUBNETS + 8 }, (_, i) => i + 1),
 		);
 
-		const plan = await computeRebalance(fakeApi, balances, many);
+		const plan = await computeRebalance(fakeApi, balances, many, TEST_CONFIG);
 
 		expect(plan.targets).toHaveLength(MAX_SUBNETS);
 		expect(plan.targets.map((t) => t.netuid)).toEqual(
@@ -133,7 +153,13 @@ describe("computeRebalance target choice and weird cases", () => {
 			free: FREE_RESERVE_TAO + 3n * MIN_POSITION_TAO,
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, [], fallback);
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			[],
+			TEST_CONFIG,
+			fallback,
+		);
 
 		expect(plan.targets).toEqual([
 			{
@@ -163,7 +189,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			free: FREE_RESERVE_TAO + available,
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(2, 4));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(2, 4),
+			TEST_CONFIG,
+		);
 
 		expect(plan.targets).toEqual([
 			{ netuid: 2, targetTaoValue: 2500000001n },
@@ -182,7 +213,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(7));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(7),
+			TEST_CONFIG,
+		);
 
 		expect(pickSpy).not.toHaveBeenCalled();
 		expect(plan.operations).toContainEqual({
@@ -234,7 +270,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(9, 10));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(9, 10),
+			TEST_CONFIG,
+		);
 
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
@@ -261,7 +302,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			free: FREE_RESERVE_TAO + MIN_POSITION_TAO,
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(33));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(33),
+			TEST_CONFIG,
+		);
 
 		expect(plan.skipped).toContainEqual({
 			netuid: 33,
@@ -296,7 +342,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(10, 11));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(10, 11),
+			TEST_CONFIG,
+		);
 
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
@@ -339,7 +390,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(5));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(5),
+			TEST_CONFIG,
+		);
 
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
@@ -380,7 +436,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(2));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(2),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find((op) => "netuid" in op && op.netuid === 44),
@@ -418,7 +479,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(8, 9));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(8, 9),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find(
@@ -454,7 +520,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			stakes: [makeStake({ netuid: 70, hotkey: hotkey("70"), taoValue: TAO })],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(1, 2));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(1, 2),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.some((op) => op.kind === "unstake" && op.netuid === 70),
@@ -490,7 +561,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(1));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(1),
+			TEST_CONFIG,
+		);
 
 		const unstake = plan.operations.find(
 			(op) => op.kind === "unstake" && op.netuid === 70,
@@ -527,7 +603,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			stakes: [],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(1, 2, 3));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(1, 2, 3),
+			TEST_CONFIG,
+		);
 		const insufficient = plan.skipped.filter((s) =>
 			s.reason.startsWith("Insufficient free balance for target"),
 		);
@@ -563,7 +644,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(5));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(5),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find(
@@ -603,7 +689,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(5));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(5),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find((op) => op.kind === "stake" && op.netuid === 5),
@@ -637,7 +728,12 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(fakeApi, balances, profitable(2));
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			profitable(2),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 44),
