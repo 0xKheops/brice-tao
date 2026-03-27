@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
+import { ConfigError } from "../errors.ts";
 import { parseTao } from "../rebalance/tao.ts";
 import type { AppConfig, RawConfig } from "./types.ts";
-
-class ConfigError extends Error {
-	override name = "ConfigError" as const;
-}
 
 export function loadConfig(path: string): AppConfig {
 	let text: string;

@@ -14,6 +14,7 @@ import { Sn45Api } from "./api/generated/Sn45Api.ts";
 import type { Balances } from "./balances/getBalances.ts";
 import { getBalances } from "./balances/getBalances.ts";
 import { loadConfig } from "./config/loadConfig.ts";
+import { MevShieldError, RebalanceError, SlippageError } from "./errors.ts";
 import {
 	sendErrorNotification,
 	sendRebalanceNotification,
@@ -206,7 +207,16 @@ try {
 
 	log.info(`Log file: ${log.filePath()}`);
 } catch (err) {
-	log.error("Rebalance failed", err);
+	const errorLabel =
+		err instanceof SlippageError
+			? `Slippage error on SN${err.netuid}`
+			: err instanceof MevShieldError
+				? "MEV Shield error"
+				: err instanceof RebalanceError
+					? `${err.name} [${err.code}]`
+					: "Rebalance failed";
+
+	log.error(errorLabel, err);
 	if (!dryRun) {
 		await sendErrorNotification(
 			discordWebhookUrl,

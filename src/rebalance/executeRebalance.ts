@@ -2,6 +2,7 @@ import { type bittensor, MultiAddress } from "@polkadot-api/descriptors";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
 import type { PolkadotClient, PolkadotSigner, TypedApi } from "polkadot-api";
 import { Enum } from "polkadot-api";
+import { MevShieldError } from "../errors.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import { getNextKey, submitShieldedTx } from "./mevShield.ts";
@@ -85,7 +86,7 @@ export async function executeRebalance(
 	// Get MEV shield encryption key
 	const nextKey = await getNextKey(api);
 	if (!nextKey) {
-		throw new Error(
+		throw new MevShieldError(
 			"No MEV shield NextKey available — cannot submit shielded transaction",
 		);
 	}

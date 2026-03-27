@@ -25,15 +25,44 @@ function initLogFile(subdir: string): void {
 	);
 }
 
-function timestamp(): string {
-	return new Date().toISOString();
+interface LogData {
+	[key: string]: unknown;
 }
 
-function writeToFile(level: string, message: string): void {
+interface JsonLogEntry {
+	timestamp: string;
+	level: string;
+	message: string;
+	data?: LogData;
+	error?: { name: string; message: string; stack?: string; code?: string };
+}
+
+function writeToFile(
+	level: string,
+	message: string,
+	data?: LogData,
+	err?: unknown,
+): void {
 	if (!FILE_LOGGING_ENABLED || !LOG_FILE) {
 		return;
 	}
-	appendFileSync(LOG_FILE, `[${timestamp()}] [${level}] ${message}\n`);
+	const entry: JsonLogEntry = {
+		timestamp: new Date().toISOString(),
+		level,
+		message,
+	};
+	if (data && Object.keys(data).length > 0) {
+		entry.data = data;
+	}
+	if (err instanceof Error) {
+		entry.error = {
+			name: err.name,
+			message: err.message,
+			stack: err.stack,
+			...("code" in err ? { code: String(err.code) } : {}),
+		};
+	}
+	appendFileSync(LOG_FILE, `${JSON.stringify(entry)}\n`);
 }
 
 export function initLog(options: { dryRun: boolean }): void {
@@ -41,12 +70,12 @@ export function initLog(options: { dryRun: boolean }): void {
 }
 
 export const log = {
-	/** Minimal terminal output + verbose file log */
-	info(message: string): void {
+	/** Minimal terminal output + structured JSON file log */
+	info(message: string, data?: LogData): void {
 		if (TERMINAL_LOGGING_ENABLED) {
 			console.log(message);
 		}
-		writeToFile("INFO", message);
+		writeToFile("INFO", message, data);
 	},
 
 	/** Terminal only — not written to log file */
@@ -56,28 +85,25 @@ export const log = {
 		}
 	},
 
-	/** Verbose: file only */
-	verbose(message: string): void {
-		writeToFile("VERBOSE", message);
+	/** Verbose: file only (JSON structured) */
+	verbose(message: string, data?: LogData): void {
+		writeToFile("VERBOSE", message, data);
 	},
 
 	/** Warning: both terminal and file */
-	warn(message: string): void {
+	warn(message: string, data?: LogData): void {
 		if (TERMINAL_LOGGING_ENABLED) {
 			console.warn(`⚠ ${message}`);
 		}
-		writeToFile("WARN", message);
+		writeToFile("WARN", message, data);
 	},
 
 	/** Error: both terminal and file */
-	error(message: string, err?: unknown): void {
+	error(message: string, err?: unknown, data?: LogData): void {
 		if (TERMINAL_LOGGING_ENABLED) {
 			console.error(`✗ ${message}`);
 		}
-		writeToFile("ERROR", message);
-		if (err instanceof Error) {
-			writeToFile("ERROR", `  ${err.stack ?? err.message}`);
-		}
+		writeToFile("ERROR", message, data, err);
 	},
 
 	/** Returns the path of the current log file */
