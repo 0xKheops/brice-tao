@@ -28,13 +28,13 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```bash
 bun install
 bun run index.ts        # dashboard / portfolio overview
-bun rebalance.ts        # run rebalance once
-bun rebalance.ts --dry-run  # simulate without submitting transactions
+bun rebalance            # run rebalance once
+bun rebalance --dry-run  # simulate without submitting transactions
 ```
 
 ## Docker
 
-The container runs `bun rebalance.ts` every 12 hours via cron.
+The container runs the rebalancer every 12 hours via cron.
 
 ### Start
 

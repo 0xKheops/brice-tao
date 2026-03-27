@@ -12,7 +12,7 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 |--------|---------|
 | Install deps | `bun install` |
 | Run portfolio dashboard | `bun run index.ts` |
-| Run rebalancer | `bun run rebalance.ts` |
+| Run rebalancer | `bun rebalance` |
 | Test slippage simulation | `bun run test-slippage.ts` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
@@ -33,10 +33,10 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 
 ```
 index.ts              → Portfolio dashboard (read-only monitoring)
-rebalance.ts          → Rebalancer orchestrator (MEV-shielded batch execution)
 test-slippage.ts      → Swap simulation validator
 
 src/
+  rebalance.ts        → Rebalancer orchestrator (MEV-shielded batch execution)
   getBalances.ts      → TAO/Alpha balance queries via polkadot-api
   getSubnets.ts       → Subnet registry
   getSubnetHealth.ts  → Liquidity & emission health checks

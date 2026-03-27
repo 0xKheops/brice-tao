@@ -169,9 +169,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		const entries = [
 			makeEntry({ netuid: 1, score: 50 }),
 			makeEntry({ netuid: 2, volume: "1" }),
-			makeEntry({ netuid: 3, mcap: "1" }),
 			makeEntry({ netuid: 4, totalHolders: 1 }),
-			makeEntry({ netuid: 5, buyCount: 10, sellCount: 21 }),
 			makeEntry({ netuid: 6, emissionPct: null }),
 		];
 		const logger = { verbose: vi.fn() };
@@ -188,13 +186,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		expect(calls.some((m) => m.includes("SN2") && m.includes("volume"))).toBe(
 			true,
 		);
-		expect(calls.some((m) => m.includes("SN3") && m.includes("mcap"))).toBe(
-			true,
-		);
 		expect(calls.some((m) => m.includes("SN4") && m.includes("holders"))).toBe(
-			true,
-		);
-		expect(calls.some((m) => m.includes("SN5") && m.includes("sell/buy"))).toBe(
 			true,
 		);
 		expect(calls.some((m) => m.includes("SN6") && m.includes("emission"))).toBe(

@@ -16,14 +16,15 @@ interface LeaderboardEntry {
 	score: number;
 }
 
-const DEFAULT_CONFIG = {
+export const STRATEGY_DEFAULTS = {
 	minScore: 70,
 	minVolumeTao: 100,
-	minMcapTao: 1_000,
+	minMcapTao: 0,
 	minHolders: 500,
-	maxSellBuyRatio: 2,
 	minEmissionPct: 0,
 	bottomPercentileCutoff: 10,
+	/** Minimum TAO locked in subnet pool to consider it healthy */
+	minPoolTao: 1_000,
 } as const;
 
 export interface StrategyConfig {
@@ -31,16 +32,16 @@ export interface StrategyConfig {
 	minScore?: number;
 	/** Minimum 24h volume in TAO to be considered (default: 100) */
 	minVolumeTao?: number;
-	/** Minimum market cap in TAO — rejects micro-cap noise (default: 1000) */
+	/** Minimum market cap in TAO (default: 0 — no mcap floor) */
 	minMcapTao?: number;
 	/** Minimum unique holder wallets — rejects concentrated/fragile subnets (default: 500) */
 	minHolders?: number;
-	/** Maximum sell/buy event ratio — rejects subnets with exodus-like selling pressure (default: 2) */
-	maxSellBuyRatio?: number;
 	/** Minimum emission % from root validators (default: 0 — all emission levels accepted) */
 	minEmissionPct?: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
 	bottomPercentileCutoff?: number;
+	/** Minimum TAO locked in subnet pool — rejects illiquid subnets (default: 1000) */
+	minPoolTao?: number;
 }
 
 export interface SubnetScore {
@@ -62,14 +63,14 @@ export async function getBestSubnets(
 	heldNetuids?: Set<number>,
 ): Promise<SubnetScore[]> {
 	const cfg = {
-		minScore: config?.minScore ?? DEFAULT_CONFIG.minScore,
-		minVolumeTao: config?.minVolumeTao ?? DEFAULT_CONFIG.minVolumeTao,
-		minMcapTao: config?.minMcapTao ?? DEFAULT_CONFIG.minMcapTao,
-		minHolders: config?.minHolders ?? DEFAULT_CONFIG.minHolders,
-		maxSellBuyRatio: config?.maxSellBuyRatio ?? DEFAULT_CONFIG.maxSellBuyRatio,
-		minEmissionPct: config?.minEmissionPct ?? DEFAULT_CONFIG.minEmissionPct,
+		minScore: config?.minScore ?? STRATEGY_DEFAULTS.minScore,
+		minVolumeTao: config?.minVolumeTao ?? STRATEGY_DEFAULTS.minVolumeTao,
+		minMcapTao: config?.minMcapTao ?? STRATEGY_DEFAULTS.minMcapTao,
+		minHolders: config?.minHolders ?? STRATEGY_DEFAULTS.minHolders,
+		minEmissionPct: config?.minEmissionPct ?? STRATEGY_DEFAULTS.minEmissionPct,
 		bottomPercentileCutoff:
-			config?.bottomPercentileCutoff ?? DEFAULT_CONFIG.bottomPercentileCutoff,
+			config?.bottomPercentileCutoff ??
+			STRATEGY_DEFAULTS.bottomPercentileCutoff,
 	};
 
 	const label = (netuid: number) =>
@@ -153,25 +154,8 @@ export async function getBestSubnets(
 		return true;
 	});
 
-	// Sell/buy ratio — reject subnets with exodus-like selling pressure
-	const healthyFlow = enoughHolders.filter((s) => {
-		if (s.buyCount === 0 && s.sellCount > 0) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: pure sell pressure (0 buys, ${s.sellCount} sells)`,
-			);
-			return false;
-		}
-		if (s.buyCount > 0 && s.sellCount / s.buyCount > cfg.maxSellBuyRatio) {
-			logger?.verbose(
-				`${label(s.netuid)} excluded: sell/buy ratio ${(s.sellCount / s.buyCount).toFixed(1)} > ${cfg.maxSellBuyRatio}`,
-			);
-			return false;
-		}
-		return true;
-	});
-
 	// Minimum emission % — reject subnets not valued by root validators
-	const enoughEmission = healthyFlow.filter((s) => {
+	const enoughEmission = enoughHolders.filter((s) => {
 		if (s.emissionPct === null || s.emissionPct < cfg.minEmissionPct) {
 			logger?.verbose(
 				`${label(s.netuid)} excluded: emission ${s.emissionPct ?? 0}% < ${cfg.minEmissionPct}%`,

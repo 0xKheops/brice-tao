@@ -9,12 +9,11 @@ RUN SKIP_INSTALL_SIMPLE_GIT_HOOKS=1 bun install --frozen-lockfile
 
 COPY tsconfig.json ./
 COPY src/ ./src/
-COPY *.ts ./
 
 RUN bun build --compile --minify --sourcemap \
     --compile-exec-argv="--smol" \
     --target=bun-linux-arm64-musl \
-    rebalance.ts --outfile rebalance
+    src/rebalance.ts --outfile rebalance
 
 # --- Runtime stage: minimal image with just the binary ---
 FROM alpine:3

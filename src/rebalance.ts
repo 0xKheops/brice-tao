@@ -10,20 +10,21 @@ import {
 } from "@polkadot-labs/hdkd-helpers";
 import { getPolkadotSigner } from "polkadot-api/signer";
 import { createWsClient } from "polkadot-api/ws";
-import { Sn45Api } from "./src/api/generated/Sn45Api.ts";
-import { computeRebalance } from "./src/rebalance/computeRebalance.ts";
-import { executeRebalance } from "./src/rebalance/executeRebalance.ts";
-import { initLog, log } from "./src/rebalance/logger.ts";
-import { simulateAllOperations } from "./src/rebalance/simulateSlippage.ts";
-import { TAO } from "./src/rebalance/tao.ts";
-import { getBestSubnets } from "./src/strategy/getBestSubnets.ts";
-import { getHealthySubnets } from "./src/strategy/getSubnetHealth.ts";
+import { Sn45Api } from "./api/generated/Sn45Api.ts";
+import { computeRebalance } from "./rebalance/computeRebalance.ts";
+import { executeRebalance } from "./rebalance/executeRebalance.ts";
+import { initLog, log } from "./rebalance/logger.ts";
+import { simulateAllOperations } from "./rebalance/simulateSlippage.ts";
+import { TAO } from "./rebalance/tao.ts";
+import { fetchAllSubnets } from "./strategy/fetchAllSubnets.ts";
+import { getBestSubnets } from "./strategy/getBestSubnets.ts";
+import { getHealthySubnets } from "./strategy/getHealthySubnets.ts";
 import {
 	sendErrorNotification,
 	sendRebalanceNotification,
-} from "./src/utils/discord.ts";
-import type { Balances } from "./src/utils/getBalances.ts";
-import { getBalances } from "./src/utils/getBalances.ts";
+} from "./utils/discord.ts";
+import type { Balances } from "./utils/getBalances.ts";
+import { getBalances } from "./utils/getBalances.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -83,21 +84,31 @@ try {
 	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
 	log.info("Fetching balances, subnet health, and profitable subnets...");
-	const [balances, { healthyNetuids, allHealth, subnetNames }, proxyAccount] =
-		await Promise.all([
-			getBalances(api, coldkey),
-			getHealthySubnets(api),
-			api.query.System.Account.getValue(proxyAddress),
-		]);
+	const [
+		balances,
+		{ subnets: allSubnets, subnetNames, subnetToPrune },
+		proxyAccount,
+	] = await Promise.all([
+		getBalances(api, coldkey),
+		fetchAllSubnets(api),
+		api.query.System.Account.getValue(proxyAddress),
+	]);
+	const healthyNetuids = getHealthySubnets(allSubnets, subnetToPrune);
 	const proxyFreeBalance = proxyAccount.data.free;
 
 	log.verbose(
-		`Subnet health: ${healthyNetuids.size} healthy out of ${allHealth.length} total`,
+		`Subnet health: ${healthyNetuids.size} healthy out of ${allSubnets.length} total${subnetToPrune !== undefined ? ` (SN${subnetToPrune} next to prune)` : ""}`,
 	);
-	for (const h of allHealth) {
+	for (const h of allSubnets) {
 		const healthy = healthyNetuids.has(h.netuid) ? "✓" : "✗";
+		const flags = [
+			h.isImmune ? "immune" : null,
+			subnetToPrune === h.netuid ? "PRUNE_RISK" : null,
+		]
+			.filter(Boolean)
+			.join(",");
 		log.verbose(
-			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} tao_in=${h.taoIn} volume=${h.subnetVolume}`,
+			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} tao_in=${h.taoIn} volume=${h.subnetVolume}${flags ? ` [${flags}]` : ""}`,
 		);
 	}
 
