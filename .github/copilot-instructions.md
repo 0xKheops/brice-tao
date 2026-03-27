@@ -11,12 +11,12 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 | Action | Command |
 |--------|---------|
 | Install deps | `bun install` |
-| Run portfolio dashboard | `bun run index.ts` |
 | Run rebalancer | `bun rebalance` |
-| Test slippage simulation | `bun run test-slippage.ts` |
+| Run rebalancer (dry run) | `bun rebalance -- --dry-run` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
 | Dead code detection | `bun knip` |
+| Tests | `bun test` |
 | Regenerate API clients | `bun generate-clients` |
 
 ## Code Conventions
@@ -25,35 +25,45 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 - **Imports**: named + type imports with `.ts` extension (`import { foo } from "./bar.ts"`)
 - **No default exports** — always use named exports
 - **Async**: `Promise.all()` for parallel calls; top-level `await` in scripts
-- **Constants**: named `bigint` values; `TAO = 1e9` RAO conversion in [src/rebalance/constants.ts](../src/rebalance/constants.ts)
+- **Constants**: named `bigint` values; `TAO = 1e9` RAO conversion in [src/rebalance/tao.ts](../src/rebalance/tao.ts)
 - **Types**: union types for operation kinds, interfaces for domain models — see [src/rebalance/types.ts](../src/rebalance/types.ts)
-- **Logging**: dual logger (terminal + file) in [src/rebalance/logger.ts](../src/rebalance/logger.ts) with levels: `info`, `verbose`, `warn`, `error`
+- **Config**: tunable parameters in `src/config.yaml` (YAML), loaded at startup — see [src/config/loadConfig.ts](../src/config/loadConfig.ts)
+- **Errors**: custom error classes in [src/errors.ts](../src/errors.ts) — use typed catch blocks in orchestrator
+- **Logging**: dual logger (terminal + JSON file) in [src/rebalance/logger.ts](../src/rebalance/logger.ts) with levels: `info`, `verbose`, `warn`, `error`
 
 ## Architecture
 
 ```
-index.ts              → Portfolio dashboard (read-only monitoring)
-test-slippage.ts      → Swap simulation validator
-
 src/
-  rebalance.ts        → Rebalancer orchestrator (MEV-shielded batch execution)
-  getBalances.ts      → TAO/Alpha balance queries via polkadot-api
-  getSubnets.ts       → Subnet registry
-  getSubnetHealth.ts  → Liquidity & emission health checks
-  pickBestSubnets.ts  → Subnet selection (SN45 score ranking + quality gates)
-  discord.ts          → Discord webhook notifications
-
+  main.ts               → Rebalancer orchestrator (MEV-shielded batch execution)
+  errors.ts             → Custom error classes (RebalanceError, ConfigError, etc.)
+  config/
+    types.ts            → Config schema types (RawConfig, AppConfig)
+    loadConfig.ts       → YAML parser + validator (fail-fast)
+  config.yaml           → Tunable parameters (rebalance/strategy/health)
+  balances/
+    getBalances.ts      → TAO/Alpha balance queries via polkadot-api
+  subnets/
+    fetchAllSubnets.ts  → Subnet registry (SN45 API)
+    getHealthySubnets.ts → Liquidity & emission health checks
+    getBestSubnets.ts   → Subnet selection (SN45 score ranking + quality gates)
+  notifications/
+    discord.ts          → Discord webhook notifications
   rebalance/
-    types.ts          → Domain types (Operation, Plan, Results)
-    constants.ts      → TAO constants, slippage buffers
+    types.ts            → Domain types (Operation, Plan, Results)
+    tao.ts              → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
+    constants.ts        → Re-exports TAO from tao.ts
     computeRebalance.ts → Plan generation from positions & targets
     simulateSlippage.ts → Runtime API swap simulation → price limits
     executeRebalance.ts → Batch build, MEV encryption, submission
-    mevShield.ts      → XChaCha20-Poly1305 + ML-KEM-768 encryption
-    waitForBatch.ts   → Block scanning, event extraction
-    logger.ts         → Dual terminal + file logger
-
-  api/generated/      → Auto-generated Swagger clients (excluded from lint)
+    mevShield.ts        → XChaCha20-Poly1305 + ML-KEM-768 encryption
+    waitForBatch.ts     → Block scanning, event extraction
+    pickBestValidator.ts → Yield-based validator selection per subnet
+    logger.ts           → Dual logger: terminal (human-readable) + file (JSON lines)
+  api/generated/
+    Sn45Api.ts          → Auto-generated SN45 Swagger client
+  __test__/
+    setup.ts            → Test preload (console suppression)
 ```
 
 ## Environment Variables
@@ -62,19 +72,20 @@ src/
 |----------|---------|-------------|
 | `WS_ENDPOINT` | all | RPC WebSocket endpoints (comma-separated for failover) |
 | `COLDKEY_ADDRESS` | all | SS58 coldkey address |
-| `PROXY_MNEMONIC` | rebalance, test-slippage | Mnemonic for proxy account (transaction signer) |
+| `PROXY_MNEMONIC` | rebalance | Mnemonic for proxy account (transaction signer) |
 | `VALIDATOR_HOTKEY` | rebalance | Optional fallback hotkey when yield-based validator selection fails |
 | `DISCORD_WEBHOOK_URL` | rebalance | Discord notifications webhook |
 | `SN45_API_KEY` | all | SN45 leaderboard API key |
+| `CRON_SCHEDULE` | Docker only | Cron expression for rebalance schedule (default: `*/5 * * * *`) |
 
-No `.env` file — variables must be set externally.
+No `.env` file — variables must be set externally (Docker uses `.env` mounted as a volume).
 
 ## Key Domain Concepts
 
 - **TAO/Alpha**: TAO is the base token (1 TAO = 1e9 RAO). Alpha is per-subnet staking token.
 - **Price limits**: U64F64 fixed-point values that protect swaps against slippage.
 - **MEV Shield**: Encrypts transaction batches to prevent frontrunning (XChaCha20-Poly1305 + ML-KEM-768).
-- **Slippage buffers**: 0.1% base for stake/unstake, 0.5% for swaps — defined in constants.
+- **Slippage buffers**: configured in `src/config.yaml` — base buffer for stake/unstake, larger buffer for swaps.
 
 ## Skills
 
@@ -90,6 +101,8 @@ Domain-specific knowledge is available in `.github/skills/`:
 - All amounts are in RAO (`bigint`), not TAO — always use `TAO` constant for conversions
 - Price limits are U64F64 fixed-point — see bittensor-staking skill for encoding
 - The rebalancer uses a proxy account (not the coldkey directly) to sign transactions
+- `src/config.yaml` is required — the rebalancer will fail fast if it's missing or invalid
+- Error classes should be used for all throw sites — enables typed Discord error notifications
 
 ## Quality Gates
 
@@ -100,5 +113,3 @@ Before completing work on any task, ensure that the following checks pass:
 - `bun test` (unit tests, if applicable)
 
 Also ensure that this file and tests stays up to date with any new conventions or architectural changes.
-
-Keep documents in the docs folder up to date with any changes done in the code.

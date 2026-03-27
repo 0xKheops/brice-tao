@@ -11,7 +11,7 @@ https://www.youtube.com/watch?v=jBHYiRT_Zz0
 
 ## Configuration
 
-Copy `.env.example` or create a `.env` file with the following variables:
+Set the following environment variables (see `.env.example` for reference):
 
 ```env
 WS_ENDPOINT=wss://your-rpc-endpoint
@@ -23,18 +23,19 @@ SN45_API_KEY=your-sn45-api-key
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
+Environment variables are for secrets and connection strings only. Tunable parameters (slippage buffers, thresholds, strategy settings) live in `src/config.yaml`.
+
 ## Local Development
 
 ```bash
 bun install
-bun run index.ts        # dashboard / portfolio overview
 bun rebalance            # run rebalance once
 bun rebalance --dry-run  # simulate without submitting transactions
 ```
 
 ## Docker
 
-The container runs the rebalancer every 12 hours via cron.
+The container runs the rebalancer every 5 minutes via cron.
 
 ### Start
 

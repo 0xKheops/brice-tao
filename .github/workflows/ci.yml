@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+        env:
+          SKIP_INSTALL_SIMPLE_GIT_HOOKS: "1"
+
+      - name: Lint
+        run: bun check
+
+      - name: Type check
+        run: bun typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Dead code
+        run: bun knip

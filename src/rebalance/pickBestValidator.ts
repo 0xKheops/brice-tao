@@ -24,6 +24,12 @@ export async function pickBestValidatorByYield(
 	api: Api,
 	netuid: number,
 ): Promise<BestValidatorResult> {
+	// Fetch selective metagraph with specific field property indexes:
+	// [52] = hotkeys
+	// [57] = validator_permit
+	// [67] = alpha_stake
+	// [71] = alpha_dividends_per_hotkey
+	// [72] = validators
 	const meta = await api.apis.SubnetInfoRuntimeApi.get_selective_metagraph(
 		netuid,
 		[52, 57, 67, 71, 72],

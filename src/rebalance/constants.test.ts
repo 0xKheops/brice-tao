@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { loadConfig } from "../config/loadConfig.ts";
 import type { AppConfig } from "../config/types.ts";
-import { parseTao, TAO } from "./tao.ts";
+import { parseTao } from "./tao.ts";
 
 describe("config loading and validation", () => {
 	const configPath = new URL("../config.yaml", import.meta.url).pathname;
