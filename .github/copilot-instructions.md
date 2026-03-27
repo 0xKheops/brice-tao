@@ -122,17 +122,17 @@ Keep documents in the docs folder up to date with any changes done in the code.
 
 **Rules:**
 - `getBestSubnets()` returns `{ winners, evaluations }` — `winners` is the filtered/ranked list, `evaluations` has per-gate pass/fail for every leaderboard subnet
-- `scripts/generate-subnet-report.ts` must call `getBestSubnets()` for its eligible list and use `evaluations` for its audit table — it must **not** contain its own gate evaluation code
-- Any change to gate logic in `getBestSubnets.ts` is automatically reflected in the report (no manual sync needed)
-- Any change to `getHealthySubnets.ts` thresholds or criteria must be tested against the report output
+- `scripts/simulate-rebalance.ts` must call `getBestSubnets()` for its eligible list and use `evaluations` for its audit table — it must **not** contain its own gate evaluation code
+- Any change to gate logic in `getBestSubnets.ts` is automatically reflected in the simulation (no manual sync needed)
+- Any change to `getHealthySubnets.ts` thresholds or criteria must be tested against the simulation output
 - If a PR introduces gate evaluation logic outside of `getBestSubnets.ts`, **push back** — direct the author to modify `getBestSubnets.ts` instead
-- Gate thresholds live in `src/config.yaml` and `STRATEGY_DEFAULTS` in `getBestSubnets.ts` — both the rebalancer and report read from the same config
+- Gate thresholds live in `src/config.yaml` and `STRATEGY_DEFAULTS` in `getBestSubnets.ts` — both the rebalancer and simulation read from the same config
 
 **Key files:**
 - `src/subnets/getBestSubnets.ts` — gate evaluation + filtering (source of truth)
 - `src/subnets/getHealthySubnets.ts` — on-chain health filter (pool liquidity, immunity, prune risk)
 - `src/config.yaml` — tunable thresholds
-- `scripts/generate-subnet-report.ts` — report (consumer, not source of truth)
+- `scripts/simulate-rebalance.ts` — simulation (consumer, not source of truth)
 - `src/main.ts` — rebalancer (consumer, not source of truth)
 
 Also ensure that this file and tests stays up to date with any new conventions or architectural changes.

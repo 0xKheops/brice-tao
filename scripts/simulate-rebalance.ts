@@ -84,43 +84,49 @@ try {
 		subnets.filter((s) => s.isImmune).map((s) => s.netuid),
 	);
 
-	// Optionally fetch balances for incumbency section
+	// Optionally fetch balances for incumbency bonus
 	let heldNetuids: Set<number> | undefined;
 	if (coldkey) {
 		const balances = await getBalances(api, coldkey);
 		heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
 	}
 
-	// --- Eligible list: call getBestSubnets() (no incumbency bias) ---
+	// --- Eligible list: call getBestSubnets() (same logic as rebalancer) ---
 	const { winners, evaluations } = await getBestSubnets(
 		sn45,
 		appConfig.strategy,
 		healthyNetuids,
 		undefined,
 		subnetNames,
-		undefined,
+		heldNetuids,
 		immuneNetuids,
-		0,
+		INCUMBENCY_BONUS,
 	);
 
 	// --- Terminal output ---
 	const active = winners.slice(0, MAX_SUBNETS);
 	const activeSet = new Set(active.map((s) => s.netuid));
 
+	const hasIncumbency = heldNetuids && heldNetuids.size > 0;
 	console.log(
 		`\nEligible subnets (${winners.length} qualifying, top ${MAX_SUBNETS} active):\n`,
 	);
 	console.log(
-		`${"".padStart(4)}${"#".padStart(3)}  ${"SN".padEnd(6)}  ${"Name".padEnd(20)}  ${"Score".padStart(5)}  ${"Price Δ".padStart(8)}  ${"Vol (τ)".padStart(10)}  ${"Mcap (τ)".padStart(10)}`,
+		`${"".padStart(4)}${"#".padStart(3)}  ${"SN".padEnd(6)}  ${"Name".padEnd(23)}  ${"Score".padStart(7)}  ${"Price Δ".padStart(8)}  ${"Vol (τ)".padStart(10)}  ${"Mcap (τ)".padStart(10)}`,
 	);
-	console.log("─".repeat(76));
+	console.log("─".repeat(80));
 
 	for (let i = 0; i < winners.length; i++) {
 		const w = winners[i]!;
 		const ev = evaluations.find((e) => e.netuid === w.netuid)!;
 		const icon = activeSet.has(w.netuid) ? "🟢" : "⚪";
 		const rank = i + 1;
-		const name = ev.name.length > 20 ? `${ev.name.slice(0, 19)}…` : ev.name;
+		const isHeld = heldNetuids?.has(ev.netuid) ?? false;
+		const nameRaw = ev.name.length > 20 ? `${ev.name.slice(0, 19)}…` : ev.name;
+		const name = isHeld ? `${nameRaw} ⭐` : nameRaw;
+		const scoreStr = isHeld
+			? `${ev.score}+${INCUMBENCY_BONUS}`
+			: String(Math.round(ev.biasedScore));
 		const price =
 			ev.priceChange !== null
 				? `${ev.priceChange >= 0 ? "+" : ""}${ev.priceChange.toFixed(1)}%`
@@ -133,7 +139,7 @@ try {
 				? ev.mcapTao.toLocaleString("en-US", { maximumFractionDigits: 0 })
 				: "—";
 		console.log(
-			`${icon} ${String(rank).padStart(3)}  ${`SN${ev.netuid}`.padEnd(6)}  ${name.padEnd(20)}  ${String(Math.round(ev.score)).padStart(5)}  ${price.padStart(8)}  ${vol.padStart(10)}  ${mcap.padStart(10)}`,
+			`${icon} ${String(rank).padStart(3)}  ${`SN${ev.netuid}`.padEnd(6)}  ${name.padEnd(23)}  ${scoreStr.padStart(7)}  ${price.padStart(8)}  ${vol.padStart(10)}  ${mcap.padStart(10)}`,
 		);
 	}
 
@@ -141,29 +147,11 @@ try {
 		console.log("  (no subnets qualify)");
 	}
 
-	// --- Incumbency section (if COLDKEY_ADDRESS is set) ---
-	if (heldNetuids && heldNetuids.size > 0) {
-		console.log(
-			`\nIncumbency bonus effect (+${INCUMBENCY_BONUS} pts for held subnets):`,
-		);
-		for (const netuid of heldNetuids) {
-			const ev = evaluations.find((e) => e.netuid === netuid);
-			if (!ev) continue;
-			const effective = ev.score + INCUMBENCY_BONUS;
-			const alreadyQualifies = ev.passesAllGates;
-			const wouldQualify = !alreadyQualifies && effective >= GATES.minScore;
-			const label = alreadyQualifies
-				? "already qualifies"
-				: wouldQualify
-					? `would qualify (${ev.score} + ${INCUMBENCY_BONUS} = ${effective})`
-					: `still excluded (${ev.score} + ${INCUMBENCY_BONUS} = ${effective})`;
-			console.log(
-				`  SN${String(netuid).padEnd(4)} ${ev.name.padEnd(20)} — ${label}`,
-			);
-		}
+	if (hasIncumbency) {
+		console.log(`\n⭐ = held subnet (+${INCUMBENCY_BONUS} incumbency bonus)`);
 	} else if (!coldkey) {
 		console.log(
-			"\nNote: Set COLDKEY_ADDRESS to see incumbency bonus effect on held subnets.",
+			"\nNote: Set COLDKEY_ADDRESS to apply incumbency bonus for held subnets.",
 		);
 	}
 
@@ -173,7 +161,7 @@ try {
 		.replace("T", " ")
 		.replace(/\.\d+Z$/, " UTC");
 
-	let md = `# Subnet Report\n\n`;
+	let md = `# Rebalance Simulation\n\n`;
 	md += `> Generated ${now}\n\n`;
 
 	md += `## Gate Thresholds\n\n`;
@@ -265,13 +253,13 @@ try {
 		md += `| ${values.join(" | ")} |\n`;
 	}
 
-	// Write report
+	// Write simulation output
 	const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const outPath = `reports/subnet-report-${ts}.md`;
+	const outPath = `reports/simulation-${ts}.md`;
 	await Bun.write(outPath, md);
 
 	console.log(
-		`\nReport written to ${outPath} — ${qualifyingCount} qualifying / ${evaluations.length} total subnets`,
+		`\nSimulation written to ${outPath} — ${qualifyingCount} qualifying / ${evaluations.length} total subnets`,
 	);
 } finally {
 	client.destroy();

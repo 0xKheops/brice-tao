@@ -13,7 +13,7 @@
 		"prepare": "simple-git-hooks",
 		"generate-clients:sn45": "bunx swagger-typescript-api generate -p https://sn45api.talisman.xyz/openapi.json -o ./src/api/generated -n Sn45Api --api-class-name Sn45Api",
 		"generate-clients": "bun generate-clients:sn45",
-		"subnet-report": "bun run scripts/generate-subnet-report.ts",
+		"simulate": "bun run scripts/simulate-rebalance.ts",
 		"rebalance": "bun run src/main.ts"
 	},
 	"simple-git-hooks": {
