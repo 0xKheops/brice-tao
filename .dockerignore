@@ -12,4 +12,5 @@ coverage
 *.tgz
 .papi/cache
 .papi/descriptors/dist
+.papi/descriptors/generated.json
 reports
