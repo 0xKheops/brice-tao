@@ -21,6 +21,8 @@ PROXY_MNEMONIC=your proxy account mnemonic phrase
 VALIDATOR_HOTKEY=your-validator-hotkey-ss58-address
 SN45_API_KEY=your-sn45-api-key
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+# Docker only — cron schedule (default: every 12 hours)
+CRON_SCHEDULE=0 */12 * * *
 ```
 
 Environment variables are for secrets and connection strings only. Tunable parameters (slippage buffers, thresholds, strategy settings) live in `src/config.yaml`.
@@ -31,11 +33,16 @@ Environment variables are for secrets and connection strings only. Tunable param
 bun install
 bun rebalance            # run rebalance once
 bun rebalance --dry-run  # simulate without submitting transactions
+bun simulate             # dry-run simulation with audit table
 ```
+
+## CI
+
+All pushes and PRs to `main` are checked automatically via GitHub Actions (`.github/workflows/ci.yml`): lint, type-check, tests, and dead-code detection.
 
 ## Docker
 
-The container runs the rebalancer every 12 hours via cron.
+The container runs the rebalancer on a cron schedule (default: every 12 hours). The `.env` file and `src/config.yaml` are mounted read-only into the container (see `docker-compose.yml`).
 
 ### Start
 

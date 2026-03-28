@@ -13,6 +13,7 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 | Install deps | `bun install` |
 | Run rebalancer | `bun rebalance` |
 | Run rebalancer (dry run) | `bun rebalance -- --dry-run` |
+| Simulate rebalance | `bun simulate` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
 | Dead code detection | `bun knip` |
@@ -34,37 +35,43 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 ## Architecture
 
 ```
+scripts/
+  entrypoint.sh           → Docker cron setup + env loading
+  run-rebalance.sh        → Lock file management + log cleanup
+  simulate-rebalance.ts   → Audit simulation (calls getBestSubnets for gate validation)
 src/
-  main.ts               → Rebalancer orchestrator (MEV-shielded batch execution)
-  errors.ts             → Custom error classes (RebalanceError, ConfigError, etc.)
+  main.ts                 → Rebalancer orchestrator (MEV-shielded batch execution)
+  errors.ts               → Custom error classes (RebalanceError, ConfigError, etc.)
   config/
-    types.ts            → Config schema types (RawConfig, AppConfig)
-    loadConfig.ts       → YAML parser + validator (fail-fast)
-  config.yaml           → Tunable parameters (rebalance/strategy/health)
+    types.ts              → Config schema types (RawConfig, AppConfig)
+    loadConfig.ts         → YAML parser + validator (fail-fast)
+  config.yaml             → Tunable parameters (rebalance/strategy/health)
   balances/
-    getBalances.ts      → TAO/Alpha balance queries via polkadot-api
+    getBalances.ts        → TAO/Alpha balance queries via polkadot-api
   subnets/
-    fetchAllSubnets.ts  → Subnet registry (SN45 API)
-    getHealthySubnets.ts → Liquidity & emission health checks
-    getBestSubnets.ts   → Subnet selection (SN45 score ranking + quality gates)
+    fetchAllSubnets.ts    → Subnet registry (SN45 API)
+    getHealthySubnets.ts  → Liquidity & emission health checks
+    getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
   notifications/
-    discord.ts          → Discord webhook notifications
+    discord.ts            → Discord webhook notifications
   rebalance/
-    types.ts            → Domain types (Operation, Plan, Results)
-    tao.ts              → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
-    constants.ts        → Re-exports TAO from tao.ts
-    computeRebalance.ts → Plan generation from positions & targets
-    simulateSlippage.ts → Runtime API swap simulation → price limits
-    executeRebalance.ts → Batch build, MEV encryption, submission
-    mevShield.ts        → XChaCha20-Poly1305 + ML-KEM-768 encryption
-    waitForBatch.ts     → Block scanning, event extraction
-    pickBestValidator.ts → Yield-based validator selection per subnet
-    logger.ts           → Dual logger: terminal (human-readable) + file (JSON lines)
+    types.ts              → Domain types (Operation, Plan, Results)
+    tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
+    constants.ts          → Re-exports TAO from tao.ts
+    computeRebalance.ts   → Plan generation from positions & targets
+    simulateSlippage.ts   → Runtime API swap simulation → price limits
+    executeRebalance.ts   → Batch build, MEV encryption, submission
+    mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption
+    waitForBatch.ts       → Block scanning, event extraction
+    pickBestValidator.ts  → Yield-based validator selection per subnet
+    logger.ts             → Dual logger: terminal (human-readable) + file (JSON lines)
   api/generated/
-    Sn45Api.ts          → Auto-generated SN45 Swagger client
+    Sn45Api.ts            → Auto-generated SN45 Swagger client
   __test__/
-    setup.ts            → Test preload (console suppression)
+    setup.ts              → Test preload (console suppression)
 ```
+
+Tests are co-located with source files (e.g., `getBalances.test.ts` next to `getBalances.ts`).
 
 ## Environment Variables
 
@@ -114,7 +121,13 @@ Before completing work on any task, ensure that the following checks pass:
 
 Also ensure that this file and tests stays up to date with any new conventions or architectural changes.
 
-Keep documents in the docs folder up to date with any changes done in the code.
+## Continuous Integration
+
+All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/ci.yml`):
+- Lint (`bun check`)
+- Type-check (`bun typecheck`)
+- Tests (`bun test`)
+- Dead code detection (`bun knip`)
 
 ## Subnet Selection — Single Source of Truth
 
