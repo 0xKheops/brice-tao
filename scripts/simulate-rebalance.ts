@@ -12,7 +12,6 @@ import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
 import {
 	getBestSubnets,
 	STRATEGY_DEFAULTS,
-	type SubnetEvaluation,
 } from "../src/subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
 

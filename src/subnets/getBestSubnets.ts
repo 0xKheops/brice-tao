@@ -119,8 +119,6 @@ export async function getBestSubnets(
 	// --- Phase 1: evaluate per-gate results for every subnet ---
 	const evaluations: SubnetEvaluation[] = leaderboard.map((s) => {
 		const isImmune = immuneNetuids?.has(s.netuid) ?? false;
-		const hasCompleteData =
-			s.priceChange !== null && s.mcap !== null && s.emaTaoFlow !== null;
 		const isHealthy =
 			activeNetuids === undefined || activeNetuids.has(s.netuid);
 		const biasedScore = heldNetuids?.has(s.netuid) ? s.score + bias : s.score;

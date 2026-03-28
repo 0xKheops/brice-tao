@@ -17,7 +17,7 @@
 		"rebalance": "bun run src/main.ts"
 	},
 	"simple-git-hooks": {
-		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched"
+		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched --error-on-warnings"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.8",
