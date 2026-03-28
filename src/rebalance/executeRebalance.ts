@@ -57,16 +57,24 @@ export async function executeRebalance(
 		});
 	});
 
-	// Bundle into Utility.force_batch (continues on individual failures, unlike batch)
-	const batchTx = api.tx.Utility.force_batch({
-		calls: proxiedCalls.map((tx) => tx.decodedCall),
-	});
+	// When there's only one call, submit it directly to save batch overhead fees.
+	// For multiple calls, bundle into Utility.force_batch (continues on individual failures).
+	const innerTx =
+		proxiedCalls.length > 1
+			? api.tx.Utility.force_batch({
+					calls: proxiedCalls.map((tx) => tx.decodedCall),
+				})
+			: proxiedCalls[0];
+
+	if (!innerTx) {
+		throw new Error("Unreachable: proxiedCalls is non-empty");
+	}
 
 	// Print full decoded call to terminal only (not in log file)
-	log.console("\nDecoded batch call:");
+	log.console("\nDecoded call:");
 	log.console(
 		JSON.stringify(
-			batchTx.decodedCall,
+			innerTx.decodedCall,
 			(_key, value) => (typeof value === "bigint" ? value.toString() : value),
 			2,
 		),
@@ -91,9 +99,9 @@ export async function executeRebalance(
 		);
 	}
 
-	log.verbose("Signing inner batch transaction...");
-	// Sign the inner batch with nonce + 1 (MEV shield reserves nonce for wrapper)
-	const innerSignedBytes = await batchTx.sign(signer, { nonce: nonce + 1 });
+	log.verbose("Signing inner transaction...");
+	// Sign the inner tx with nonce + 1 (MEV shield reserves nonce for wrapper)
+	const innerSignedBytes = await innerTx.sign(signer, { nonce: nonce + 1 });
 
 	log.verbose("Encrypting and submitting via MEV shield...");
 	const outerResult = await submitShieldedTx(
@@ -109,8 +117,8 @@ export async function executeRebalance(
 		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number} (fee: ${formatFee(wrapperFee)} τ)`,
 	);
 
-	// Wait for the inner batch transaction to be executed
-	log.info("Waiting for inner batch execution...");
+	// Wait for the inner transaction to be executed
+	log.info("Waiting for inner transaction execution...");
 	const batchResult = await waitForInnerBatch(
 		client,
 		api,

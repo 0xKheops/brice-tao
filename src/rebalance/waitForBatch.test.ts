@@ -147,6 +147,106 @@ describe("waitForInnerBatch", () => {
 		});
 	});
 
+	it("returns completed for single non-batched operation (no Utility events)", async () => {
+		const finalizedBlock$ = new Subject<{ hash: string; number: number }>();
+		const innerSignedBytes = new Uint8Array([5, 5, 5]);
+		const getBlockBody = vi.fn().mockResolvedValue([innerSignedBytes]);
+		const getEvents = vi.fn().mockResolvedValue([
+			eventRecord(0, {
+				type: "TransactionPayment",
+				value: {
+					type: "TransactionFeePaid",
+					value: { actual_fee: 4n },
+				},
+			}),
+			eventRecord(0, {
+				type: "Proxy",
+				value: { type: "ProxyExecuted", value: { result: { success: true } } },
+			}),
+		]);
+
+		const resultPromise = waitForInnerBatch(
+			{ finalizedBlock$, getBlockBody } as never,
+			{
+				query: { System: { Events: { getValue: getEvents } } },
+			} as never,
+			innerSignedBytes,
+			1,
+			2n,
+		);
+		finalizedBlock$.next({ hash: "0xsingle", number: 55 });
+
+		const result = await resultPromise;
+		expect(result).toEqual({
+			status: "completed",
+			blockNumber: 55,
+			operationResults: [{ index: 0, success: true }],
+			wrapperFee: 2n,
+			innerBatchFee: 4n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+		});
+	});
+
+	it("returns partial_failure for single non-batched operation with proxy error", async () => {
+		const finalizedBlock$ = new Subject<{ hash: string; number: number }>();
+		const innerSignedBytes = new Uint8Array([6, 6, 6]);
+		const getBlockBody = vi.fn().mockResolvedValue([innerSignedBytes]);
+		const getEvents = vi.fn().mockResolvedValue([
+			eventRecord(0, {
+				type: "TransactionPayment",
+				value: {
+					type: "TransactionFeePaid",
+					value: { actual_fee: 1n },
+				},
+			}),
+			eventRecord(0, {
+				type: "Proxy",
+				value: {
+					type: "ProxyExecuted",
+					value: {
+						result: {
+							success: false,
+							value: {
+								type: "Module",
+								value: {
+									type: "SubtensorModule",
+									value: { type: "NotEnoughStake" },
+								},
+							},
+						},
+					},
+				},
+			}),
+		]);
+
+		const resultPromise = waitForInnerBatch(
+			{ finalizedBlock$, getBlockBody } as never,
+			{
+				query: { System: { Events: { getValue: getEvents } } },
+			} as never,
+			innerSignedBytes,
+			1,
+			3n,
+		);
+		finalizedBlock$.next({ hash: "0xfail", number: 60 });
+
+		const result = await resultPromise;
+		expect(result).toEqual({
+			status: "partial_failure",
+			blockNumber: 60,
+			operationResults: [
+				{
+					index: 0,
+					success: false,
+					error: "SubtensorModule::NotEnoughStake",
+				},
+			],
+			wrapperFee: 3n,
+			innerBatchFee: 1n,
+			innerTxHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+		});
+	});
+
 	it("returns timeout result when no matching tx is found before timeout", async () => {
 		const finalizedBlock$ = new Subject<{ hash: string; number: number }>();
 		const result = await waitForInnerBatch(

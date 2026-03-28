@@ -218,6 +218,36 @@ async function extractOperationResults(
 		}
 	}
 
+	// Check if this was a batched call by looking for Utility item events
+	const hasUtilityItems = extrinsicEvents.some(
+		(r) =>
+			r.event.type === "Utility" &&
+			(r.event.value.type === "ItemCompleted" ||
+				r.event.value.type === "ItemFailed"),
+	);
+
+	// Single (non-batched) proxy call — derive result directly from ProxyExecuted
+	if (!hasUtilityItems) {
+		const pr = proxyResults[0];
+		const operationResults: OperationResult[] = pr
+			? [
+					{
+						index: 0,
+						success: pr.ok,
+						error: pr.ok ? undefined : (pr.error ?? "Proxied call failed"),
+					},
+				]
+			: [
+					{
+						index: 0,
+						success: false,
+						error: "No event found for this operation",
+					},
+				];
+
+		return { operationResults, fee };
+	}
+
 	// Walk ItemCompleted/ItemFailed events in order — they correspond 1:1 to batch calls
 	const results: OperationResult[] = [];
 	for (const record of extrinsicEvents) {

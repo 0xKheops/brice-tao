@@ -18,6 +18,7 @@ import type { RebalancePlan } from "./types.ts";
 function makeApi(nonce = 7) {
 	const proxy = vi.fn((params: unknown) => ({
 		decodedCall: { proxy: params },
+		sign: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
 	}));
 	const forceBatchSign = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]));
 	const force_batch = vi.fn((params: { calls: unknown[] }) => ({
@@ -35,7 +36,9 @@ function makeApi(nonce = 7) {
 					add_stake_limit: vi.fn((params: unknown) => ({
 						decodedCall: { stake: params },
 					})),
-					remove_stake_full_limit: vi.fn(),
+					remove_stake_full_limit: vi.fn((params: unknown) => ({
+						decodedCall: { unstake: params },
+					})),
 					remove_stake_limit: vi.fn(),
 					swap_stake_limit: vi.fn(),
 				},
@@ -74,6 +77,30 @@ function makePlan(): RebalancePlan {
 	};
 }
 
+function makeMultiOpPlan(): RebalancePlan {
+	return {
+		targets: [],
+		operations: [
+			{
+				kind: "stake",
+				netuid: 18,
+				hotkey: "5stake-hotkey",
+				taoAmount: 2n * TAO,
+				limitPrice: 123n,
+			},
+			{
+				kind: "unstake",
+				netuid: 7,
+				hotkey: "5unstake-hotkey",
+				alphaAmount: 1n * TAO,
+				limitPrice: 456n,
+				estimatedTaoValue: 1n * TAO,
+			},
+		],
+		skipped: [],
+	};
+}
+
 describe("executeRebalance", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -91,6 +118,34 @@ describe("executeRebalance", () => {
 
 		expect(result).toBeNull();
 		expect(getNextKey).not.toHaveBeenCalled();
+	});
+
+	it("does not wrap in force_batch for a single operation (dry run)", async () => {
+		const { api, force_batch } = makeApi();
+		await executeRebalance(
+			{} as never,
+			api as never,
+			{ publicKey: new Uint8Array([4]) } as never,
+			"5cold",
+			makePlan(),
+			{ dryRun: true },
+		);
+
+		expect(force_batch).not.toHaveBeenCalled();
+	});
+
+	it("wraps in force_batch for multiple operations (dry run)", async () => {
+		const { api, force_batch } = makeApi();
+		await executeRebalance(
+			{} as never,
+			api as never,
+			{ publicKey: new Uint8Array([4]) } as never,
+			"5cold",
+			makeMultiOpPlan(),
+			{ dryRun: true },
+		);
+
+		expect(force_batch).toHaveBeenCalledTimes(1);
 	});
 
 	it("returns null in dry run mode without touching network submission path", async () => {
@@ -125,8 +180,8 @@ describe("executeRebalance", () => {
 		).rejects.toThrow("No MEV shield NextKey available");
 	});
 
-	it("signs, submits and waits for inner batch with expected nonce flow", async () => {
-		const { api, forceBatchSign } = makeApi(14);
+	it("signs, submits and waits for inner tx with expected nonce flow (single op)", async () => {
+		const { api, proxy, force_batch } = makeApi(14);
 		(getNextKey as ReturnType<typeof vi.fn>).mockResolvedValue(
 			new Uint8Array([9, 9]),
 		);
@@ -146,6 +201,7 @@ describe("executeRebalance", () => {
 			1,
 		);
 		const getBlockBody = vi.fn().mockResolvedValue([new Uint8Array([1, 2, 3])]);
+		// Single op: only Proxy.ProxyExecuted, no Utility events
 		api.query.System.Events.getValue.mockResolvedValue([
 			{
 				phase: { type: "ApplyExtrinsic", value: 0 },
@@ -167,10 +223,6 @@ describe("executeRebalance", () => {
 					},
 				},
 			},
-			{
-				phase: { type: "ApplyExtrinsic", value: 0 },
-				event: { type: "Utility", value: { type: "ItemCompleted" } },
-			},
 		]);
 
 		const signer = { publicKey: new Uint8Array([5, 6, 7]) };
@@ -184,7 +236,12 @@ describe("executeRebalance", () => {
 		);
 		const result = await resultPromise;
 
-		expect(forceBatchSign).toHaveBeenCalledWith(signer, { nonce: 15 });
+		// Single op: proxy call signed directly, no force_batch
+		expect(force_batch).not.toHaveBeenCalled();
+		const proxySign = (
+			proxy.mock.results[0]?.value as { sign: ReturnType<typeof vi.fn> }
+		).sign;
+		expect(proxySign).toHaveBeenCalledWith(signer, { nonce: 15 });
 		expect(submitShieldedTx).toHaveBeenCalledWith(
 			api,
 			signer,
