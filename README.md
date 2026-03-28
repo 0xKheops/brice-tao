@@ -35,7 +35,7 @@ bun rebalance --dry-run  # simulate without submitting transactions
 
 ## Docker
 
-The container runs the rebalancer every 5 minutes via cron.
+The container runs the rebalancer every 12 hours via cron.
 
 ### Start
 

@@ -10,3 +10,6 @@ logs
 .cache
 coverage
 *.tgz
+.papi/cache
+.papi/descriptors/dist
+reports

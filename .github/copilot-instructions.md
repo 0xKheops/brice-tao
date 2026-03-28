@@ -76,7 +76,7 @@ src/
 | `VALIDATOR_HOTKEY` | rebalance | Optional fallback hotkey when yield-based validator selection fails |
 | `DISCORD_WEBHOOK_URL` | rebalance | Discord notifications webhook |
 | `SN45_API_KEY` | all | SN45 leaderboard API key |
-| `CRON_SCHEDULE` | Docker only | Cron expression for rebalance schedule (default: `*/5 * * * *`) |
+| `CRON_SCHEDULE` | Docker only | Cron expression for rebalance schedule (default: `0 */12 * * *`). |
 
 No `.env` file — variables must be set externally (Docker uses `.env` mounted as a volume).
 
