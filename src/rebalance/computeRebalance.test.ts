@@ -53,7 +53,7 @@ function makeBalances(partial?: Partial<Balances>): Balances {
 	};
 }
 
-function profitable(...netuids: number[]): SubnetScore[] {
+function eligible(...netuids: number[]): SubnetScore[] {
 	return netuids.map((netuid, i) => ({
 		netuid,
 		name: `SN${netuid}`,
@@ -78,7 +78,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(1, 2, 3),
+			eligible(1, 2, 3),
 			TEST_CONFIG,
 		);
 
@@ -101,7 +101,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(11, 22, 33),
+			eligible(11, 22, 33),
 			TEST_CONFIG,
 			fallback,
 		);
@@ -112,7 +112,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(pickSpy).toHaveBeenCalledWith(fakeApi, 11);
 	});
 
-	it("caps target count at MAX_SUBNETS when many profitable subnets exist", async () => {
+	it("caps target count at MAX_SUBNETS when many eligible subnets exist", async () => {
 		const pickSpy = vi
 			.spyOn(pickValidatorModule, "pickBestValidatorByYield")
 			.mockResolvedValue({
@@ -130,7 +130,7 @@ describe("computeRebalance target choice and weird cases", () => {
 				FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
 			free: FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
 		});
-		const many = profitable(
+		const many = eligible(
 			...Array.from({ length: MAX_SUBNETS + 8 }, (_, i) => i + 1),
 		);
 
@@ -143,7 +143,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(pickSpy).toHaveBeenCalledTimes(MAX_SUBNETS);
 	});
 
-	it("pads to subnet 0 when no profitable subnet is available", async () => {
+	it("pads to subnet 0 when no eligible subnet is available", async () => {
 		const fallback = hotkey("fallback");
 		const pickSpy = vi
 			.spyOn(pickValidatorModule, "pickBestValidatorByYield")
@@ -192,7 +192,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(2, 4),
+			eligible(2, 4),
 			TEST_CONFIG,
 		);
 
@@ -216,7 +216,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(7),
+			eligible(7),
 			TEST_CONFIG,
 		);
 
@@ -273,7 +273,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(9, 10),
+			eligible(9, 10),
 			TEST_CONFIG,
 		);
 
@@ -305,7 +305,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(33),
+			eligible(33),
 			TEST_CONFIG,
 		);
 
@@ -345,7 +345,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(10, 11),
+			eligible(10, 11),
 			TEST_CONFIG,
 		);
 
@@ -393,7 +393,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(5),
+			eligible(5),
 			TEST_CONFIG,
 		);
 
@@ -439,7 +439,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(2),
+			eligible(2),
 			TEST_CONFIG,
 		);
 
@@ -482,7 +482,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(8, 9),
+			eligible(8, 9),
 			TEST_CONFIG,
 		);
 
@@ -523,7 +523,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(1, 2),
+			eligible(1, 2),
 			TEST_CONFIG,
 		);
 
@@ -564,7 +564,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(1),
+			eligible(1),
 			TEST_CONFIG,
 		);
 
@@ -606,7 +606,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(1, 2, 3),
+			eligible(1, 2, 3),
 			TEST_CONFIG,
 		);
 		const insufficient = plan.skipped.filter((s) =>
@@ -647,7 +647,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(5),
+			eligible(5),
 			TEST_CONFIG,
 		);
 
@@ -692,7 +692,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(5),
+			eligible(5),
 			TEST_CONFIG,
 		);
 
@@ -731,7 +731,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			profitable(2),
+			eligible(2),
 			TEST_CONFIG,
 		);
 

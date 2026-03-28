@@ -19,13 +19,13 @@ interface ClassifiedPosition extends StakeEntry {
 }
 
 /**
- * Compute the rebalance plan: given current balances and profitable subnets,
+ * Compute the rebalance plan: given current balances and eligible subnets,
  * produce a list of operations to reach equal-weight allocation across the top X subnets.
  */
 export async function computeRebalance(
 	api: Api,
 	balances: Balances,
-	profitable: SubnetScore[],
+	eligibleSubnets: SubnetScore[],
 	config: AppConfig["rebalance"],
 	fallbackValidatorHotkey?: string,
 ): Promise<RebalancePlan> {
@@ -37,11 +37,11 @@ export async function computeRebalance(
 
 	// Determine X: use total portfolio size for spread count and apply reserve only
 	// to per-target sizing. This helps keep allocations more evened out (e.g. ~0.5τ
-	// per subnet) without changing profitable-subnet priority.
+	// per subnet) without changing eligible-subnet priority.
 	const x = Math.min(
 		config.maxSubnets,
 		Math.max(Number(balances.totalTaoValue / config.minPositionTao), 1),
-		Math.max(profitable.length, 1), // at least 1 target (netuid 0)
+		Math.max(eligibleSubnets.length, 1), // at least 1 target (netuid 0)
 	);
 
 	if (x < 1) {
@@ -49,8 +49,8 @@ export async function computeRebalance(
 		return { targets: [], operations: [], skipped: [] };
 	}
 
-	// Select target subnets — fill with netuid 0 if fewer profitable than X
-	const targetNetuids = profitable.slice(0, x).map((s) => s.netuid);
+	// Select target subnets — fill with netuid 0 if fewer eligible than X
+	const targetNetuids = eligibleSubnets.slice(0, x).map((s) => s.netuid);
 	while (targetNetuids.length < x) {
 		if (!targetNetuids.includes(0)) {
 			targetNetuids.push(0);

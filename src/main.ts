@@ -90,7 +90,7 @@ try {
 
 	if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
-	log.info("Fetching balances, subnet health, and profitable subnets...");
+	log.info("Fetching balances, subnet health, and eligible subnets...");
 	const [balances, allSubnets, proxyAccount] = await Promise.all([
 		getBalances(api, coldkey),
 		fetchAllSubnets(api),
@@ -124,7 +124,7 @@ try {
 	const immuneNetuids = new Set(
 		allSubnets.filter((s) => s.isImmune).map((s) => s.netuid),
 	);
-	const { winners: profitable } = await getBestSubnets(
+	const { winners: eligible } = await getBestSubnets(
 		sn45,
 		config.strategy,
 		healthyNetuids,
@@ -136,14 +136,14 @@ try {
 	);
 
 	log.info(
-		`Portfolio: ${formatTao(balances.totalTaoValue)} τ total, ${balances.stakes.length} positions, ${profitable.length} profitable subnets`,
+		`Portfolio: ${formatTao(balances.totalTaoValue)} τ total, ${balances.stakes.length} positions, ${eligible.length} eligible subnets`,
 	);
 	logBalancesDetail("BEFORE", coldkey, balances);
 
 	const plan = await computeRebalance(
 		api,
 		balances,
-		profitable,
+		eligible,
 		config.rebalance,
 		validatorHotkey,
 	);
