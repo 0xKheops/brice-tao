@@ -14,7 +14,8 @@
 		"generate-clients:sn45": "bunx swagger-typescript-api generate -p https://sn45api.talisman.xyz/openapi.json -o ./src/api/generated -n Sn45Api --api-class-name Sn45Api",
 		"generate-clients": "bun generate-clients:sn45",
 		"simulate": "bun run scripts/simulate-rebalance.ts",
-		"rebalance": "bun run src/main.ts"
+		"rebalance": "bun run src/main.ts",
+		"postinstall": "papi"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched --error-on-warnings"
