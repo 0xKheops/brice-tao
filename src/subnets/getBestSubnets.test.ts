@@ -288,18 +288,21 @@ describe("getBestSubnets evaluations", () => {
 
 		const { evaluations } = await getBestSubnets(sn45, config);
 
-		const sn1 = evaluations.find((e) => e.netuid === 1)!;
-		expect(sn1.passesAllGates).toBe(true);
-		expect(sn1.passesPriceGate).toBe(true);
-		expect(sn1.passesScoreGate).toBe(true);
+		const sn1 = evaluations.find((e) => e.netuid === 1);
+		expect(sn1).toBeDefined();
+		expect(sn1?.passesAllGates).toBe(true);
+		expect(sn1?.passesPriceGate).toBe(true);
+		expect(sn1?.passesScoreGate).toBe(true);
 
-		const sn2 = evaluations.find((e) => e.netuid === 2)!;
-		expect(sn2.passesPriceGate).toBe(false);
-		expect(sn2.passesAllGates).toBe(false);
+		const sn2 = evaluations.find((e) => e.netuid === 2);
+		expect(sn2).toBeDefined();
+		expect(sn2?.passesPriceGate).toBe(false);
+		expect(sn2?.passesAllGates).toBe(false);
 
-		const sn3 = evaluations.find((e) => e.netuid === 3)!;
-		expect(sn3.passesHoldersGate).toBe(false);
-		expect(sn3.passesAllGates).toBe(false);
+		const sn3 = evaluations.find((e) => e.netuid === 3);
+		expect(sn3).toBeDefined();
+		expect(sn3?.passesHoldersGate).toBe(false);
+		expect(sn3?.passesAllGates).toBe(false);
 	});
 
 	it("applies incumbency bias to biasedScore but not raw score", async () => {
@@ -318,9 +321,10 @@ describe("getBestSubnets evaluations", () => {
 			5,
 		);
 
-		const sn1 = evaluations.find((e) => e.netuid === 1)!;
-		expect(sn1.score).toBe(65);
-		expect(sn1.biasedScore).toBe(70);
-		expect(sn1.passesScoreGate).toBe(true);
+		const sn1 = evaluations.find((e) => e.netuid === 1);
+		expect(sn1).toBeDefined();
+		expect(sn1?.score).toBe(65);
+		expect(sn1?.biasedScore).toBe(70);
+		expect(sn1?.passesScoreGate).toBe(true);
 	});
 });

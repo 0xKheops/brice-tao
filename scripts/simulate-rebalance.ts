@@ -115,9 +115,9 @@ try {
 	);
 	console.log("─".repeat(80));
 
-	for (let i = 0; i < winners.length; i++) {
-		const w = winners[i]!;
-		const ev = evaluations.find((e) => e.netuid === w.netuid)!;
+	for (const [i, w] of winners.entries()) {
+		const ev = evaluations.find((e) => e.netuid === w.netuid);
+		if (!ev) continue;
 		const icon = activeSet.has(w.netuid) ? "🟢" : "⚪";
 		const rank = i + 1;
 		const isHeld = heldNetuids?.has(ev.netuid) ?? false;
