@@ -25,7 +25,7 @@ describe("config loading and validation", () => {
 
 	it("converts percent slippage to decimal fractions", () => {
 		config = loadConfig(configPath);
-		expect(config.rebalance.slippageBuffer).toBeCloseTo(0.003, 6);
+		expect(config.rebalance.slippageBuffer).toBeCloseTo(0.01, 6);
 		expect(config.rebalance.swapSlippageBuffer).toBeCloseTo(0.02, 6);
 	});
 

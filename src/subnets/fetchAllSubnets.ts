@@ -5,7 +5,6 @@ export interface SubnetInfo {
 	netuid: number;
 	name: string;
 	taoInEmission: bigint;
-	taoIn: bigint;
 	subnetVolume: bigint;
 	blocksSinceLastStep: bigint;
 	tempo: number;
@@ -54,7 +53,6 @@ export async function fetchAllSubnets(
 			netuid: info.netuid,
 			name,
 			taoInEmission: info.tao_in_emission,
-			taoIn: info.tao_in,
 			subnetVolume: info.subnet_volume,
 			blocksSinceLastStep: info.blocks_since_last_step,
 			tempo: info.tempo,

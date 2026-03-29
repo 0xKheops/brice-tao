@@ -9,7 +9,6 @@ function makeSubnet(
 		netuid: partial.netuid,
 		name: partial.name ?? `SN${partial.netuid}`,
 		taoInEmission: partial.taoInEmission ?? 0n,
-		taoIn: partial.taoIn ?? 0n,
 		subnetVolume: partial.subnetVolume ?? 0n,
 		blocksSinceLastStep: partial.blocksSinceLastStep ?? 0n,
 		tempo: partial.tempo ?? 12,

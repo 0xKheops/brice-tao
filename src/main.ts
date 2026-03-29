@@ -112,7 +112,7 @@ try {
 			.filter(Boolean)
 			.join(",");
 		log.verbose(
-			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} tao_in=${h.taoIn} volume=${h.subnetVolume}${flags ? ` [${flags}]` : ""}`,
+			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} volume=${h.subnetVolume}${flags ? ` [${flags}]` : ""}`,
 		);
 	}
 

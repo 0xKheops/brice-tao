@@ -60,7 +60,6 @@ describe("fetchAllSubnets data fetching", () => {
 			makeDynamicInfo({
 				netuid: 9,
 				tao_in_emission: 11n,
-				tao_in: 2_000n * TAO,
 				subnet_volume: 321n,
 				blocks_since_last_step: 99n,
 				tempo: 42,
@@ -75,7 +74,6 @@ describe("fetchAllSubnets data fetching", () => {
 				netuid: 9,
 				name: "SN9",
 				taoInEmission: 11n,
-				taoIn: 2_000n * TAO,
 				subnetVolume: 321n,
 				blocksSinceLastStep: 99n,
 				tempo: 42,

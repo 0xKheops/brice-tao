@@ -21,8 +21,6 @@ const GATES = appConfig.strategy;
 const INCUMBENCY_BONUS = appConfig.rebalance.incumbencyBonus;
 const MAX_SUBNETS = appConfig.rebalance.maxSubnets;
 
-const RAO = 1_000_000_000;
-
 // ---------------------------------------------------------------------------
 // Environment
 // ---------------------------------------------------------------------------
@@ -191,11 +189,6 @@ try {
 		"Emission %",
 		"Vol/Mcap",
 		"Registration",
-		"Pool τ In",
-		"Chain Vol (τ)",
-		"Emission τ In",
-		"Tempo",
-		"Blks Last Step",
 	];
 	md += `| ${cols.join(" | ")} |\n`;
 	md += `| ${cols.map(() => "---").join(" | ")} |\n`;
@@ -224,11 +217,6 @@ try {
 			gate(r.passesEmissionGate, pct(r.emissionPct)),
 			gate(r.passesVolMcapGate, n(r.volMcapRatio, 4)),
 			gate(r.passesHealthGate, formatRegistration(health)),
-			compact(health ? Number(health.taoIn) / RAO : null),
-			compact(health ? Number(health.subnetVolume) / RAO : null),
-			n(health ? Number(health.taoInEmission) / RAO : null, 0),
-			health?.tempo !== undefined ? String(health.tempo) : "—",
-			health ? String(Number(health.blocksSinceLastStep)) : "—",
 		];
 		md += `| ${values.join(" | ")} |\n`;
 	}
