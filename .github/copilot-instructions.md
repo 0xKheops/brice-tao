@@ -139,7 +139,7 @@ All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/
 - Any change to gate logic in `getBestSubnets.ts` is automatically reflected in the simulation (no manual sync needed)
 - Any change to `getHealthySubnets.ts` thresholds or criteria must be tested against the simulation output
 - If a PR introduces gate evaluation logic outside of `getBestSubnets.ts`, **push back** — direct the author to modify `getBestSubnets.ts` instead
-- Gate thresholds live in `src/config.yaml` and `STRATEGY_DEFAULTS` in `getBestSubnets.ts` — both the rebalancer and simulation read from the same config
+- Gate thresholds live in `src/config.yaml` — both the rebalancer and simulation read from the same config
 
 **Key files:**
 - `src/subnets/getBestSubnets.ts` — gate evaluation + filtering (source of truth)

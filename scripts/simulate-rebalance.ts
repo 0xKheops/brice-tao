@@ -8,10 +8,7 @@ import { getBalances } from "../src/balances/getBalances.ts";
 import { loadConfig } from "../src/config/loadConfig.ts";
 import type { SubnetInfo } from "../src/subnets/fetchAllSubnets.ts";
 import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
-import {
-	getBestSubnets,
-	STRATEGY_DEFAULTS,
-} from "../src/subnets/getBestSubnets.ts";
+import { getBestSubnets } from "../src/subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
 
 // ---------------------------------------------------------------------------
@@ -20,10 +17,7 @@ import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
 const appConfig = loadConfig(
 	new URL("../src/config.yaml", import.meta.url).pathname,
 );
-const GATES = {
-	...STRATEGY_DEFAULTS,
-	...appConfig.strategy,
-};
+const GATES = appConfig.strategy;
 const INCUMBENCY_BONUS = appConfig.rebalance.incumbencyBonus;
 const MAX_SUBNETS = appConfig.rebalance.maxSubnets;
 
@@ -229,11 +223,8 @@ try {
 			sellBuyRatio !== null ? n(sellBuyRatio, 2) : "∞",
 			gate(r.passesEmissionGate, pct(r.emissionPct)),
 			gate(r.passesVolMcapGate, n(r.volMcapRatio, 4)),
-			formatRegistration(health),
-			gate(
-				r.passesHealthGate,
-				compact(health ? Number(health.taoIn) / RAO : null),
-			),
+			gate(r.passesHealthGate, formatRegistration(health)),
+			compact(health ? Number(health.taoIn) / RAO : null),
 			compact(health ? Number(health.subnetVolume) / RAO : null),
 			n(health ? Number(health.taoInEmission) / RAO : null, 0),
 			health?.tempo !== undefined ? String(health.tempo) : "—",

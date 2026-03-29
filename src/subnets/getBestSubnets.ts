@@ -15,28 +15,19 @@ interface LeaderboardEntry {
 	score: number;
 }
 
-export const STRATEGY_DEFAULTS = {
-	minScore: 70,
-	minVolumeTao: 100,
-	minMcapTao: 1_000,
-	minHolders: 500,
-	minEmissionPct: 0,
-	bottomPercentileCutoff: 10,
-} as const;
-
 export interface StrategyConfig {
-	/** Minimum SN45 leaderboard score to be considered (default: 70) */
-	minScore?: number;
-	/** Minimum 24h volume in TAO to be considered (default: 100) */
-	minVolumeTao?: number;
-	/** Minimum market cap in TAO (default: 0 — no mcap floor) */
-	minMcapTao?: number;
-	/** Minimum unique holder wallets — rejects concentrated/fragile subnets (default: 500) */
-	minHolders?: number;
-	/** Minimum emission % from root validators (default: 0 — all emission levels accepted) */
-	minEmissionPct?: number;
-	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
-	bottomPercentileCutoff?: number;
+	/** Minimum SN45 leaderboard score to be considered */
+	minScore: number;
+	/** Minimum 24h volume in TAO to be considered */
+	minVolumeTao: number;
+	/** Minimum market cap in TAO — rejects illiquid subnets */
+	minMcapTao: number;
+	/** Minimum unique holder wallets — rejects concentrated/fragile subnets */
+	minHolders: number;
+	/** Minimum emission % from root validators */
+	minEmissionPct: number;
+	/** Drop subnets in the bottom N% of volume/mcap ratio */
+	bottomPercentileCutoff: number;
 }
 
 export interface SubnetScore {
@@ -82,23 +73,14 @@ interface Logger {
 
 export async function getBestSubnets(
 	sn45: Sn45Api<unknown>,
-	config?: StrategyConfig,
+	config: StrategyConfig,
 	activeNetuids?: Set<number>,
 	logger?: Logger,
 	subnetNames?: Map<number, string>,
 	heldNetuids?: Set<number>,
 	incumbencyBonus?: number,
 ): Promise<GetBestSubnetsResult> {
-	const cfg = {
-		minScore: config?.minScore ?? STRATEGY_DEFAULTS.minScore,
-		minVolumeTao: config?.minVolumeTao ?? STRATEGY_DEFAULTS.minVolumeTao,
-		minMcapTao: config?.minMcapTao ?? STRATEGY_DEFAULTS.minMcapTao,
-		minHolders: config?.minHolders ?? STRATEGY_DEFAULTS.minHolders,
-		minEmissionPct: config?.minEmissionPct ?? STRATEGY_DEFAULTS.minEmissionPct,
-		bottomPercentileCutoff:
-			config?.bottomPercentileCutoff ??
-			STRATEGY_DEFAULTS.bottomPercentileCutoff,
-	};
+	const cfg = config;
 
 	const getName = (netuid: number) => subnetNames?.get(netuid) ?? `SN${netuid}`;
 	const label = (netuid: number) =>

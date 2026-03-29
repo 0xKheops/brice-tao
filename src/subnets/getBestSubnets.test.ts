@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from "bun:test";
 import type { Sn45Api } from "../api/generated/Sn45Api.ts";
 import { getBestSubnets, type StrategyConfig } from "./getBestSubnets.ts";
 
+/** Permissive config that lets makeEntry() defaults pass all gates. */
+const BASE_CONFIG: StrategyConfig = {
+	minScore: 70,
+	minVolumeTao: 100,
+	minMcapTao: 0,
+	minHolders: 500,
+	minEmissionPct: 0,
+	bottomPercentileCutoff: 10,
+};
+
 interface LeaderboardEntryFixture {
 	netuid: number;
 	priceChange?: number | null;
@@ -65,7 +75,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		];
 		const { sn45, getSubnetLeaderboard } = makeSn45(entries);
 
-		const { winners } = await getBestSubnets(sn45, undefined, new Set([10]));
+		const { winners } = await getBestSubnets(sn45, BASE_CONFIG, new Set([10]));
 
 		expect(getSubnetLeaderboard).toHaveBeenCalledWith({ period: "1d" });
 		expect(winners).toHaveLength(1);
@@ -81,7 +91,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const { winners } = await getBestSubnets(sn45);
+		const { winners } = await getBestSubnets(sn45, BASE_CONFIG);
 
 		expect(winners).toEqual([]);
 	});
@@ -114,6 +124,7 @@ describe("getBestSubnets filtering and ranking", () => {
 			}),
 		];
 		const config: StrategyConfig = {
+			...BASE_CONFIG,
 			bottomPercentileCutoff: 25,
 		};
 		const { sn45 } = makeSn45(entries);
@@ -135,6 +146,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		const { sn45 } = makeSn45(entries);
 
 		const { winners } = await getBestSubnets(sn45, {
+			...BASE_CONFIG,
 			bottomPercentileCutoff: 0,
 		});
 
@@ -150,6 +162,7 @@ describe("getBestSubnets filtering and ranking", () => {
 			makeEntry({ netuid: 23, score: 90 }),
 		];
 		const config: StrategyConfig = {
+			...BASE_CONFIG,
 			minScore: 70,
 			minVolumeTao: 0,
 			minMcapTao: 0,
@@ -175,7 +188,7 @@ describe("getBestSubnets filtering and ranking", () => {
 		const logger = { verbose: vi.fn() };
 		const { sn45 } = makeSn45(entries);
 
-		await getBestSubnets(sn45, undefined, undefined, logger);
+		await getBestSubnets(sn45, BASE_CONFIG, undefined, logger);
 
 		const calls = logger.verbose.mock.calls.map(
 			(c: unknown[]) => c[0] as string,
@@ -201,7 +214,7 @@ describe("getBestSubnets filtering and ranking", () => {
 
 		const { winners } = await getBestSubnets(
 			sn45,
-			{ bottomPercentileCutoff: 0 },
+			{ ...BASE_CONFIG, bottomPercentileCutoff: 0 },
 			undefined,
 			undefined,
 			names,
@@ -220,7 +233,7 @@ describe("getBestSubnets evaluations", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 
-		const { evaluations } = await getBestSubnets(sn45);
+		const { evaluations } = await getBestSubnets(sn45, BASE_CONFIG);
 
 		expect(evaluations).toHaveLength(3);
 		expect(evaluations.map((e) => e.netuid).sort()).toEqual([0, 1, 2]);
@@ -234,6 +247,7 @@ describe("getBestSubnets evaluations", () => {
 		];
 		const { sn45 } = makeSn45(entries);
 		const config: StrategyConfig = {
+			...BASE_CONFIG,
 			bottomPercentileCutoff: 0,
 			minHolders: 500,
 		};
@@ -264,7 +278,7 @@ describe("getBestSubnets evaluations", () => {
 
 		const { evaluations } = await getBestSubnets(
 			sn45,
-			{ bottomPercentileCutoff: 0 },
+			{ ...BASE_CONFIG, bottomPercentileCutoff: 0 },
 			undefined,
 			undefined,
 			undefined,
