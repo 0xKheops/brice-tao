@@ -8,17 +8,14 @@ rebalance:
   minOperationTao: 0.01
   minStakeTao: 0.01
   minRebalanceTao: 0.25
-  slippageBufferPercent: 0.3       # 0.3% for stake/unstake
+  slippageBufferPercent: 1       # 1% for stake/unstake
   swapSlippageBufferPercent: 2     # 2% for swaps (absorbs intra-batch drift)
   incumbencyBonus: 3
 
 strategy:
   minScore: 70
   minVolumeTao: 100
-  minMcapTao: 0
+  minMcapTao: 1000
   minHolders: 500
   minEmissionPct: 0
   bottomPercentileCutoff: 10       # drop bottom 10% by vol/mcap ratio
-
-health:
-  minPoolTao: 1000

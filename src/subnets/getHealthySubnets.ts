@@ -1,19 +1,14 @@
-import { TAO } from "../rebalance/constants.ts";
 import type { SubnetInfo } from "./fetchAllSubnets.ts";
 
 /**
- * Filter subnets down to the "healthy" set — those with meaningful
- * liquidity and not at risk of imminent deregistration.
+ * Filter subnets down to the "healthy" set — those not at risk of
+ * imminent deregistration.
  *
- * Criteria (bypassed for immune subnets):
- *  - tao_in >= minPoolTao  (meaningful liquidity in the pool)
+ * Criteria:
  *  - not the subnet that would be pruned next
  *  - root subnet (0) is always included
  */
-export function getHealthySubnets(
-	subnets: SubnetInfo[],
-	minPoolTao: bigint = 1_000n * TAO,
-): Set<number> {
+export function getHealthySubnets(subnets: SubnetInfo[]): Set<number> {
 	const healthyNetuids = new Set<number>();
 
 	for (const info of subnets) {
@@ -23,18 +18,10 @@ export function getHealthySubnets(
 			continue;
 		}
 
-		// Immune subnets bypass all health gates
-		if (info.isImmune) {
-			healthyNetuids.add(info.netuid);
-			continue;
-		}
-
 		// Exclude the subnet that would be deregistered next
 		if (info.isPruneTarget) continue;
 
-		if (info.taoIn >= minPoolTao) {
-			healthyNetuids.add(info.netuid);
-		}
+		healthyNetuids.add(info.netuid);
 	}
 
 	return healthyNetuids;

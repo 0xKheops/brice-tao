@@ -6,7 +6,6 @@ import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "../src/api/generated/Sn45Api.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
 import { loadConfig } from "../src/config/loadConfig.ts";
-import { TAO } from "../src/rebalance/tao.ts";
 import type { SubnetInfo } from "../src/subnets/fetchAllSubnets.ts";
 import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
 import {
@@ -73,16 +72,9 @@ try {
 
 	// Fetch on-chain data
 	const subnets = await fetchAllSubnets(api);
-	const healthyNetuids = getHealthySubnets(
-		subnets,
-		BigInt(appConfig.health.minPoolTao) * TAO,
-	);
+	const healthyNetuids = getHealthySubnets(subnets);
 	const subnetMap = new Map(subnets.map((s) => [s.netuid, s]));
 	const subnetNames = new Map(subnets.map((s) => [s.netuid, s.name]));
-	const immuneNetuids = new Set(
-		subnets.filter((s) => s.isImmune).map((s) => s.netuid),
-	);
-
 	// Optionally fetch balances for incumbency bonus
 	let heldNetuids: Set<number> | undefined;
 	if (coldkey) {
@@ -98,7 +90,6 @@ try {
 		undefined,
 		subnetNames,
 		heldNetuids,
-		immuneNetuids,
 		INCUMBENCY_BONUS,
 	);
 
@@ -171,7 +162,6 @@ try {
 	md += `| Min Holders | ${GATES.minHolders} |\n`;
 	md += `| Min Emission % | ${GATES.minEmissionPct}% |\n`;
 	md += `| Vol/Mcap Bottom Percentile Cutoff | ${GATES.bottomPercentileCutoff}% |\n`;
-	md += `| Min Pool Liquidity | ${appConfig.health.minPoolTao} τ |\n`;
 	md += `| Incumbency Bonus | +${INCUMBENCY_BONUS} pts |\n`;
 	md += `| Max Subnets | ${MAX_SUBNETS} |\n`;
 	md += `\n`;

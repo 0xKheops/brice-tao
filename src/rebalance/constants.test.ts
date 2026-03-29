@@ -12,7 +12,6 @@ describe("config loading and validation", () => {
 		expect(config).toBeDefined();
 		expect(config.rebalance).toBeDefined();
 		expect(config.strategy).toBeDefined();
-		expect(config.health).toBeDefined();
 	});
 
 	it("resolves TAO amounts to RAO bigints", () => {
@@ -84,8 +83,6 @@ describe("config loading and validation", () => {
 				"  minHolders: 500",
 				"  minEmissionPct: 0",
 				"  bottomPercentileCutoff: 10",
-				"health:",
-				"  minPoolTao: 1000",
 			].join("\n"),
 		);
 		expect(() => loadConfig(tmpPath)).toThrow(

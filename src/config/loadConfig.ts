@@ -35,7 +35,6 @@ function validateRawConfig(raw: unknown): RawConfig {
 
 	const rebalance = requireSection(obj, "rebalance");
 	const strategy = requireSection(obj, "strategy");
-	const health = requireSection(obj, "health");
 
 	return {
 		rebalance: {
@@ -66,9 +65,6 @@ function validateRawConfig(raw: unknown): RawConfig {
 				"bottomPercentileCutoff",
 			),
 		},
-		health: {
-			minPoolTao: requireNonNegativeNumber(health, "minPoolTao"),
-		},
 	};
 }
 
@@ -86,7 +82,6 @@ function resolveConfig(raw: RawConfig): AppConfig {
 			incumbencyBonus: raw.rebalance.incumbencyBonus,
 		},
 		strategy: { ...raw.strategy },
-		health: { ...raw.health },
 	};
 }
 

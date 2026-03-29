@@ -22,9 +22,6 @@ export interface RawConfig {
 		/** Drop subnets in bottom N% of vol/mcap ratio (e.g., 10 = bottom 10%) */
 		bottomPercentileCutoff: number;
 	};
-	health: {
-		minPoolTao: number;
-	};
 }
 
 /** Resolved config — ready for use in code (RAO bigints, decimal fractions) */
@@ -49,8 +46,5 @@ export interface AppConfig {
 		minHolders: number;
 		minEmissionPct: number;
 		bottomPercentileCutoff: number;
-	};
-	health: {
-		minPoolTao: number;
 	};
 }

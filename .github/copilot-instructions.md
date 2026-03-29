@@ -50,7 +50,7 @@ src/
     getBalances.ts        → TAO/Alpha balance queries via polkadot-api
   subnets/
     fetchAllSubnets.ts    → Subnet registry (SN45 API)
-    getHealthySubnets.ts  → Liquidity & emission health checks
+    getHealthySubnets.ts  → Immunity & prune-risk health checks
     getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
   notifications/
     discord.ts            → Discord webhook notifications
@@ -143,7 +143,7 @@ All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/
 
 **Key files:**
 - `src/subnets/getBestSubnets.ts` — gate evaluation + filtering (source of truth)
-- `src/subnets/getHealthySubnets.ts` — on-chain health filter (pool liquidity, immunity, prune risk)
+- `src/subnets/getHealthySubnets.ts` — on-chain health filter (immunity, prune risk)
 - `src/config.yaml` — tunable thresholds
 - `scripts/simulate-rebalance.ts` — simulation (consumer, not source of truth)
 - `src/main.ts` — rebalancer (consumer, not source of truth)

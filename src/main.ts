@@ -96,10 +96,7 @@ try {
 		fetchAllSubnets(api),
 		api.query.System.Account.getValue(proxyAddress),
 	]);
-	const healthyNetuids = getHealthySubnets(
-		allSubnets,
-		BigInt(config.health.minPoolTao) * TAO,
-	);
+	const healthyNetuids = getHealthySubnets(allSubnets);
 	const proxyFreeBalance = proxyAccount.data.free;
 
 	const pruneTarget = allSubnets.find((s) => s.isPruneTarget);
@@ -121,9 +118,6 @@ try {
 
 	const subnetNames = new Map(allSubnets.map((s) => [s.netuid, s.name]));
 	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
-	const immuneNetuids = new Set(
-		allSubnets.filter((s) => s.isImmune).map((s) => s.netuid),
-	);
 	const { winners: eligible } = await getBestSubnets(
 		sn45,
 		config.strategy,
@@ -131,7 +125,6 @@ try {
 		log,
 		subnetNames,
 		heldNetuids,
-		immuneNetuids,
 		config.rebalance.incumbencyBonus,
 	);
 

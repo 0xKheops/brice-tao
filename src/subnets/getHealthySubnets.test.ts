@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { TAO } from "../rebalance/constants.ts";
 import type { SubnetInfo } from "./fetchAllSubnets.ts";
 import { getHealthySubnets } from "./getHealthySubnets.ts";
 
@@ -21,35 +20,24 @@ function makeSubnet(
 }
 
 describe("getHealthySubnets health filtering", () => {
-	it("marks root as healthy and includes subnets with sufficient pool regardless of emission", () => {
+	it("marks root as healthy and includes all non-prune-target subnets", () => {
 		const subnets = [
-			makeSubnet({ netuid: 0, taoIn: 1n }),
-			makeSubnet({ netuid: 1, taoIn: 1_500n * TAO }),
-			makeSubnet({ netuid: 2, taoIn: 10_000n * TAO }),
-			makeSubnet({ netuid: 3, taoIn: 999n * TAO }),
+			makeSubnet({ netuid: 0 }),
+			makeSubnet({ netuid: 1 }),
+			makeSubnet({ netuid: 2 }),
+			makeSubnet({ netuid: 3 }),
 		];
 
 		const result = getHealthySubnets(subnets);
 
-		expect([...result].sort((a, b) => a - b)).toEqual([0, 1, 2]);
-	});
-
-	it("respects custom minimum pool threshold for non-root subnet eligibility", () => {
-		const subnets = [
-			makeSubnet({ netuid: 5, taoIn: 3_000n * TAO }),
-			makeSubnet({ netuid: 6, taoIn: 5_000n * TAO }),
-		];
-
-		const result = getHealthySubnets(subnets, 4_000n * TAO);
-
-		expect([...result]).toEqual([6]);
+		expect([...result].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
 	});
 
 	it("excludes prune targets from healthy netuids", () => {
 		const subnets = [
-			makeSubnet({ netuid: 0, taoIn: 1n }),
-			makeSubnet({ netuid: 10, taoIn: 5_000n * TAO }),
-			makeSubnet({ netuid: 20, taoIn: 5_000n * TAO, isPruneTarget: true }),
+			makeSubnet({ netuid: 0 }),
+			makeSubnet({ netuid: 10 }),
+			makeSubnet({ netuid: 20, isPruneTarget: true }),
 		];
 
 		const result = getHealthySubnets(subnets);
@@ -63,19 +51,18 @@ describe("getHealthySubnets health filtering", () => {
 		expect([...result]).toEqual([]);
 	});
 
-	it("includes immune subnets regardless of pool liquidity and prune risk", () => {
+	it("excludes prune targets even when immune", () => {
 		const subnets = [
 			makeSubnet({
 				netuid: 42,
-				taoIn: 1n,
 				isPruneTarget: true,
 				isImmune: true,
 			}),
-			makeSubnet({ netuid: 43, taoIn: 1n, isPruneTarget: false }),
+			makeSubnet({ netuid: 43, isPruneTarget: true }),
 		];
 
 		const result = getHealthySubnets(subnets);
 
-		expect([...result]).toEqual([42]);
+		expect([...result]).toEqual([]);
 	});
 });

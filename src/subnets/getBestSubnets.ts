@@ -18,12 +18,10 @@ interface LeaderboardEntry {
 export const STRATEGY_DEFAULTS = {
 	minScore: 70,
 	minVolumeTao: 100,
-	minMcapTao: 0,
+	minMcapTao: 1_000,
 	minHolders: 500,
 	minEmissionPct: 0,
 	bottomPercentileCutoff: 10,
-	/** Minimum TAO locked in subnet pool to consider it healthy */
-	minPoolTao: 1_000,
 } as const;
 
 export interface StrategyConfig {
@@ -39,8 +37,6 @@ export interface StrategyConfig {
 	minEmissionPct?: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio (default: 10) */
 	bottomPercentileCutoff?: number;
-	/** Minimum TAO locked in subnet pool — rejects illiquid subnets (default: 1000) */
-	minPoolTao?: number;
 }
 
 export interface SubnetScore {
@@ -91,7 +87,6 @@ export async function getBestSubnets(
 	logger?: Logger,
 	subnetNames?: Map<number, string>,
 	heldNetuids?: Set<number>,
-	immuneNetuids?: Set<number>,
 	incumbencyBonus?: number,
 ): Promise<GetBestSubnetsResult> {
 	const cfg = {
@@ -118,7 +113,6 @@ export async function getBestSubnets(
 
 	// --- Phase 1: evaluate per-gate results for every subnet ---
 	const evaluations: SubnetEvaluation[] = leaderboard.map((s) => {
-		const isImmune = immuneNetuids?.has(s.netuid) ?? false;
 		const isHealthy =
 			activeNetuids === undefined || activeNetuids.has(s.netuid);
 		const biasedScore = heldNetuids?.has(s.netuid) ? s.score + bias : s.score;
@@ -129,15 +123,13 @@ export async function getBestSubnets(
 			s.emaTaoFlow !== null ? Number(s.emaTaoFlow) / RAO : null;
 
 		const passesPriceGate = s.netuid !== 0 && s.priceChange !== null;
-		const passesHealthGate = isImmune || isHealthy;
+		const passesHealthGate = isHealthy;
 		const passesScoreGate = biasedScore >= cfg.minScore;
-		const passesVolumeGate = isImmune || volumeTao >= cfg.minVolumeTao;
-		const passesMcapGate =
-			isImmune || (mcapTao !== null && mcapTao >= cfg.minMcapTao);
-		const passesHoldersGate = isImmune || s.totalHolders >= cfg.minHolders;
+		const passesVolumeGate = volumeTao >= cfg.minVolumeTao;
+		const passesMcapGate = mcapTao !== null && mcapTao >= cfg.minMcapTao;
+		const passesHoldersGate = s.totalHolders >= cfg.minHolders;
 		const passesEmissionGate =
-			isImmune ||
-			(s.emissionPct !== null && s.emissionPct >= cfg.minEmissionPct);
+			s.emissionPct !== null && s.emissionPct >= cfg.minEmissionPct;
 
 		return {
 			netuid: s.netuid,
@@ -190,11 +182,10 @@ export async function getBestSubnets(
 	const cutoffValue = ratioValues[cutoffIdx] ?? 0;
 
 	for (const e of evaluations) {
-		const isImmune = immuneNetuids?.has(e.netuid) ?? false;
 		const ratio =
 			e.mcapTao !== null && e.mcapTao > 0 ? e.volumeTao / e.mcapTao : null;
 		e.volMcapRatio = ratio;
-		e.passesVolMcapGate = isImmune || (ratio !== null && ratio >= cutoffValue);
+		e.passesVolMcapGate = ratio !== null && ratio >= cutoffValue;
 		e.passesAllGates =
 			e.passesPriceGate &&
 			e.passesHealthGate &&
