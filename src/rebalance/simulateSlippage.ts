@@ -123,26 +123,25 @@ async function simulateSwap(
 	op: SwapOperation,
 	swapSlippageBuffer: number,
 ): Promise<SwapOperation> {
-	// swap_stake_limit limit_price = min acceptable ratio (origin_price / dest_price)
-	// On-chain check: REJECT if limit_price / 1e9 > current ratio
-	const [originPrice, destPrice] = await Promise.all([
-		api.apis.SwapRuntimeApi.current_alpha_price(op.originNetuid),
-		api.apis.SwapRuntimeApi.current_alpha_price(op.destinationNetuid),
-	]);
+	const simUnstake = await api.apis.SwapRuntimeApi.sim_swap_alpha_for_tao(
+		op.originNetuid,
+		op.alphaAmount,
+	);
+	const unstakePrice = (simUnstake.tao_amount * TAO) / simUnstake.alpha_amount;
 
-	if (destPrice === 0n) {
-		log.warn(
-			`Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: zero dest price — skipping limit`,
-		);
-		return op;
-	}
+	const simStake = await api.apis.SwapRuntimeApi.sim_swap_tao_for_alpha(
+		op.destinationNetuid,
+		simUnstake.tao_amount,
+	);
+	const stakePrice = (simStake.tao_amount * TAO) / simStake.alpha_amount;
 
-	const ratio = (originPrice * TAO) / destPrice;
+	const actualPrice = (unstakePrice * TAO) / stakePrice; // origin TAO per dest alpha
+
 	// Use wider swap buffer to absorb intra-batch price compounding
 	const bps = BigInt(Math.round(swapSlippageBuffer * 10_000));
-	const limitPrice = ratio - (ratio * bps) / 10_000n;
+	const limitPrice = actualPrice - (actualPrice * bps) / 10_000n;
 	log.verbose(
-		`  Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: ratio=${ratio} limit=${limitPrice}`,
+		`  Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: ratio=${actualPrice} limit=${limitPrice}`,
 	);
 	return { ...op, limitPrice };
 }
