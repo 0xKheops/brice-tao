@@ -14,7 +14,6 @@ function makeApi() {
 			SwapRuntimeApi: {
 				sim_swap_tao_for_alpha: vi.fn(),
 				sim_swap_alpha_for_tao: vi.fn(),
-				current_alpha_price: vi.fn(),
 			},
 		},
 	};
@@ -23,16 +22,18 @@ function makeApi() {
 describe("simulateAllOperations", () => {
 	it("applies slippage buffers to stake, unstake, unstake_partial and swap", async () => {
 		const api = makeApi();
-		api.apis.SwapRuntimeApi.sim_swap_tao_for_alpha.mockResolvedValue({
-			tao_amount: 2n * TAO,
-			alpha_amount: TAO,
-		});
+		// stake calls sim_swap_tao_for_alpha (1st), swap's stake leg calls it (2nd)
+		api.apis.SwapRuntimeApi.sim_swap_tao_for_alpha
+			.mockResolvedValueOnce({ tao_amount: 2n * TAO, alpha_amount: TAO })
+			.mockResolvedValueOnce({
+				tao_amount: 2n * TAO,
+				alpha_amount: 2n * TAO,
+			});
+		// unstake (1st), unstake_partial (2nd), swap's unstake leg (3rd)
 		api.apis.SwapRuntimeApi.sim_swap_alpha_for_tao
 			.mockResolvedValueOnce({ tao_amount: 3n * TAO, alpha_amount: TAO })
-			.mockResolvedValueOnce({ tao_amount: 5n * TAO, alpha_amount: 2n * TAO });
-		api.apis.SwapRuntimeApi.current_alpha_price
-			.mockResolvedValueOnce(2n * TAO)
-			.mockResolvedValueOnce(TAO);
+			.mockResolvedValueOnce({ tao_amount: 5n * TAO, alpha_amount: 2n * TAO })
+			.mockResolvedValueOnce({ tao_amount: 2n * TAO, alpha_amount: TAO });
 
 		const operations: RebalanceOperation[] = [
 			{
@@ -121,9 +122,6 @@ describe("simulateAllOperations", () => {
 			tao_amount: 0n,
 			alpha_amount: TAO,
 		});
-		api.apis.SwapRuntimeApi.current_alpha_price
-			.mockResolvedValueOnce(2n * TAO)
-			.mockResolvedValueOnce(0n);
 
 		const operations: RebalanceOperation[] = [
 			{

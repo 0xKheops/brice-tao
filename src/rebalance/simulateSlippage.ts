@@ -127,15 +127,27 @@ async function simulateSwap(
 		op.originNetuid,
 		op.alphaAmount,
 	);
-	const unstakePrice = (simUnstake.tao_amount * TAO) / simUnstake.alpha_amount;
+	if (simUnstake.tao_amount === 0n || simUnstake.alpha_amount === 0n) {
+		log.warn(
+			`Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: zero unstake output — skipping limit`,
+		);
+		return op;
+	}
 
 	const simStake = await api.apis.SwapRuntimeApi.sim_swap_tao_for_alpha(
 		op.destinationNetuid,
 		simUnstake.tao_amount,
 	);
-	const stakePrice = (simStake.tao_amount * TAO) / simStake.alpha_amount;
+	if (simStake.alpha_amount === 0n) {
+		log.warn(
+			`Sim swap SN${op.originNetuid}→SN${op.destinationNetuid}: zero stake output — skipping limit`,
+		);
+		return op;
+	}
 
-	const actualPrice = (unstakePrice * TAO) / stakePrice; // origin TAO per dest alpha
+	// conversion ratio: dest alpha received per origin alpha spent, scaled by TAO (10^9)
+	// this matches what the runtime expects for swap_stake_limit's limit_price
+	const actualPrice = (simStake.alpha_amount * TAO) / simUnstake.alpha_amount;
 
 	// Use wider swap buffer to absorb intra-batch price compounding
 	const bps = BigInt(Math.round(swapSlippageBuffer * 10_000));
