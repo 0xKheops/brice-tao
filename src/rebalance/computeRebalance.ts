@@ -430,6 +430,11 @@ function moveOp(
 	netuid: number,
 	originHotkey: string,
 	destinationHotkey: string,
+	/**
+	 * Amount of alpha to move. Defaults to the maximum value via U64_MAX.
+	 * For full move, it's recommended to use the default value (it will not cost more fee as it's using fixed-width encoding, and fixed weight).
+	 * For partial reductions, calculate the alpha amount corresponding to the TAO reduction to avoid unnecessarily moving more stake than needed.
+	 */
 	alphaAmount: bigint = U64_MAX,
 ): MoveOperation {
 	return {
