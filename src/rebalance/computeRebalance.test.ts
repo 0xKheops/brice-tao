@@ -247,7 +247,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		}));
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 2n * MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO,
+			free: FREE_RESERVE_TAO + parseTao(0.5),
 			stakes: [
 				makeStake({
 					netuid: 9,
@@ -277,13 +277,19 @@ describe("computeRebalance target choice and weird cases", () => {
 			TEST_CONFIG,
 		);
 
+		// SN50 exit is swapped to SN10 (sufficient deficit), with move since hotkeys differ
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					kind: "unstake",
-					netuid: 50,
-					hotkey: "5alpha".padEnd(48, "a"),
+					kind: "swap",
+					originNetuid: 50,
+					destinationNetuid: 10,
 				}),
+			]),
+		);
+		// SN9 stake uses the alphabetically-first existing hotkey (alpha < beta)
+		expect(plan.operations).toEqual(
+			expect.arrayContaining([
 				expect.objectContaining({
 					kind: "stake",
 					netuid: 9,
@@ -315,7 +321,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		});
 	});
 
-	it("prefers swap over full exit unstake only when a target shares the same hotkey", async () => {
+	it("prefers swap without move when target shares the same hotkey", async () => {
 		vi.spyOn(
 			pickValidatorModule,
 			"pickBestValidatorByYield",
@@ -369,7 +375,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("unstakes full exits when no target has matching hotkey", async () => {
+	it("swaps full exits with move when target has different hotkey", async () => {
 		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
 			{
 				hotkey: hotkey("different"),
@@ -400,12 +406,22 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					kind: "unstake",
-					netuid: 77,
+					kind: "swap",
+					originNetuid: 77,
+					destinationNetuid: 5,
 					hotkey: hotkey("source"),
+				}),
+				expect.objectContaining({
+					kind: "move",
+					netuid: 5,
+					originHotkey: hotkey("source"),
+					destinationHotkey: hotkey("different"),
 				}),
 			]),
 		);
+		expect(
+			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 77),
+		).toBeUndefined();
 	});
 
 	it("skips dust exits below minimum operation threshold", async () => {
@@ -514,6 +530,7 @@ describe("computeRebalance target choice and weird cases", () => {
 				yieldPerAlpha: 1,
 			},
 		}));
+		// Exit position (1 TAO) exceeds per-target deficit (~0.66 TAO) so it must unstake
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
 			free: FREE_RESERVE_TAO,
@@ -523,7 +540,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			eligible(1, 2),
+			eligible(1, 2, 3),
 			TEST_CONFIG,
 		);
 
@@ -547,6 +564,7 @@ describe("computeRebalance target choice and weird cases", () => {
 				yieldPerAlpha: 1,
 			},
 		}));
+		// Exit position (2 TAO) exceeds per-target deficit (1 TAO each) so it must unstake
 		const unstakeValue = 2n * TAO;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + unstakeValue,
@@ -564,7 +582,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			eligible(1),
+			eligible(1, 2),
 			TEST_CONFIG,
 		);
 
@@ -573,13 +591,13 @@ describe("computeRebalance target choice and weird cases", () => {
 		);
 		expect(unstake).toBeDefined();
 
-		const stake = plan.operations.find(
-			(op) => op.kind === "stake" && op.netuid === 1,
+		// Total staked should equal unstake proceeds minus reserve
+		const stakes = plan.operations.filter((op) => op.kind === "stake");
+		const totalStaked = stakes.reduce(
+			(sum, op) => sum + (op.kind === "stake" ? op.taoAmount : 0n),
+			0n,
 		);
-		expect(stake).toBeDefined();
-		expect(stake?.kind === "stake" && stake?.taoAmount).toBe(
-			unstakeValue - FREE_RESERVE_TAO,
-		);
+		expect(totalStaked).toBe(unstakeValue - FREE_RESERVE_TAO);
 	});
 
 	it("reports insufficient free balance per target when deficits cannot be funded", async () => {
@@ -736,7 +754,11 @@ describe("computeRebalance target choice and weird cases", () => {
 		);
 
 		expect(
-			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 44),
+			plan.operations.find(
+				(op) =>
+					(op.kind === "swap" && op.originNetuid === 44) ||
+					(op.kind === "unstake" && op.netuid === 44),
+			),
 		).toBeDefined();
 	});
 });

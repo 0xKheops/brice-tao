@@ -33,6 +33,8 @@ function describeOp(op: RebalanceOperation): string {
 			return `📤 UNSTAKE SN${op.netuid}: ~${formatTao(op.estimatedTaoValue)} τ (partial)`;
 		case "stake":
 			return `📥 STAKE SN${op.netuid}: ${formatTao(op.taoAmount)} τ`;
+		case "move":
+			return `🔀 MOVE SN${op.netuid}: change validator`;
 	}
 }
 

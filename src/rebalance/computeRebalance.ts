@@ -7,10 +7,14 @@ import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import { pickBestValidatorByYield } from "./pickBestValidator.ts";
 import type {
+	MoveOperation,
 	RebalanceOperation,
 	RebalancePlan,
 	TargetSubnet,
 } from "./types.ts";
+
+/** u64::MAX — used with move_stake to sweep all alpha for a hotkey on a subnet */
+const U64_MAX = 18_446_744_073_709_551_615n;
 
 type Api = TypedApi<typeof bittensor>;
 
@@ -133,7 +137,7 @@ function generateOperations(
 		fulfilled.set(t.netuid, existing);
 	}
 
-	// 1. Full exits — try swap to underweight target only when hotkeys match, otherwise unstake.
+	// 1. Full exits — swap to underweight target, then move hotkey if needed.
 	for (const pos of positions) {
 		if (pos.classification !== "exit") continue;
 		if (pos.taoValue < config.minOperationTao) {
@@ -147,9 +151,7 @@ function generateOperations(
 		const bestSwapTarget = targets
 			.filter((t) => {
 				const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
-				if (deficit < pos.taoValue) return false;
-				const targetHotkey = targetHotkeys.get(t.netuid);
-				return targetHotkey === pos.hotkey;
+				return deficit >= pos.taoValue;
 			})
 			.sort((a, b) =>
 				Number(
@@ -160,6 +162,7 @@ function generateOperations(
 			)[0];
 
 		if (bestSwapTarget) {
+			const targetHotkey = targetHotkeys.get(bestSwapTarget.netuid);
 			operations.push({
 				kind: "swap",
 				originNetuid: pos.netuid,
@@ -169,12 +172,21 @@ function generateOperations(
 				estimatedTaoValue: pos.taoValue,
 				limitPrice: 0n,
 			});
+			if (targetHotkey && targetHotkey !== pos.hotkey) {
+				operations.push(
+					moveOp(bestSwapTarget.netuid, pos.hotkey, targetHotkey),
+				);
+				log.verbose(
+					`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ + move hotkey`,
+				);
+			} else {
+				log.verbose(
+					`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
+				);
+			}
 			fulfilled.set(
 				bestSwapTarget.netuid,
 				(fulfilled.get(bestSwapTarget.netuid) ?? 0n) + pos.taoValue,
-			);
-			log.verbose(
-				`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
 			);
 			continue;
 		}
@@ -188,11 +200,11 @@ function generateOperations(
 			estimatedTaoValue: pos.taoValue,
 		});
 		log.verbose(
-			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no matching swap destination hotkey)`,
+			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target with sufficient deficit)`,
 		);
 	}
 
-	// 2. Overweight reductions — try swaps only where destination hotkey matches source hotkey.
+	// 2. Overweight reductions — swap excess to underweight target, then move hotkey if needed.
 	for (const target of targets) {
 		const keepPositions = positions.filter(
 			(p) => p.netuid === target.netuid && p.classification === "keep",
@@ -218,7 +230,6 @@ function generateOperations(
 
 			const fullSwapTarget = targets
 				.filter((destTarget) => {
-					if (targetHotkeys.get(destTarget.netuid) !== pos.hotkey) return false;
 					const destDeficit =
 						destTarget.targetTaoValue -
 						(fulfilled.get(destTarget.netuid) ?? 0n);
@@ -234,6 +245,7 @@ function generateOperations(
 
 			if (fullSwapTarget) {
 				const destFulfilled = fulfilled.get(fullSwapTarget.netuid) ?? 0n;
+				const targetHotkey = targetHotkeys.get(fullSwapTarget.netuid);
 				operations.push({
 					kind: "swap",
 					originNetuid: pos.netuid,
@@ -243,11 +255,19 @@ function generateOperations(
 					estimatedTaoValue: reduceAmount,
 					limitPrice: 0n,
 				});
+				if (targetHotkey && targetHotkey !== pos.hotkey) {
+					operations.push(
+						moveOp(fullSwapTarget.netuid, pos.hotkey, targetHotkey),
+					);
+					log.verbose(
+						`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ + move hotkey`,
+					);
+				} else {
+					log.verbose(
+						`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ (matching hotkey)`,
+					);
+				}
 				fulfilled.set(fullSwapTarget.netuid, destFulfilled + reduceAmount);
-
-				log.verbose(
-					`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ (matching hotkey)`,
-				);
 			} else {
 				operations.push({
 					kind: "unstake_partial",
@@ -383,4 +403,18 @@ function formatTao(rao: bigint): string {
 	const whole = rao / TAO;
 	const frac = ((rao % TAO) * 1000n) / TAO;
 	return `${whole}.${frac.toString().padStart(3, "0")}`;
+}
+
+function moveOp(
+	netuid: number,
+	originHotkey: string,
+	destinationHotkey: string,
+): MoveOperation {
+	return {
+		kind: "move",
+		netuid,
+		originHotkey,
+		destinationHotkey,
+		alphaAmount: U64_MAX,
+	};
 }

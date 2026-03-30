@@ -44,6 +44,8 @@ function simulateOperation(
 			return simulateUnstakePartial(api, op, config.slippageBuffer);
 		case "swap":
 			return simulateSwap(api, op, config.swapSlippageBuffer);
+		case "move":
+			return Promise.resolve(op);
 	}
 }
 

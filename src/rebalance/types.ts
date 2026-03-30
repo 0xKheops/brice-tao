@@ -45,11 +45,22 @@ export interface StakeOperation {
 	limitPrice: bigint;
 }
 
+export interface MoveOperation {
+	kind: "move";
+	/** Destination subnet (same for origin and destination — hotkey reassignment) */
+	netuid: number;
+	originHotkey: string;
+	destinationHotkey: string;
+	/** Alpha amount to move (use u64::MAX to sweep all) */
+	alphaAmount: bigint;
+}
+
 export type RebalanceOperation =
 	| SwapOperation
 	| UnstakeOperation
 	| UnstakePartialOperation
-	| StakeOperation;
+	| StakeOperation
+	| MoveOperation;
 
 export interface TargetSubnet {
 	netuid: number;

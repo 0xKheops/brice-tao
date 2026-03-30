@@ -172,6 +172,15 @@ function buildStakingCall(api: Api, op: RebalanceOperation) {
 				limit_price: op.limitPrice,
 				allow_partial: false,
 			});
+
+		case "move":
+			return api.tx.SubtensorModule.move_stake({
+				origin_hotkey: op.originHotkey,
+				destination_hotkey: op.destinationHotkey,
+				origin_netuid: op.netuid,
+				destination_netuid: op.netuid,
+				alpha_amount: op.alphaAmount,
+			});
 	}
 }
 
@@ -191,6 +200,8 @@ function describeOperation(op: RebalanceOperation): string {
 			return `UNSTAKE SN${op.netuid}: ~${fmt(op.estimatedTaoValue)} (partial)`;
 		case "stake":
 			return `STAKE SN${op.netuid}: ${fmt(op.taoAmount)}`;
+		case "move":
+			return `MOVE SN${op.netuid}: reassign ${op.originHotkey.slice(0, 8)}…→${op.destinationHotkey.slice(0, 8)}…`;
 	}
 }
 

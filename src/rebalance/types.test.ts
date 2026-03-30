@@ -28,6 +28,13 @@ describe("rebalance type contracts (runtime-safe assertions)", () => {
 				estimatedTaoValue: 10n,
 				limitPrice: 3n,
 			},
+			{
+				kind: "move",
+				netuid: 4,
+				originHotkey: "5swap",
+				destinationHotkey: "5dest",
+				alphaAmount: 18_446_744_073_709_551_615n,
+			},
 		];
 
 		const totalInput = operations.reduce((acc, op) => {
@@ -39,9 +46,10 @@ describe("rebalance type contracts (runtime-safe assertions)", () => {
 					return acc + op.alphaAmount;
 				case "swap":
 					return acc + op.alphaAmount;
-				default:
+				case "move":
 					return acc;
 			}
+			return acc;
 		}, 0n);
 
 		expect(totalInput).toBe(26n);
