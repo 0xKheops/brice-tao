@@ -47,7 +47,7 @@ export interface StakeOperation {
 
 export interface MoveOperation {
 	kind: "move";
-	/** Destination subnet (same for origin and destination — hotkey reassignment) */
+	/** Subnet where the hotkey reassignment happens (origin subnet, before cross-subnet swap) */
 	netuid: number;
 	originHotkey: string;
 	destinationHotkey: string;

@@ -375,7 +375,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("swaps full exits with move when target has different hotkey", async () => {
+	it("moves hotkey on origin subnet then swaps when target has different hotkey", async () => {
 		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
 			{
 				hotkey: hotkey("different"),
@@ -403,21 +403,33 @@ describe("computeRebalance target choice and weird cases", () => {
 			TEST_CONFIG,
 		);
 
-		expect(plan.operations).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					kind: "swap",
-					originNetuid: 77,
-					destinationNetuid: 5,
-					hotkey: hotkey("source"),
-				}),
-				expect.objectContaining({
-					kind: "move",
-					netuid: 5,
-					originHotkey: hotkey("source"),
-					destinationHotkey: hotkey("different"),
-				}),
-			]),
+		// Move must come BEFORE swap to avoid StakingOperationRateLimitExceeded.
+		// Move is on the origin subnet (77), swap uses the new hotkey.
+		const moveIdx = plan.operations.findIndex(
+			(op) => op.kind === "move" && op.netuid === 77,
+		);
+		const swapIdx = plan.operations.findIndex(
+			(op) => op.kind === "swap" && op.originNetuid === 77,
+		);
+		expect(moveIdx).toBeGreaterThanOrEqual(0);
+		expect(swapIdx).toBeGreaterThanOrEqual(0);
+		expect(moveIdx).toBeLessThan(swapIdx);
+
+		expect(plan.operations[moveIdx]).toEqual(
+			expect.objectContaining({
+				kind: "move",
+				netuid: 77,
+				originHotkey: hotkey("source"),
+				destinationHotkey: hotkey("different"),
+			}),
+		);
+		expect(plan.operations[swapIdx]).toEqual(
+			expect.objectContaining({
+				kind: "swap",
+				originNetuid: 77,
+				destinationNetuid: 5,
+				hotkey: hotkey("different"),
+			}),
 		);
 		expect(
 			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 77),

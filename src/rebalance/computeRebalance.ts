@@ -137,7 +137,7 @@ function generateOperations(
 		fulfilled.set(t.netuid, existing);
 	}
 
-	// 1. Full exits — swap to underweight target, then move hotkey if needed.
+	// 1. Full exits — swap to underweight target, moving hotkey on origin subnet first if needed.
 	for (const pos of positions) {
 		if (pos.classification !== "exit") continue;
 		if (pos.taoValue < config.minOperationTao) {
@@ -166,21 +166,31 @@ function generateOperations(
 
 		if (bestSwapTarget) {
 			const targetHotkey = targetHotkeys.get(bestSwapTarget.netuid);
+			const needsHotkeyChange = targetHotkey && targetHotkey !== pos.hotkey;
+			// When the destination validator differs from the current hotkey, we must
+			// reassign the hotkey BEFORE swapping. Doing it after would hit the
+			// per-block StakingOperationRateLimitExceeded error because both the swap
+			// (via stake_into_subnet) and the move (via validate_stake_transition)
+			// touch the same (hotkey, coldkey, dest_netuid) rate-limit key.
+			//
+			// By moving the hotkey on the ORIGIN subnet first (same-subnet moves
+			// don't set the rate limiter), then swapping under the new hotkey, each
+			// operation uses a different rate-limit key and both succeed.
+			if (needsHotkeyChange) {
+				operations.push(moveOp(pos.netuid, pos.hotkey, targetHotkey));
+			}
 			operations.push({
 				kind: "swap",
 				originNetuid: pos.netuid,
 				destinationNetuid: bestSwapTarget.netuid,
-				hotkey: pos.hotkey,
+				hotkey: needsHotkeyChange ? targetHotkey : pos.hotkey,
 				alphaAmount: pos.stake,
 				estimatedTaoValue: pos.taoValue,
 				limitPrice: 0n,
 			});
-			if (targetHotkey && targetHotkey !== pos.hotkey) {
-				operations.push(
-					moveOp(bestSwapTarget.netuid, pos.hotkey, targetHotkey),
-				);
+			if (needsHotkeyChange) {
 				log.verbose(
-					`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ + move hotkey`,
+					`  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ`,
 				);
 			} else {
 				log.verbose(
@@ -249,21 +259,29 @@ function generateOperations(
 			if (fullSwapTarget) {
 				const destFulfilled = fulfilled.get(fullSwapTarget.netuid) ?? 0n;
 				const targetHotkey = targetHotkeys.get(fullSwapTarget.netuid);
+				const needsHotkeyChange = targetHotkey && targetHotkey !== pos.hotkey;
+				// Same rate-limit avoidance as Phase 1: move hotkey on origin subnet
+				// first, then swap under the new hotkey to avoid conflicting
+				// (hotkey, coldkey, netuid) rate-limit keys within the same block.
+				// Only move the partial reduceAlpha amount so the retained position
+				// stays on its original hotkey.
+				if (needsHotkeyChange) {
+					operations.push(
+						moveOp(pos.netuid, pos.hotkey, targetHotkey, reduceAlpha),
+					);
+				}
 				operations.push({
 					kind: "swap",
 					originNetuid: pos.netuid,
 					destinationNetuid: fullSwapTarget.netuid,
-					hotkey: pos.hotkey,
+					hotkey: needsHotkeyChange ? targetHotkey : pos.hotkey,
 					alphaAmount: reduceAlpha,
 					estimatedTaoValue: reduceAmount,
 					limitPrice: 0n,
 				});
-				if (targetHotkey && targetHotkey !== pos.hotkey) {
-					operations.push(
-						moveOp(fullSwapTarget.netuid, pos.hotkey, targetHotkey),
-					);
+				if (needsHotkeyChange) {
 					log.verbose(
-						`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ + move hotkey`,
+						`  OP: move hotkey SN${pos.netuid} + swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ`,
 					);
 				} else {
 					log.verbose(
@@ -412,12 +430,13 @@ function moveOp(
 	netuid: number,
 	originHotkey: string,
 	destinationHotkey: string,
+	alphaAmount: bigint = U64_MAX,
 ): MoveOperation {
 	return {
 		kind: "move",
 		netuid,
 		originHotkey,
 		destinationHotkey,
-		alphaAmount: U64_MAX,
+		alphaAmount,
 	};
 }
