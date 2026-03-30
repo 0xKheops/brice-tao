@@ -530,7 +530,9 @@ describe("computeRebalance target choice and weird cases", () => {
 				yieldPerAlpha: 1,
 			},
 		}));
-		// Exit position (1 TAO) exceeds per-target deficit (~0.66 TAO) so it must unstake
+		// Exit position (1 TAO) exceeds per-target deficit (~0.66 TAO) but fits
+		// within 2× overfill cap (1.33 TAO), so it swaps instead of unstaking.
+		// Remaining targets are funded from free balance.
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
 			free: FREE_RESERVE_TAO,
@@ -544,10 +546,15 @@ describe("computeRebalance target choice and weird cases", () => {
 			TEST_CONFIG,
 		);
 
+		// Swap is now preferred over unstake (within 2× overfill cap)
+		expect(
+			plan.operations.some(
+				(op) => op.kind === "swap" && op.originNetuid === 70,
+			),
+		).toBe(true);
 		expect(
 			plan.operations.some((op) => op.kind === "unstake" && op.netuid === 70),
-		).toBe(true);
-		expect(plan.operations.some((op) => op.kind === "stake")).toBe(true);
+		).toBe(false);
 	});
 
 	it("reserves FREE_RESERVE_TAO from unstake proceeds when free balance is zero", async () => {
@@ -564,7 +571,8 @@ describe("computeRebalance target choice and weird cases", () => {
 				yieldPerAlpha: 1,
 			},
 		}));
-		// Exit position (2 TAO) exceeds per-target deficit (1 TAO each) so it must unstake
+		// Exit position (2 TAO) exceeds 2× per-target cap with 3 targets
+		// (perTarget ≈ 0.666 TAO, cap ≈ 1.333 TAO) so it must unstake
 		const unstakeValue = 2n * TAO;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + unstakeValue,
@@ -582,7 +590,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		const plan = await computeRebalance(
 			fakeApi,
 			balances,
-			eligible(1, 2),
+			eligible(1, 2, 3),
 			TEST_CONFIG,
 		);
 
@@ -760,5 +768,170 @@ describe("computeRebalance target choice and weird cases", () => {
 					(op.kind === "unstake" && op.netuid === 44),
 			),
 		).toBeDefined();
+	});
+
+	it("swaps exit position that slightly exceeds target (overfill within 2× cap)", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("validator"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("validator"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+
+		// 4 positions + free: total ~2.157 τ, targets 4 subnets at ~0.526 τ each
+		// SN58 (exit) has 0.564 τ, exceeding target 0.526 τ — should still swap
+		const totalTao = parseTao(2.157);
+		const balances = makeBalances({
+			totalTaoValue: totalTao,
+			free: parseTao(0.087),
+			stakes: [
+				makeStake({ netuid: 24, taoValue: parseTao(0.529) }),
+				makeStake({ netuid: 54, taoValue: parseTao(0.501) }),
+				makeStake({ netuid: 58, taoValue: parseTao(0.564) }),
+				makeStake({ netuid: 84, taoValue: parseTao(0.419) }),
+			],
+		});
+
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			eligible(24, 54, 84, 112),
+			TEST_CONFIG,
+		);
+
+		// SN58 should be swapped to SN112 (not unstaked)
+		expect(plan.operations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "swap",
+					originNetuid: 58,
+					destinationNetuid: 112,
+				}),
+			]),
+		);
+		expect(
+			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 58),
+		).toBeUndefined();
+		// No separate stake into SN112 needed — swap already filled it
+		expect(
+			plan.operations.find((op) => op.kind === "stake" && op.netuid === 112),
+		).toBeUndefined();
+	});
+
+	it("unstakes when exit position exceeds 2× target allocation", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("validator"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("validator"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+
+		// 3 eligible subnets with 1 keep (0.5 τ) + 1 exit (3.0 τ)
+		// available ≈ 3.55 τ → perTarget ≈ 1.183 τ → cap = 2.366 τ
+		// Exit 3.0 τ > cap 2.366 τ on all targets → must unstake
+		const balances = makeBalances({
+			totalTaoValue: parseTao(3.6),
+			free: parseTao(0.1),
+			stakes: [
+				makeStake({
+					netuid: 50,
+					taoValue: parseTao(0.5),
+					stake: parseTao(0.5),
+				}),
+				makeStake({
+					netuid: 99,
+					taoValue: parseTao(3.0),
+					stake: parseTao(3.0),
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			eligible(50, 10, 20),
+			TEST_CONFIG,
+		);
+
+		// SN99 should be unstaked (exceeds 2× target cap for all targets)
+		expect(
+			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 99),
+		).toBeDefined();
+		expect(
+			plan.operations.find(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			),
+		).toBeUndefined();
+	});
+
+	it("swaps overweight reduction that slightly overfills destination", async () => {
+		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
+			{
+				hotkey: hotkey("validator"),
+				candidate: {
+					uid: 1,
+					hotkey: hotkey("validator"),
+					alphaStake: TAO,
+					alphaDividends: 1n,
+					yieldPerAlpha: 1,
+				},
+			},
+		);
+
+		// 2 targets at ~0.975 τ each (available = 2.0 - 0.05 = 1.95 → 0.975 each)
+		// SN10: keep at 1.3 τ → excess = 1.3 - 0.975 = 0.325 τ (> minRebalanceTao)
+		// SN20: keep at 0.6 τ → deficit = 0.975 - 0.6 = 0.375 τ
+		// excess 0.325 < deficit 0.375 → fits without overfill, but verifies Phase 2 path
+		const balances = makeBalances({
+			totalTaoValue: parseTao(2.0),
+			free: parseTao(0.05) + FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 10,
+					taoValue: parseTao(1.3),
+					stake: parseTao(1.3),
+				}),
+				makeStake({
+					netuid: 20,
+					taoValue: parseTao(0.6),
+					stake: parseTao(0.6),
+				}),
+			],
+		});
+
+		const plan = await computeRebalance(
+			fakeApi,
+			balances,
+			eligible(10, 20),
+			TEST_CONFIG,
+		);
+
+		// Overweight reduction from SN10 should swap to SN20
+		expect(plan.operations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: "swap",
+					originNetuid: 10,
+					destinationNetuid: 20,
+				}),
+			]),
+		);
+		expect(
+			plan.operations.find(
+				(op) => op.kind === "unstake_partial" && op.netuid === 10,
+			),
+		).toBeUndefined();
 	});
 });

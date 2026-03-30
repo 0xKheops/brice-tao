@@ -150,8 +150,11 @@ function generateOperations(
 
 		const bestSwapTarget = targets
 			.filter((t) => {
-				const deficit = t.targetTaoValue - (fulfilled.get(t.netuid) ?? 0n);
-				return deficit >= pos.taoValue;
+				const currentFulfilled = fulfilled.get(t.netuid) ?? 0n;
+				const deficit = t.targetTaoValue - currentFulfilled;
+				if (deficit <= 0n) return false;
+				// Allow overfilling up to 2× target allocation (prefer exact-fit via sort)
+				return currentFulfilled + pos.taoValue <= 2n * t.targetTaoValue;
 			})
 			.sort((a, b) =>
 				Number(
@@ -200,7 +203,7 @@ function generateOperations(
 			estimatedTaoValue: pos.taoValue,
 		});
 		log.verbose(
-			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target with sufficient deficit)`,
+			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target within overfill cap)`,
 		);
 	}
 
@@ -230,10 +233,10 @@ function generateOperations(
 
 			const fullSwapTarget = targets
 				.filter((destTarget) => {
-					const destDeficit =
-						destTarget.targetTaoValue -
-						(fulfilled.get(destTarget.netuid) ?? 0n);
-					return destDeficit >= reduceAmount;
+					const destFulfilled = fulfilled.get(destTarget.netuid) ?? 0n;
+					const destDeficit = destTarget.targetTaoValue - destFulfilled;
+					if (destDeficit <= 0n) return false;
+					return destFulfilled + reduceAmount <= 2n * destTarget.targetTaoValue;
 				})
 				.sort((a, b) =>
 					Number(
