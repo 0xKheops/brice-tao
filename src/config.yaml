@@ -10,7 +10,7 @@ rebalance:
   minRebalanceTao: 0.25
   slippageBufferPercent: 1       # 1% for stake/unstake
   swapSlippageBufferPercent: 2     # 2% for swaps (absorbs intra-batch drift)
-  incumbencyBonus: 3
+  incumbencyBonus: 2
 
 strategy:
   minScore: 70
