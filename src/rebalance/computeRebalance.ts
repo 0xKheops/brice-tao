@@ -1,11 +1,8 @@
-import type { bittensor } from "@polkadot-api/descriptors";
-import type { TypedApi } from "polkadot-api";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
 import type { AppConfig } from "../config/types.ts";
 import type { SubnetScore } from "../subnets/getBestSubnets.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
-import { pickBestValidatorByYield } from "./pickBestValidator.ts";
 import type {
 	MoveOperation,
 	RebalanceOperation,
@@ -16,44 +13,36 @@ import type {
 /** u64::MAX — used with move_stake to sweep all alpha for a hotkey on a subnet */
 const U64_MAX = 18_446_744_073_709_551_615n;
 
-type Api = TypedApi<typeof bittensor>;
-
 interface ClassifiedPosition extends StakeEntry {
 	classification: "keep" | "exit";
 }
 
 /**
- * Compute the rebalance plan: given current balances and eligible subnets,
- * produce a list of operations to reach equal-weight allocation across the top X subnets.
+ * Determine the target subnets and per-subnet allocation from the portfolio
+ * and eligible list. This is execution sizing: how many subnets and how much each.
  */
-export async function computeRebalance(
-	api: Api,
+export function selectTargets(
 	balances: Balances,
 	eligibleSubnets: SubnetScore[],
 	config: AppConfig["rebalance"],
-	fallbackValidatorHotkey?: string,
-): Promise<RebalancePlan> {
+): { targets: TargetSubnet[] } {
 	const available = balances.totalTaoValue - config.freeReserveTao;
 	if (available <= 0n) {
 		log.warn("Portfolio too small to rebalance (below free reserve)");
-		return { targets: [], operations: [], skipped: [] };
+		return { targets: [] };
 	}
 
-	// Determine X: use total portfolio size for spread count and apply reserve only
-	// to per-target sizing. This helps keep allocations more evened out (e.g. ~0.5τ
-	// per subnet) without changing eligible-subnet priority.
 	const x = Math.min(
 		config.maxSubnets,
 		Math.max(Number(balances.totalTaoValue / config.minPositionTao), 1),
-		Math.max(eligibleSubnets.length, 1), // at least 1 target (netuid 0)
+		Math.max(eligibleSubnets.length, 1),
 	);
 
 	if (x < 1) {
 		log.warn("Not enough TAO for even one position");
-		return { targets: [], operations: [], skipped: [] };
+		return { targets: [] };
 	}
 
-	// Select target subnets — fill with netuid 0 if fewer eligible than X
 	const targetNetuids = eligibleSubnets.slice(0, x).map((s) => s.netuid);
 	while (targetNetuids.length < x) {
 		if (!targetNetuids.includes(0)) {
@@ -76,15 +65,25 @@ export async function computeRebalance(
 		log.verbose(`  Target SN${t.netuid}: ${formatTao(t.targetTaoValue)} τ`);
 	}
 
-	const { hotkeysByTarget, skipped: hotkeySelectionSkips } =
-		await resolveTargetHotkeys(
-			api,
-			balances.stakes,
-			targetNetuids,
-			fallbackValidatorHotkey,
-		);
+	return { targets };
+}
 
-	const targetSet = new Set(targetNetuids);
+/**
+ * Compute the rebalance plan: given current balances, pre-selected targets,
+ * and pre-resolved validator hotkeys, produce a list of operations to reach
+ * equal-weight allocation across the target subnets.
+ */
+export function computeRebalance(
+	balances: Balances,
+	targets: TargetSubnet[],
+	hotkeysByTarget: Map<number, string>,
+	config: AppConfig["rebalance"],
+): RebalancePlan {
+	if (targets.length === 0) {
+		return { targets: [], operations: [], skipped: [] };
+	}
+
+	const targetSet = new Set(targets.map((t) => t.netuid));
 	const classified = classifyPositions(balances.stakes, targetSet);
 
 	for (const pos of classified) {
@@ -93,15 +92,13 @@ export async function computeRebalance(
 		);
 	}
 
-	const plan = generateOperations(
+	return generateOperations(
 		classified,
 		targets,
 		hotkeysByTarget,
 		balances.free,
 		config,
 	);
-	plan.skipped = [...hotkeySelectionSkips, ...plan.skipped];
-	return plan;
 }
 
 function classifyPositions(
@@ -357,67 +354,6 @@ function generateOperations(
 	}
 
 	return { targets, operations, skipped };
-}
-
-async function resolveTargetHotkeys(
-	api: Api,
-	stakes: StakeEntry[],
-	targetNetuids: number[],
-	fallbackValidatorHotkey?: string,
-): Promise<{
-	hotkeysByTarget: Map<number, string>;
-	skipped: RebalancePlan["skipped"];
-}> {
-	const hotkeysByTarget = new Map<number, string>();
-	const skipped: RebalancePlan["skipped"] = [];
-
-	for (const netuid of targetNetuids) {
-		const existing = stakes.filter((s) => s.netuid === netuid);
-		if (existing.length > 0) {
-			const bestExisting = [...existing].sort((a, b) => {
-				if (b.taoValue !== a.taoValue) return b.taoValue > a.taoValue ? 1 : -1;
-				if (b.stake !== a.stake) return b.stake > a.stake ? 1 : -1;
-				return a.hotkey.localeCompare(b.hotkey);
-			})[0];
-			if (!bestExisting) {
-				continue;
-			}
-			hotkeysByTarget.set(netuid, bestExisting.hotkey);
-			log.verbose(
-				`  Validator SN${netuid}: existing ${bestExisting.hotkey.slice(0, 8)}… (largest position)`,
-			);
-			continue;
-		}
-
-		try {
-			const best = await pickBestValidatorByYield(api, netuid);
-			hotkeysByTarget.set(netuid, best.hotkey);
-			log.verbose(
-				`  Validator SN${netuid}: yield-picked ${best.hotkey.slice(0, 8)}… (UID ${best.candidate.uid})`,
-			);
-		} catch (err) {
-			if (fallbackValidatorHotkey) {
-				hotkeysByTarget.set(netuid, fallbackValidatorHotkey);
-				log.warn(
-					`Validator selection failed for SN${netuid}; falling back to VALIDATOR_HOTKEY (${fallbackValidatorHotkey.slice(0, 8)}…): ${String(err)}`,
-				);
-			} else {
-				const reason =
-					err instanceof Error
-						? err.message
-						: "unknown validator selection error";
-				skipped.push({
-					netuid,
-					reason: `No validator selected for SN${netuid}: ${reason}`,
-				});
-				log.warn(
-					`Skipping SN${netuid} destination: no yield candidate and VALIDATOR_HOTKEY not set`,
-				);
-			}
-		}
-	}
-
-	return { hotkeysByTarget, skipped };
 }
 
 function formatTao(rao: bigint): string {

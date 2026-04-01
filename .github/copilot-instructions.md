@@ -52,18 +52,19 @@ src/
     fetchAllSubnets.ts    → Subnet registry (SN45 API)
     getHealthySubnets.ts  → Immunity & prune-risk health checks
     getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
+    pickBestValidator.ts  → Yield-based validator selection per subnet
+    resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
   notifications/
     discord.ts            → Discord webhook notifications
   rebalance/
     types.ts              → Domain types (Operation, Plan, Results)
     tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
     constants.ts          → Re-exports TAO from tao.ts
-    computeRebalance.ts   → Plan generation from positions & targets
+    computeRebalance.ts   → Target selection (selectTargets) + operation generation (computeRebalance)
     simulateSlippage.ts   → Runtime API swap simulation → price limits
     executeRebalance.ts   → Batch build, MEV encryption, submission
     mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption
     waitForBatch.ts       → Block scanning, event extraction
-    pickBestValidator.ts  → Yield-based validator selection per subnet
     logger.ts             → Dual logger: terminal (human-readable) + file (JSON lines)
   api/generated/
     Sn45Api.ts            → Auto-generated SN45 Swagger client

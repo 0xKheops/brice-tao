@@ -20,7 +20,10 @@ import {
 	sendErrorNotification,
 	sendRebalanceNotification,
 } from "./notifications/discord.ts";
-import { computeRebalance } from "./rebalance/computeRebalance.ts";
+import {
+	computeRebalance,
+	selectTargets,
+} from "./rebalance/computeRebalance.ts";
 import { executeRebalance } from "./rebalance/executeRebalance.ts";
 import { initLog, log } from "./rebalance/logger.ts";
 import { simulateAllOperations } from "./rebalance/simulateSlippage.ts";
@@ -28,6 +31,7 @@ import { TAO } from "./rebalance/tao.ts";
 import { fetchAllSubnets } from "./subnets/fetchAllSubnets.ts";
 import { getBestSubnets } from "./subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "./subnets/getHealthySubnets.ts";
+import { resolveValidators } from "./subnets/resolveValidators.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -132,13 +136,20 @@ try {
 	);
 	logBalancesDetail("BEFORE", coldkey, balances);
 
-	const plan = await computeRebalance(
+	const { targets } = selectTargets(balances, eligible, config.rebalance);
+	const { hotkeysByTarget, skipped: hotkeySkips } = await resolveValidators(
 		api,
-		balances,
-		eligible,
-		config.rebalance,
+		balances.stakes,
+		targets.map((t) => t.netuid),
 		validatorHotkey,
 	);
+	const plan = computeRebalance(
+		balances,
+		targets,
+		hotkeysByTarget,
+		config.rebalance,
+	);
+	plan.skipped.push(...hotkeySkips);
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");

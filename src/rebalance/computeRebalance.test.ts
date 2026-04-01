@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
 import type { AppConfig } from "../config/types.ts";
 import type { SubnetScore } from "../subnets/getBestSubnets.ts";
-import { computeRebalance } from "./computeRebalance.ts";
-import * as pickValidatorModule from "./pickBestValidator.ts";
+import { computeRebalance, selectTargets } from "./computeRebalance.ts";
 import { parseTao, TAO } from "./tao.ts";
 
 const TEST_CONFIG: AppConfig["rebalance"] = {
@@ -60,280 +59,107 @@ function eligible(...netuids: number[]): SubnetScore[] {
 	}));
 }
 
-const fakeApi = {} as Parameters<typeof computeRebalance>[0];
+/** Helper: compute targets then build a hotkeysByTarget map with a default hotkey per target. */
+function planWithDefaults(
+	balances: Balances,
+	eligibleList: SubnetScore[],
+	hotkeyOverrides?: Map<number, string>,
+	config = TEST_CONFIG,
+) {
+	const { targets } = selectTargets(balances, eligibleList, config);
+	const hotkeysByTarget = new Map<number, string>();
+	for (const t of targets) {
+		hotkeysByTarget.set(
+			t.netuid,
+			hotkeyOverrides?.get(t.netuid) ?? hotkey(String(t.netuid)),
+		);
+	}
+	const plan = computeRebalance(balances, targets, hotkeysByTarget, config);
+	return plan;
+}
 
-afterEach(() => {
-	vi.restoreAllMocks();
-});
-
-describe("computeRebalance target choice and weird cases", () => {
-	it("returns an empty plan when total value is not above free reserve", async () => {
+describe("selectTargets", () => {
+	it("returns empty targets when total value is not above free reserve", () => {
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO,
 			free: FREE_RESERVE_TAO,
 		});
-		const pickSpy = vi.spyOn(pickValidatorModule, "pickBestValidatorByYield");
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(1, 2, 3),
-			TEST_CONFIG,
-		);
+		const { targets } = selectTargets(balances, eligible(1, 2, 3), TEST_CONFIG);
 
-		expect(plan.targets).toEqual([]);
-		expect(plan.operations).toEqual([]);
-		expect(plan.skipped).toEqual([]);
-		expect(pickSpy).not.toHaveBeenCalled();
+		expect(targets).toEqual([]);
 	});
 
-	it("uses exactly one target when available TAO is only enough for one minimum position", async () => {
-		const fallback = hotkey("fallback");
-		const pickSpy = vi
-			.spyOn(pickValidatorModule, "pickBestValidatorByYield")
-			.mockRejectedValue(new Error("no yield candidate"));
+	it("uses exactly one target when available TAO is only enough for one minimum position", () => {
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + MIN_POSITION_TAO + 1n,
 			free: FREE_RESERVE_TAO + MIN_POSITION_TAO + 1n,
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const { targets } = selectTargets(
 			balances,
 			eligible(11, 22, 33),
 			TEST_CONFIG,
-			fallback,
 		);
 
-		expect(plan.targets).toHaveLength(1);
-		expect(plan.targets[0]).toMatchObject({ netuid: 11 });
-		expect(plan.targets[0]?.targetTaoValue).toBe(MIN_POSITION_TAO + 1n);
-		expect(pickSpy).toHaveBeenCalledWith(fakeApi, 11);
+		expect(targets).toHaveLength(1);
+		expect(targets[0]).toMatchObject({ netuid: 11 });
+		expect(targets[0]?.targetTaoValue).toBe(MIN_POSITION_TAO + 1n);
 	});
 
-	it("caps target count at MAX_SUBNETS when many eligible subnets exist", async () => {
-		const pickSpy = vi
-			.spyOn(pickValidatorModule, "pickBestValidatorByYield")
-			.mockResolvedValue({
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			});
+	it("caps target count at MAX_SUBNETS when many eligible subnets exist", () => {
 		const balances = makeBalances({
 			totalTaoValue:
 				FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
 			free: FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
 		});
-		const many = eligible(
-			...Array.from({ length: MAX_SUBNETS + 8 }, (_, i) => i + 1),
-		);
 
-		const plan = await computeRebalance(fakeApi, balances, many, TEST_CONFIG);
-
-		expect(plan.targets).toHaveLength(MAX_SUBNETS);
-		expect(plan.targets.map((t) => t.netuid)).toEqual(
-			Array.from({ length: MAX_SUBNETS }, (_, i) => i + 1),
-		);
-		expect(pickSpy).toHaveBeenCalledTimes(MAX_SUBNETS);
-	});
-
-	it("pads to subnet 0 when no eligible subnet is available", async () => {
-		const fallback = hotkey("fallback");
-		const pickSpy = vi
-			.spyOn(pickValidatorModule, "pickBestValidatorByYield")
-			.mockRejectedValue(new Error("no yield candidate"));
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + 3n * MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO + 3n * MIN_POSITION_TAO,
-		});
-
-		const plan = await computeRebalance(
-			fakeApi,
+		const { targets } = selectTargets(
 			balances,
-			[],
-			TEST_CONFIG,
-			fallback,
-		);
-
-		expect(plan.targets).toEqual([
-			{
-				netuid: 0,
-				targetTaoValue: 3n * MIN_POSITION_TAO,
-			},
-		]);
-		expect(pickSpy).toHaveBeenCalledWith(fakeApi, 0);
-	});
-
-	it("splits target allocation evenly with bigint truncation remainder", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 7,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
-		const available = 5n * TAO + 2n;
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + available,
-			free: FREE_RESERVE_TAO + available,
-		});
-
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(2, 4),
+			eligible(...Array.from({ length: MAX_SUBNETS + 5 }, (_, i) => i + 1)),
 			TEST_CONFIG,
 		);
 
-		expect(plan.targets).toEqual([
-			{ netuid: 2, targetTaoValue: 2500000001n },
-			{ netuid: 4, targetTaoValue: 2500000001n },
-		]);
+		expect(targets).toHaveLength(MAX_SUBNETS);
 	});
 
-	it("reuses largest existing position hotkey on target subnet before yield lookup", async () => {
-		const pickSpy = vi.spyOn(pickValidatorModule, "pickBestValidatorByYield");
+	it("pads to subnet 0 when no eligible subnet is available", () => {
 		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + 2n * MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO + 2n * MIN_POSITION_TAO,
-			stakes: [
-				makeStake({ netuid: 7, hotkey: hotkey("small"), taoValue: TAO }),
-				makeStake({ netuid: 7, hotkey: hotkey("large"), taoValue: 2n * TAO }),
-			],
+			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+			free: FREE_RESERVE_TAO + 2n * TAO,
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(7),
-			TEST_CONFIG,
-		);
+		const { targets } = selectTargets(balances, [], TEST_CONFIG);
 
-		expect(pickSpy).not.toHaveBeenCalled();
-		expect(plan.operations).toContainEqual({
-			kind: "unstake_partial",
-			netuid: 7,
-			hotkey: hotkey("large"),
-			alphaAmount: TAO,
-			limitPrice: 0n,
-			estimatedTaoValue: TAO,
-		});
+		expect(targets).toHaveLength(1);
+		expect(targets[0]).toMatchObject({ netuid: 0 });
 	});
 
-	it("breaks existing hotkey ties alphabetically and uses that hotkey for target stake", async () => {
-		vi.spyOn(
-			pickValidatorModule,
-			"pickBestValidatorByYield",
-		).mockImplementation(async (_api, netuid) => ({
-			hotkey: hotkey(`picked-${netuid}`),
-			candidate: {
-				uid: netuid,
-				hotkey: hotkey(`picked-${netuid}`),
-				alphaStake: TAO,
-				alphaDividends: 1n,
-				yieldPerAlpha: 1,
-			},
-		}));
+	it("splits target allocation evenly with bigint truncation remainder", () => {
 		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + 2n * MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO + parseTao(0.5),
-			stakes: [
-				makeStake({
-					netuid: 9,
-					hotkey: "5beta".padEnd(48, "b"),
-					taoValue: parseTao(0.05),
-					stake: parseTao(0.05),
-				}),
-				makeStake({
-					netuid: 9,
-					hotkey: "5alpha".padEnd(48, "a"),
-					taoValue: parseTao(0.05),
-					stake: parseTao(0.05),
-				}),
-				makeStake({
-					netuid: 50,
-					hotkey: "5alpha".padEnd(48, "a"),
-					taoValue: parseTao(0.5),
-					stake: parseTao(0.5),
-				}),
-			],
+			totalTaoValue: FREE_RESERVE_TAO + 5_000_000_003n,
+			free: FREE_RESERVE_TAO + 5_000_000_003n,
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(9, 10),
-			TEST_CONFIG,
-		);
+		const { targets } = selectTargets(balances, eligible(2, 4), TEST_CONFIG);
 
-		// SN50 exit is swapped to SN10 (sufficient deficit), with move since hotkeys differ
-		expect(plan.operations).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					kind: "swap",
-					originNetuid: 50,
-					destinationNetuid: 10,
-				}),
-			]),
-		);
-		// SN9 stake uses the alphabetically-first existing hotkey (alpha < beta)
-		expect(plan.operations).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					kind: "stake",
-					netuid: 9,
-					hotkey: "5alpha".padEnd(48, "a"),
-				}),
-			]),
-		);
+		expect(targets).toHaveLength(2);
+		expect(targets[0]?.targetTaoValue).toBe(2500000001n);
+		expect(targets[1]?.targetTaoValue).toBe(2500000001n);
+	});
+});
+
+describe("computeRebalance operations", () => {
+	it("returns an empty plan when targets are empty", () => {
+		const balances = makeBalances({ free: TAO, totalTaoValue: TAO });
+
+		const plan = computeRebalance(balances, [], new Map(), TEST_CONFIG);
+
+		expect(plan.targets).toEqual([]);
+		expect(plan.operations).toEqual([]);
 	});
 
-	it("records a skip when validator resolution fails and no fallback hotkey is provided", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockRejectedValue(
-			new Error("Subnet 33 not found"),
-		);
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO + MIN_POSITION_TAO,
-		});
-
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(33),
-			TEST_CONFIG,
-		);
-
-		expect(plan.skipped).toContainEqual({
-			netuid: 33,
-			reason: "No validator selected for SN33: Subnet 33 not found",
-		});
-	});
-
-	it("prefers swap without move when target shares the same hotkey", async () => {
-		vi.spyOn(
-			pickValidatorModule,
-			"pickBestValidatorByYield",
-		).mockImplementation(async (_api, netuid) => ({
-			hotkey: netuid === 10 ? hotkey("src") : hotkey("other"),
-			candidate: {
-				uid: netuid,
-				hotkey: netuid === 10 ? hotkey("src") : hotkey("other"),
-				alphaStake: TAO,
-				alphaDividends: 1n,
-				yieldPerAlpha: 1,
-			},
-		}));
+	it("prefers swap without move when target shares the same hotkey", () => {
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 3n * TAO,
 			free: FREE_RESERVE_TAO,
@@ -346,11 +172,16 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(10, 11), TEST_CONFIG);
+		const hotkeysByTarget = new Map<number, string>([
+			[10, hotkey("src")],
+			[11, hotkey("other")],
+		]);
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(10, 11),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
@@ -374,19 +205,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("moves hotkey on origin subnet then swaps when target has different hotkey", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("different"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("different"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
+	it("moves hotkey on origin subnet then swaps when target has different hotkey", () => {
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
 			free: FREE_RESERVE_TAO,
@@ -394,16 +213,16 @@ describe("computeRebalance target choice and weird cases", () => {
 				makeStake({ netuid: 77, hotkey: hotkey("source"), taoValue: TAO }),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
+		const hotkeysByTarget = new Map<number, string>([[5, hotkey("different")]]);
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(5),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
-		// Move must come BEFORE swap to avoid StakingOperationRateLimitExceeded.
-		// Move is on the origin subnet (77), swap uses the new hotkey.
 		const moveIdx = plan.operations.findIndex(
 			(op) => op.kind === "move" && op.netuid === 77,
 		);
@@ -430,24 +249,9 @@ describe("computeRebalance target choice and weird cases", () => {
 				hotkey: hotkey("different"),
 			}),
 		);
-		expect(
-			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 77),
-		).toBeUndefined();
 	});
 
-	it("skips dust exits below minimum operation threshold", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
+	it("skips dust exits below minimum operation threshold", () => {
 		const dust = MIN_OPERATION_TAO - 1n;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + TAO,
@@ -463,12 +267,7 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(2),
-			TEST_CONFIG,
-		);
+		const plan = planWithDefaults(balances, eligible(2));
 
 		expect(
 			plan.operations.find((op) => "netuid" in op && op.netuid === 44),
@@ -479,19 +278,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		});
 	});
 
-	it("does not reduce a below-target keep position and reports remaining funding deficit", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 8,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
+	it("does not reduce a below-target keep position and reports remaining funding deficit", () => {
 		const positionValue = MIN_STAKE_TAO + 5n;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + TAO,
@@ -505,11 +292,16 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(8, 9), TEST_CONFIG);
+		const hotkeysByTarget = new Map<number, string>([
+			[8, hotkey("picked")],
+			[9, hotkey("9")],
+		]);
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(8, 9),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
@@ -527,37 +319,15 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBe(true);
 	});
 
-	it("adds stake operations from free balance after counting unstake proceeds", async () => {
-		vi.spyOn(
-			pickValidatorModule,
-			"pickBestValidatorByYield",
-		).mockImplementation(async (_api, netuid) => ({
-			hotkey: hotkey(String(netuid)),
-			candidate: {
-				uid: netuid,
-				hotkey: hotkey(String(netuid)),
-				alphaStake: TAO,
-				alphaDividends: 1n,
-				yieldPerAlpha: 1,
-			},
-		}));
-		// Exit position (1 TAO) exceeds per-target deficit (~0.66 TAO) but fits
-		// within 2× overfill cap (1.33 TAO), so it swaps instead of unstaking.
-		// Remaining targets are funded from free balance.
+	it("adds stake operations from free balance after counting unstake proceeds", () => {
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
 			free: FREE_RESERVE_TAO,
 			stakes: [makeStake({ netuid: 70, hotkey: hotkey("70"), taoValue: TAO })],
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(1, 2, 3),
-			TEST_CONFIG,
-		);
+		const plan = planWithDefaults(balances, eligible(1, 2, 3));
 
-		// Swap is now preferred over unstake (within 2× overfill cap)
 		expect(
 			plan.operations.some(
 				(op) => op.kind === "swap" && op.originNetuid === 70,
@@ -568,22 +338,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBe(false);
 	});
 
-	it("reserves FREE_RESERVE_TAO from unstake proceeds when free balance is zero", async () => {
-		vi.spyOn(
-			pickValidatorModule,
-			"pickBestValidatorByYield",
-		).mockImplementation(async (_api, netuid) => ({
-			hotkey: hotkey(String(netuid)),
-			candidate: {
-				uid: netuid,
-				hotkey: hotkey(String(netuid)),
-				alphaStake: TAO,
-				alphaDividends: 1n,
-				yieldPerAlpha: 1,
-			},
-		}));
-		// Exit position (2 TAO) exceeds 2× per-target cap with 3 targets
-		// (perTarget ≈ 0.666 TAO, cap ≈ 1.333 TAO) so it must unstake
+	it("reserves FREE_RESERVE_TAO from unstake proceeds when free balance is zero", () => {
 		const unstakeValue = 2n * TAO;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + unstakeValue,
@@ -598,19 +353,13 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(1, 2, 3),
-			TEST_CONFIG,
-		);
+		const plan = planWithDefaults(balances, eligible(1, 2, 3));
 
 		const unstake = plan.operations.find(
 			(op) => op.kind === "unstake" && op.netuid === 70,
 		);
 		expect(unstake).toBeDefined();
 
-		// Total staked should equal unstake proceeds minus reserve
 		const stakes = plan.operations.filter((op) => op.kind === "stake");
 		const totalStaked = stakes.reduce(
 			(sum, op) => sum + (op.kind === "stake" ? op.taoAmount : 0n),
@@ -619,20 +368,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(totalStaked).toBe(unstakeValue - FREE_RESERVE_TAO);
 	});
 
-	it("reports insufficient free balance per target when deficits cannot be funded", async () => {
-		vi.spyOn(
-			pickValidatorModule,
-			"pickBestValidatorByYield",
-		).mockImplementation(async (_api, netuid) => ({
-			hotkey: hotkey(String(netuid)),
-			candidate: {
-				uid: netuid,
-				hotkey: hotkey(String(netuid)),
-				alphaStake: TAO,
-				alphaDividends: 1n,
-				yieldPerAlpha: 1,
-			},
-		}));
+	it("reports insufficient free balance per target when deficits cannot be funded", () => {
 		const available = 3n * MIN_POSITION_TAO;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + available,
@@ -640,12 +376,7 @@ describe("computeRebalance target choice and weird cases", () => {
 			stakes: [],
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(1, 2, 3),
-			TEST_CONFIG,
-		);
+		const plan = planWithDefaults(balances, eligible(1, 2, 3));
 		const insufficient = plan.skipped.filter((s) =>
 			s.reason.startsWith("Insufficient free balance for target"),
 		);
@@ -653,19 +384,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(insufficient.length).toBeGreaterThan(0);
 	});
 
-	it("skips overweight reduction below MIN_REBALANCE_TAO", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
+	it("skips overweight reduction below MIN_REBALANCE_TAO", () => {
 		const targetPerSubnet = 2n * TAO;
 		const smallExcess = MIN_REBALANCE_TAO - 1n;
 		const balances = makeBalances({
@@ -680,11 +399,13 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
+		const hotkeysByTarget = new Map([[5, hotkey("picked")]]);
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(5),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
@@ -697,19 +418,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("skips stake when deficit is below MIN_REBALANCE_TAO", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
+	it("skips stake when deficit is below MIN_REBALANCE_TAO", () => {
 		const targetPerSubnet = 2n * TAO;
 		const smallDeficit = MIN_REBALANCE_TAO - 1n;
 		const positionValue = targetPerSubnet - smallDeficit;
@@ -725,11 +434,13 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
+		const hotkeysByTarget = new Map([[5, hotkey("picked")]]);
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(5),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
@@ -738,20 +449,8 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("still exits small non-target positions above MIN_OPERATION_TAO", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("picked"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("picked"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
-		const smallPosition = MIN_OPERATION_TAO * 10n; // 0.1 TAO — above MIN_OPERATION_TAO but below MIN_REBALANCE_TAO
+	it("still exits small non-target positions above MIN_OPERATION_TAO", () => {
+		const smallPosition = MIN_OPERATION_TAO * 10n;
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + TAO,
 			free: FREE_RESERVE_TAO,
@@ -765,12 +464,7 @@ describe("computeRebalance target choice and weird cases", () => {
 			],
 		});
 
-		const plan = await computeRebalance(
-			fakeApi,
-			balances,
-			eligible(2),
-			TEST_CONFIG,
-		);
+		const plan = planWithDefaults(balances, eligible(2));
 
 		expect(
 			plan.operations.find(
@@ -781,22 +475,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeDefined();
 	});
 
-	it("swaps exit position that slightly exceeds target (overfill within 2× cap)", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("validator"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("validator"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
-
-		// 4 positions + free: total ~2.157 τ, targets 4 subnets at ~0.526 τ each
-		// SN58 (exit) has 0.564 τ, exceeding target 0.526 τ — should still swap
+	it("swaps exit position that slightly exceeds target (overfill within 2× cap)", () => {
 		const totalTao = parseTao(2.157);
 		const balances = makeBalances({
 			totalTaoValue: totalTao,
@@ -808,15 +487,23 @@ describe("computeRebalance target choice and weird cases", () => {
 				makeStake({ netuid: 84, taoValue: parseTao(0.419) }),
 			],
 		});
-
-		const plan = await computeRebalance(
-			fakeApi,
+		const { targets } = selectTargets(
 			balances,
 			eligible(24, 54, 84, 112),
 			TEST_CONFIG,
 		);
+		const hotkeysByTarget = new Map<number, string>();
+		for (const t of targets) {
+			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
+		}
 
-		// SN58 should be swapped to SN112 (not unstaked)
+		const plan = computeRebalance(
+			balances,
+			targets,
+			hotkeysByTarget,
+			TEST_CONFIG,
+		);
+
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -829,29 +516,12 @@ describe("computeRebalance target choice and weird cases", () => {
 		expect(
 			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 58),
 		).toBeUndefined();
-		// No separate stake into SN112 needed — swap already filled it
 		expect(
 			plan.operations.find((op) => op.kind === "stake" && op.netuid === 112),
 		).toBeUndefined();
 	});
 
-	it("unstakes when exit position exceeds 2× target allocation", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("validator"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("validator"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
-
-		// 3 eligible subnets with 1 keep (0.5 τ) + 1 exit (3.0 τ)
-		// available ≈ 3.55 τ → perTarget ≈ 1.183 τ → cap = 2.366 τ
-		// Exit 3.0 τ > cap 2.366 τ on all targets → must unstake
+	it("unstakes when exit position exceeds 2× target allocation", () => {
 		const balances = makeBalances({
 			totalTaoValue: parseTao(3.6),
 			free: parseTao(0.1),
@@ -868,15 +538,23 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
-
-		const plan = await computeRebalance(
-			fakeApi,
+		const { targets } = selectTargets(
 			balances,
 			eligible(50, 10, 20),
 			TEST_CONFIG,
 		);
+		const hotkeysByTarget = new Map<number, string>();
+		for (const t of targets) {
+			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
+		}
 
-		// SN99 should be unstaked (exceeds 2× target cap for all targets)
+		const plan = computeRebalance(
+			balances,
+			targets,
+			hotkeysByTarget,
+			TEST_CONFIG,
+		);
+
 		expect(
 			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 99),
 		).toBeDefined();
@@ -887,24 +565,7 @@ describe("computeRebalance target choice and weird cases", () => {
 		).toBeUndefined();
 	});
 
-	it("swaps overweight reduction that slightly overfills destination", async () => {
-		vi.spyOn(pickValidatorModule, "pickBestValidatorByYield").mockResolvedValue(
-			{
-				hotkey: hotkey("validator"),
-				candidate: {
-					uid: 1,
-					hotkey: hotkey("validator"),
-					alphaStake: TAO,
-					alphaDividends: 1n,
-					yieldPerAlpha: 1,
-				},
-			},
-		);
-
-		// 2 targets at ~0.975 τ each (available = 2.0 - 0.05 = 1.95 → 0.975 each)
-		// SN10: keep at 1.3 τ → excess = 1.3 - 0.975 = 0.325 τ (> minRebalanceTao)
-		// SN20: keep at 0.6 τ → deficit = 0.975 - 0.6 = 0.375 τ
-		// excess 0.325 < deficit 0.375 → fits without overfill, but verifies Phase 2 path
+	it("swaps overweight reduction that slightly overfills destination", () => {
 		const balances = makeBalances({
 			totalTaoValue: parseTao(2.0),
 			free: parseTao(0.05) + FREE_RESERVE_TAO,
@@ -921,15 +582,19 @@ describe("computeRebalance target choice and weird cases", () => {
 				}),
 			],
 		});
+		const { targets } = selectTargets(balances, eligible(10, 20), TEST_CONFIG);
+		const hotkeysByTarget = new Map<number, string>();
+		for (const t of targets) {
+			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
+		}
 
-		const plan = await computeRebalance(
-			fakeApi,
+		const plan = computeRebalance(
 			balances,
-			eligible(10, 20),
+			targets,
+			hotkeysByTarget,
 			TEST_CONFIG,
 		);
 
-		// Overweight reduction from SN10 should swap to SN20
 		expect(plan.operations).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -944,5 +609,26 @@ describe("computeRebalance target choice and weird cases", () => {
 				(op) => op.kind === "unstake_partial" && op.netuid === 10,
 			),
 		).toBeUndefined();
+	});
+
+	it("skips target with no resolved hotkey", () => {
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + TAO,
+			free: FREE_RESERVE_TAO + TAO,
+		});
+		const { targets } = selectTargets(balances, eligible(33), TEST_CONFIG);
+		const hotkeysByTarget = new Map<number, string>();
+
+		const plan = computeRebalance(
+			balances,
+			targets,
+			hotkeysByTarget,
+			TEST_CONFIG,
+		);
+
+		expect(plan.skipped).toContainEqual({
+			netuid: 33,
+			reason: "No validator hotkey resolved for target subnet",
+		});
 	});
 });
