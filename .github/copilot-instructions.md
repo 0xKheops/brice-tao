@@ -52,6 +52,7 @@ src/
     fetchAllSubnets.ts    → Subnet registry (SN45 API)
     getHealthySubnets.ts  → Immunity & prune-risk health checks
     getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
+    getStrategyTargets.ts → Strategy entry point: subnets + validators + shares
     pickBestValidator.ts  → Yield-based validator selection per subnet
     resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
   notifications/
@@ -60,7 +61,7 @@ src/
     types.ts              → Domain types (Operation, Plan, Results)
     tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
     constants.ts          → Re-exports TAO from tao.ts
-    computeRebalance.ts   → Target selection (selectTargets) + operation generation (computeRebalance)
+    computeRebalance.ts   → Operation generation from strategy targets + balances
     simulateSlippage.ts   → Runtime API swap simulation → price limits
     executeRebalance.ts   → Batch build, MEV encryption, submission
     mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption

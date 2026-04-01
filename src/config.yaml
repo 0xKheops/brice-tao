@@ -2,7 +2,6 @@
 # All TAO amounts are in TAO (not RAO). Slippage values are in percent.
 
 rebalance:
-  maxSubnets: 10
   minPositionTao: 0.5
   freeReserveTao: 0.05
   minOperationTao: 0.01
@@ -19,3 +18,4 @@ strategy:
   minEmissionPct: 0
   bottomPercentileCutoff: 10       # drop bottom 10% by vol/mcap ratio
   incumbencyBonus: 2
+  maxSubnets: 10

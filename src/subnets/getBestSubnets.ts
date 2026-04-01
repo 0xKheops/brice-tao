@@ -30,6 +30,8 @@ export interface StrategyConfig {
 	bottomPercentileCutoff: number;
 	/** Scoring bonus added to currently-held subnets */
 	incumbencyBonus: number;
+	/** Maximum number of subnets to target */
+	maxSubnets: number;
 }
 
 export interface SubnetScore {

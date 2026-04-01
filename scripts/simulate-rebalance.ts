@@ -19,7 +19,7 @@ const appConfig = loadConfig(
 );
 const GATES = appConfig.strategy;
 const INCUMBENCY_BONUS = appConfig.strategy.incumbencyBonus;
-const MAX_SUBNETS = appConfig.rebalance.maxSubnets;
+const MAX_SUBNETS = appConfig.strategy.maxSubnets;
 
 // ---------------------------------------------------------------------------
 // Environment

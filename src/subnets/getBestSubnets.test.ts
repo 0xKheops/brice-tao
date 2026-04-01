@@ -11,6 +11,7 @@ const BASE_CONFIG: StrategyConfig = {
 	minEmissionPct: 0,
 	bottomPercentileCutoff: 10,
 	incumbencyBonus: 3,
+	maxSubnets: 10,
 };
 
 interface LeaderboardEntryFixture {

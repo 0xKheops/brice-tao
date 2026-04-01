@@ -1,12 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
 import type { AppConfig } from "../config/types.ts";
-import type { SubnetScore } from "../subnets/getBestSubnets.ts";
-import { computeRebalance, selectTargets } from "./computeRebalance.ts";
+import { computeRebalance } from "./computeRebalance.ts";
 import { parseTao, TAO } from "./tao.ts";
+import type { StrategyTarget } from "./types.ts";
 
 const TEST_CONFIG: AppConfig["rebalance"] = {
-	maxSubnets: 10,
 	minPositionTao: parseTao(0.5),
 	freeReserveTao: parseTao(0.05),
 	minOperationTao: parseTao(0.01),
@@ -18,9 +17,7 @@ const TEST_CONFIG: AppConfig["rebalance"] = {
 
 const {
 	freeReserveTao: FREE_RESERVE_TAO,
-	maxSubnets: MAX_SUBNETS,
 	minOperationTao: MIN_OPERATION_TAO,
-	minPositionTao: MIN_POSITION_TAO,
 	minRebalanceTao: MIN_REBALANCE_TAO,
 	minStakeTao: MIN_STAKE_TAO,
 } = TEST_CONFIG;
@@ -51,109 +48,23 @@ function makeBalances(partial?: Partial<Balances>): Balances {
 	};
 }
 
-function eligible(...netuids: number[]): SubnetScore[] {
-	return netuids.map((netuid, i) => ({
-		netuid,
-		name: `SN${netuid}`,
-		score: 100 - i,
+/** Create equal-weight strategy targets */
+function targets(
+	...entries: Array<{ netuid: number; hotkey?: string }>
+): StrategyTarget[] {
+	const share = 1 / entries.length;
+	return entries.map((e) => ({
+		netuid: e.netuid,
+		hotkey: e.hotkey ?? hotkey(String(e.netuid)),
+		share,
 	}));
 }
 
-/** Helper: compute targets then build a hotkeysByTarget map with a default hotkey per target. */
-function planWithDefaults(
-	balances: Balances,
-	eligibleList: SubnetScore[],
-	hotkeyOverrides?: Map<number, string>,
-	config = TEST_CONFIG,
-) {
-	const { targets } = selectTargets(balances, eligibleList, config);
-	const hotkeysByTarget = new Map<number, string>();
-	for (const t of targets) {
-		hotkeysByTarget.set(
-			t.netuid,
-			hotkeyOverrides?.get(t.netuid) ?? hotkey(String(t.netuid)),
-		);
-	}
-	const plan = computeRebalance(balances, targets, hotkeysByTarget, config);
-	return plan;
-}
-
-describe("selectTargets", () => {
-	it("returns empty targets when total value is not above free reserve", () => {
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO,
-			free: FREE_RESERVE_TAO,
-		});
-
-		const { targets } = selectTargets(balances, eligible(1, 2, 3), TEST_CONFIG);
-
-		expect(targets).toEqual([]);
-	});
-
-	it("uses exactly one target when available TAO is only enough for one minimum position", () => {
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + MIN_POSITION_TAO + 1n,
-			free: FREE_RESERVE_TAO + MIN_POSITION_TAO + 1n,
-		});
-
-		const { targets } = selectTargets(
-			balances,
-			eligible(11, 22, 33),
-			TEST_CONFIG,
-		);
-
-		expect(targets).toHaveLength(1);
-		expect(targets[0]).toMatchObject({ netuid: 11 });
-		expect(targets[0]?.targetTaoValue).toBe(MIN_POSITION_TAO + 1n);
-	});
-
-	it("caps target count at MAX_SUBNETS when many eligible subnets exist", () => {
-		const balances = makeBalances({
-			totalTaoValue:
-				FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
-			free: FREE_RESERVE_TAO + BigInt(MAX_SUBNETS + 5) * MIN_POSITION_TAO,
-		});
-
-		const { targets } = selectTargets(
-			balances,
-			eligible(...Array.from({ length: MAX_SUBNETS + 5 }, (_, i) => i + 1)),
-			TEST_CONFIG,
-		);
-
-		expect(targets).toHaveLength(MAX_SUBNETS);
-	});
-
-	it("pads to subnet 0 when no eligible subnet is available", () => {
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
-			free: FREE_RESERVE_TAO + 2n * TAO,
-		});
-
-		const { targets } = selectTargets(balances, [], TEST_CONFIG);
-
-		expect(targets).toHaveLength(1);
-		expect(targets[0]).toMatchObject({ netuid: 0 });
-	});
-
-	it("splits target allocation evenly with bigint truncation remainder", () => {
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + 5_000_000_003n,
-			free: FREE_RESERVE_TAO + 5_000_000_003n,
-		});
-
-		const { targets } = selectTargets(balances, eligible(2, 4), TEST_CONFIG);
-
-		expect(targets).toHaveLength(2);
-		expect(targets[0]?.targetTaoValue).toBe(2500000001n);
-		expect(targets[1]?.targetTaoValue).toBe(2500000001n);
-	});
-});
-
-describe("computeRebalance operations", () => {
+describe("computeRebalance", () => {
 	it("returns an empty plan when targets are empty", () => {
 		const balances = makeBalances({ free: TAO, totalTaoValue: TAO });
 
-		const plan = computeRebalance(balances, [], new Map(), TEST_CONFIG);
+		const plan = computeRebalance(balances, [], TEST_CONFIG);
 
 		expect(plan.targets).toEqual([]);
 		expect(plan.operations).toEqual([]);
@@ -172,16 +83,13 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(10, 11), TEST_CONFIG);
-		const hotkeysByTarget = new Map<number, string>([
-			[10, hotkey("src")],
-			[11, hotkey("other")],
-		]);
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets(
+				{ netuid: 10, hotkey: hotkey("src") },
+				{ netuid: 11, hotkey: hotkey("other") },
+			),
 			TEST_CONFIG,
 		);
 
@@ -213,13 +121,10 @@ describe("computeRebalance operations", () => {
 				makeStake({ netuid: 77, hotkey: hotkey("source"), taoValue: TAO }),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
-		const hotkeysByTarget = new Map<number, string>([[5, hotkey("different")]]);
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets({ netuid: 5, hotkey: hotkey("different") }),
 			TEST_CONFIG,
 		);
 
@@ -267,7 +172,11 @@ describe("computeRebalance operations", () => {
 			],
 		});
 
-		const plan = planWithDefaults(balances, eligible(2));
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 2 }),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find((op) => "netuid" in op && op.netuid === 44),
@@ -292,16 +201,10 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(8, 9), TEST_CONFIG);
-		const hotkeysByTarget = new Map<number, string>([
-			[8, hotkey("picked")],
-			[9, hotkey("9")],
-		]);
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets({ netuid: 8, hotkey: hotkey("picked") }, { netuid: 9 }),
 			TEST_CONFIG,
 		);
 
@@ -326,7 +229,11 @@ describe("computeRebalance operations", () => {
 			stakes: [makeStake({ netuid: 70, hotkey: hotkey("70"), taoValue: TAO })],
 		});
 
-		const plan = planWithDefaults(balances, eligible(1, 2, 3));
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 1 }, { netuid: 2 }, { netuid: 3 }),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.some(
@@ -353,7 +260,11 @@ describe("computeRebalance operations", () => {
 			],
 		});
 
-		const plan = planWithDefaults(balances, eligible(1, 2, 3));
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 1 }, { netuid: 2 }, { netuid: 3 }),
+			TEST_CONFIG,
+		);
 
 		const unstake = plan.operations.find(
 			(op) => op.kind === "unstake" && op.netuid === 70,
@@ -369,14 +280,18 @@ describe("computeRebalance operations", () => {
 	});
 
 	it("reports insufficient free balance per target when deficits cannot be funded", () => {
-		const available = 3n * MIN_POSITION_TAO;
+		const available = 3n * parseTao(0.5);
 		const balances = makeBalances({
 			totalTaoValue: FREE_RESERVE_TAO + available,
 			free: FREE_RESERVE_TAO + MIN_REBALANCE_TAO,
 			stakes: [],
 		});
 
-		const plan = planWithDefaults(balances, eligible(1, 2, 3));
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 1 }, { netuid: 2 }, { netuid: 3 }),
+			TEST_CONFIG,
+		);
 		const insufficient = plan.skipped.filter((s) =>
 			s.reason.startsWith("Insufficient free balance for target"),
 		);
@@ -399,13 +314,10 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
-		const hotkeysByTarget = new Map([[5, hotkey("picked")]]);
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets({ netuid: 5, hotkey: hotkey("picked") }),
 			TEST_CONFIG,
 		);
 
@@ -434,13 +346,10 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(5), TEST_CONFIG);
-		const hotkeysByTarget = new Map([[5, hotkey("picked")]]);
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets({ netuid: 5, hotkey: hotkey("picked") }),
 			TEST_CONFIG,
 		);
 
@@ -464,7 +373,11 @@ describe("computeRebalance operations", () => {
 			],
 		});
 
-		const plan = planWithDefaults(balances, eligible(2));
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 2 }),
+			TEST_CONFIG,
+		);
 
 		expect(
 			plan.operations.find(
@@ -487,20 +400,15 @@ describe("computeRebalance operations", () => {
 				makeStake({ netuid: 84, taoValue: parseTao(0.419) }),
 			],
 		});
-		const { targets } = selectTargets(
-			balances,
-			eligible(24, 54, 84, 112),
-			TEST_CONFIG,
-		);
-		const hotkeysByTarget = new Map<number, string>();
-		for (const t of targets) {
-			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
-		}
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets(
+				{ netuid: 24, hotkey: hotkey("validator") },
+				{ netuid: 54, hotkey: hotkey("validator") },
+				{ netuid: 84, hotkey: hotkey("validator") },
+				{ netuid: 112, hotkey: hotkey("validator") },
+			),
 			TEST_CONFIG,
 		);
 
@@ -538,20 +446,14 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(
-			balances,
-			eligible(50, 10, 20),
-			TEST_CONFIG,
-		);
-		const hotkeysByTarget = new Map<number, string>();
-		for (const t of targets) {
-			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
-		}
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets(
+				{ netuid: 50, hotkey: hotkey("validator") },
+				{ netuid: 10, hotkey: hotkey("validator") },
+				{ netuid: 20, hotkey: hotkey("validator") },
+			),
 			TEST_CONFIG,
 		);
 
@@ -582,16 +484,13 @@ describe("computeRebalance operations", () => {
 				}),
 			],
 		});
-		const { targets } = selectTargets(balances, eligible(10, 20), TEST_CONFIG);
-		const hotkeysByTarget = new Map<number, string>();
-		for (const t of targets) {
-			hotkeysByTarget.set(t.netuid, hotkey(`validator`));
-		}
 
 		const plan = computeRebalance(
 			balances,
-			targets,
-			hotkeysByTarget,
+			targets(
+				{ netuid: 10, hotkey: hotkey("validator") },
+				{ netuid: 20, hotkey: hotkey("validator") },
+			),
 			TEST_CONFIG,
 		);
 
@@ -609,26 +508,5 @@ describe("computeRebalance operations", () => {
 				(op) => op.kind === "unstake_partial" && op.netuid === 10,
 			),
 		).toBeUndefined();
-	});
-
-	it("skips target with no resolved hotkey", () => {
-		const balances = makeBalances({
-			totalTaoValue: FREE_RESERVE_TAO + TAO,
-			free: FREE_RESERVE_TAO + TAO,
-		});
-		const { targets } = selectTargets(balances, eligible(33), TEST_CONFIG);
-		const hotkeysByTarget = new Map<number, string>();
-
-		const plan = computeRebalance(
-			balances,
-			targets,
-			hotkeysByTarget,
-			TEST_CONFIG,
-		);
-
-		expect(plan.skipped).toContainEqual({
-			netuid: 33,
-			reason: "No validator hotkey resolved for target subnet",
-		});
 	});
 });

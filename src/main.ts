@@ -20,18 +20,14 @@ import {
 	sendErrorNotification,
 	sendRebalanceNotification,
 } from "./notifications/discord.ts";
-import {
-	computeRebalance,
-	selectTargets,
-} from "./rebalance/computeRebalance.ts";
+import { computeRebalance } from "./rebalance/computeRebalance.ts";
 import { executeRebalance } from "./rebalance/executeRebalance.ts";
 import { initLog, log } from "./rebalance/logger.ts";
 import { simulateAllOperations } from "./rebalance/simulateSlippage.ts";
 import { TAO } from "./rebalance/tao.ts";
 import { fetchAllSubnets } from "./subnets/fetchAllSubnets.ts";
-import { getBestSubnets } from "./subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "./subnets/getHealthySubnets.ts";
-import { resolveValidators } from "./subnets/resolveValidators.ts";
+import { getStrategyTargets } from "./subnets/getStrategyTargets.ts";
 
 // --- CLI arguments ---
 const dryRun = process.argv.includes("--dry-run");
@@ -121,35 +117,19 @@ try {
 	}
 
 	const subnetNames = new Map(allSubnets.map((s) => [s.netuid, s.name]));
-	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
-	const { winners: eligible } = await getBestSubnets(
+	const { targets, skipped: strategySkips } = await getStrategyTargets(
+		api,
 		sn45,
-		config.strategy,
+		balances,
+		config,
 		healthyNetuids,
-		log,
-		subnetNames,
-		heldNetuids,
+		{ subnetNames, fallbackValidatorHotkey: validatorHotkey },
 	);
 
-	log.info(
-		`Portfolio: ${formatTao(balances.totalTaoValue)} τ total, ${balances.stakes.length} positions, ${eligible.length} eligible subnets`,
-	);
 	logBalancesDetail("BEFORE", coldkey, balances);
 
-	const { targets } = selectTargets(balances, eligible, config.rebalance);
-	const { hotkeysByTarget, skipped: hotkeySkips } = await resolveValidators(
-		api,
-		balances.stakes,
-		targets.map((t) => t.netuid),
-		validatorHotkey,
-	);
-	const plan = computeRebalance(
-		balances,
-		targets,
-		hotkeysByTarget,
-		config.rebalance,
-	);
-	plan.skipped.push(...hotkeySkips);
+	const plan = computeRebalance(balances, targets, config.rebalance);
+	plan.skipped.push(...strategySkips);
 
 	if (plan.operations.length === 0) {
 		log.info("Portfolio is balanced — nothing to do.");

@@ -1,7 +1,6 @@
 /** Raw YAML config shape — human-friendly units (TAO, percentages) */
 export interface RawConfig {
 	rebalance: {
-		maxSubnets: number;
 		minPositionTao: number;
 		freeReserveTao: number;
 		minOperationTao: number;
@@ -21,13 +20,13 @@ export interface RawConfig {
 		/** Drop subnets in bottom N% of vol/mcap ratio (e.g., 10 = bottom 10%) */
 		bottomPercentileCutoff: number;
 		incumbencyBonus: number;
+		maxSubnets: number;
 	};
 }
 
 /** Resolved config — ready for use in code (RAO bigints, decimal fractions) */
 export interface AppConfig {
 	rebalance: {
-		maxSubnets: number;
 		minPositionTao: bigint;
 		freeReserveTao: bigint;
 		minOperationTao: bigint;
@@ -46,5 +45,6 @@ export interface AppConfig {
 		minEmissionPct: number;
 		bottomPercentileCutoff: number;
 		incumbencyBonus: number;
+		maxSubnets: number;
 	};
 }

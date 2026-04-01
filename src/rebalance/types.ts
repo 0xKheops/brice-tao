@@ -62,13 +62,15 @@ export type RebalanceOperation =
 	| StakeOperation
 	| MoveOperation;
 
-export interface TargetSubnet {
+export interface StrategyTarget {
 	netuid: number;
-	targetTaoValue: bigint;
+	hotkey: string;
+	/** Fraction of available portfolio to allocate (e.g. 0.1 = 10%) */
+	share: number;
 }
 
 export interface RebalancePlan {
-	targets: TargetSubnet[];
+	targets: StrategyTarget[];
 	operations: RebalanceOperation[];
 	/** Subnets not acted on because operation would be below minimum */
 	skipped: Array<{ netuid: number; reason: string }>;

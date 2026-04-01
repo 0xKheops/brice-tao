@@ -1,13 +1,12 @@
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
 import type { AppConfig } from "../config/types.ts";
-import type { SubnetScore } from "../subnets/getBestSubnets.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import type {
 	MoveOperation,
 	RebalanceOperation,
 	RebalancePlan,
-	TargetSubnet,
+	StrategyTarget,
 } from "./types.ts";
 
 /** u64::MAX — used with move_stake to sweep all alpha for a hotkey on a subnet */
@@ -17,73 +16,46 @@ interface ClassifiedPosition extends StakeEntry {
 	classification: "keep" | "exit";
 }
 
-/**
- * Determine the target subnets and per-subnet allocation from the portfolio
- * and eligible list. This is execution sizing: how many subnets and how much each.
- */
-export function selectTargets(
-	balances: Balances,
-	eligibleSubnets: SubnetScore[],
-	config: AppConfig["rebalance"],
-): { targets: TargetSubnet[] } {
-	const available = balances.totalTaoValue - config.freeReserveTao;
-	if (available <= 0n) {
-		log.warn("Portfolio too small to rebalance (below free reserve)");
-		return { targets: [] };
-	}
-
-	const x = Math.min(
-		config.maxSubnets,
-		Math.max(Number(balances.totalTaoValue / config.minPositionTao), 1),
-		Math.max(eligibleSubnets.length, 1),
-	);
-
-	if (x < 1) {
-		log.warn("Not enough TAO for even one position");
-		return { targets: [] };
-	}
-
-	const targetNetuids = eligibleSubnets.slice(0, x).map((s) => s.netuid);
-	while (targetNetuids.length < x) {
-		if (!targetNetuids.includes(0)) {
-			targetNetuids.push(0);
-		} else {
-			break;
-		}
-	}
-
-	const targetTaoPerSubnet = available / BigInt(targetNetuids.length);
-	const targets: TargetSubnet[] = targetNetuids.map((netuid) => ({
-		netuid,
-		targetTaoValue: targetTaoPerSubnet,
-	}));
-
-	log.verbose(
-		`Target allocation: ${targetNetuids.length} subnets, ${formatTao(targetTaoPerSubnet)} τ each`,
-	);
-	for (const t of targets) {
-		log.verbose(`  Target SN${t.netuid}: ${formatTao(t.targetTaoValue)} τ`);
-	}
-
-	return { targets };
+interface ResolvedTarget extends StrategyTarget {
+	targetTaoValue: bigint;
 }
 
 /**
- * Compute the rebalance plan: given current balances, pre-selected targets,
- * and pre-resolved validator hotkeys, produce a list of operations to reach
- * equal-weight allocation across the target subnets.
+ * Compute the rebalance plan: given current balances and strategy targets
+ * (with shares), convert shares to absolute TAO values and produce a list
+ * of operations to reach the target allocation.
  */
 export function computeRebalance(
 	balances: Balances,
-	targets: TargetSubnet[],
-	hotkeysByTarget: Map<number, string>,
+	targets: StrategyTarget[],
 	config: AppConfig["rebalance"],
 ): RebalancePlan {
 	if (targets.length === 0) {
 		return { targets: [], operations: [], skipped: [] };
 	}
 
-	const targetSet = new Set(targets.map((t) => t.netuid));
+	const available = balances.totalTaoValue - config.freeReserveTao;
+	if (available <= 0n) {
+		return { targets, operations: [], skipped: [] };
+	}
+
+	// Convert shares to absolute TAO values
+	const resolved: ResolvedTarget[] = targets.map((t) => ({
+		...t,
+		targetTaoValue:
+			(available * BigInt(Math.round(t.share * 1e9))) / 1_000_000_000n,
+	}));
+
+	log.verbose(
+		`Target allocation: ${resolved.length} subnets, ${formatTao(resolved[0]?.targetTaoValue ?? 0n)} τ each`,
+	);
+	for (const t of resolved) {
+		log.verbose(
+			`  Target SN${t.netuid}: ${formatTao(t.targetTaoValue)} τ (${t.hotkey.slice(0, 8)}…)`,
+		);
+	}
+
+	const targetSet = new Set(resolved.map((t) => t.netuid));
 	const classified = classifyPositions(balances.stakes, targetSet);
 
 	for (const pos of classified) {
@@ -92,13 +64,8 @@ export function computeRebalance(
 		);
 	}
 
-	return generateOperations(
-		classified,
-		targets,
-		hotkeysByTarget,
-		balances.free,
-		config,
-	);
+	const plan = generateOperations(classified, resolved, balances.free, config);
+	return { targets, ...plan };
 }
 
 function classifyPositions(
@@ -117,11 +84,10 @@ function classifyPositions(
 
 function generateOperations(
 	positions: ClassifiedPosition[],
-	targets: TargetSubnet[],
-	targetHotkeys: Map<number, string>,
+	targets: ResolvedTarget[],
 	freeBalance: bigint,
 	config: AppConfig["rebalance"],
-): RebalancePlan {
+): { operations: RebalanceOperation[]; skipped: RebalancePlan["skipped"] } {
 	const operations: RebalanceOperation[] = [];
 	const skipped: RebalancePlan["skipped"] = [];
 
@@ -150,7 +116,6 @@ function generateOperations(
 				const currentFulfilled = fulfilled.get(t.netuid) ?? 0n;
 				const deficit = t.targetTaoValue - currentFulfilled;
 				if (deficit <= 0n) return false;
-				// Allow overfilling up to 2× target allocation (prefer exact-fit via sort)
 				return currentFulfilled + pos.taoValue <= 2n * t.targetTaoValue;
 			})
 			.sort((a, b) =>
@@ -162,25 +127,15 @@ function generateOperations(
 			)[0];
 
 		if (bestSwapTarget) {
-			const targetHotkey = targetHotkeys.get(bestSwapTarget.netuid);
-			const needsHotkeyChange = targetHotkey && targetHotkey !== pos.hotkey;
-			// When the destination validator differs from the current hotkey, we must
-			// reassign the hotkey BEFORE swapping. Doing it after would hit the
-			// per-block StakingOperationRateLimitExceeded error because both the swap
-			// (via stake_into_subnet) and the move (via validate_stake_transition)
-			// touch the same (hotkey, coldkey, dest_netuid) rate-limit key.
-			//
-			// By moving the hotkey on the ORIGIN subnet first (same-subnet moves
-			// don't set the rate limiter), then swapping under the new hotkey, each
-			// operation uses a different rate-limit key and both succeed.
+			const needsHotkeyChange = bestSwapTarget.hotkey !== pos.hotkey;
 			if (needsHotkeyChange) {
-				operations.push(moveOp(pos.netuid, pos.hotkey, targetHotkey));
+				operations.push(moveOp(pos.netuid, pos.hotkey, bestSwapTarget.hotkey));
 			}
 			operations.push({
 				kind: "swap",
 				originNetuid: pos.netuid,
 				destinationNetuid: bestSwapTarget.netuid,
-				hotkey: needsHotkeyChange ? targetHotkey : pos.hotkey,
+				hotkey: needsHotkeyChange ? bestSwapTarget.hotkey : pos.hotkey,
 				alphaAmount: pos.stake,
 				estimatedTaoValue: pos.taoValue,
 				limitPrice: 0n,
@@ -214,7 +169,7 @@ function generateOperations(
 		);
 	}
 
-	// 2. Overweight reductions — swap excess to underweight target, then move hotkey if needed.
+	// 2. Overweight reductions — swap excess to underweight target.
 	for (const target of targets) {
 		const keepPositions = positions.filter(
 			(p) => p.netuid === target.netuid && p.classification === "keep",
@@ -223,7 +178,6 @@ function generateOperations(
 			const excess = pos.taoValue - target.targetTaoValue;
 			if (excess < config.minRebalanceTao) continue;
 
-			// Ensure remaining position stays above minStakeTao
 			const maxReducible = pos.taoValue - config.minStakeTao;
 			const reduceAmount = excess < maxReducible ? excess : maxReducible;
 			if (reduceAmount < config.minRebalanceTao) {
@@ -255,23 +209,17 @@ function generateOperations(
 
 			if (fullSwapTarget) {
 				const destFulfilled = fulfilled.get(fullSwapTarget.netuid) ?? 0n;
-				const targetHotkey = targetHotkeys.get(fullSwapTarget.netuid);
-				const needsHotkeyChange = targetHotkey && targetHotkey !== pos.hotkey;
-				// Same rate-limit avoidance as Phase 1: move hotkey on origin subnet
-				// first, then swap under the new hotkey to avoid conflicting
-				// (hotkey, coldkey, netuid) rate-limit keys within the same block.
-				// Only move the partial reduceAlpha amount so the retained position
-				// stays on its original hotkey.
+				const needsHotkeyChange = fullSwapTarget.hotkey !== pos.hotkey;
 				if (needsHotkeyChange) {
 					operations.push(
-						moveOp(pos.netuid, pos.hotkey, targetHotkey, reduceAlpha),
+						moveOp(pos.netuid, pos.hotkey, fullSwapTarget.hotkey, reduceAlpha),
 					);
 				}
 				operations.push({
 					kind: "swap",
 					originNetuid: pos.netuid,
 					destinationNetuid: fullSwapTarget.netuid,
-					hotkey: needsHotkeyChange ? targetHotkey : pos.hotkey,
+					hotkey: needsHotkeyChange ? fullSwapTarget.hotkey : pos.hotkey,
 					alphaAmount: reduceAlpha,
 					estimatedTaoValue: reduceAmount,
 					limitPrice: 0n,
@@ -311,22 +259,12 @@ function generateOperations(
 		}
 	}
 
-	// Clamp after unstake proceeds so the reserve "debt" is repaid first
 	if (availableFree < 0n) availableFree = 0n;
 
 	for (const target of targets) {
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
 		const deficit = target.targetTaoValue - currentFulfilled;
 		if (deficit < config.minRebalanceTao) continue;
-
-		const targetHotkey = targetHotkeys.get(target.netuid);
-		if (!targetHotkey) {
-			skipped.push({
-				netuid: target.netuid,
-				reason: "No validator hotkey resolved for target subnet",
-			});
-			continue;
-		}
 
 		const stakeAmount = deficit < availableFree ? deficit : availableFree;
 		if (stakeAmount < config.minRebalanceTao) {
@@ -340,7 +278,7 @@ function generateOperations(
 		operations.push({
 			kind: "stake",
 			netuid: target.netuid,
-			hotkey: targetHotkey,
+			hotkey: target.hotkey,
 			taoAmount: stakeAmount,
 			limitPrice: 0n,
 		});
@@ -349,11 +287,11 @@ function generateOperations(
 		availableFree -= stakeAmount;
 
 		log.verbose(
-			`  OP: stake SN${target.netuid} with ${targetHotkey.slice(0, 8)}…: ${formatTao(stakeAmount)} τ`,
+			`  OP: stake SN${target.netuid} with ${target.hotkey.slice(0, 8)}…: ${formatTao(stakeAmount)} τ`,
 		);
 	}
 
-	return { targets, operations, skipped };
+	return { operations, skipped };
 }
 
 function formatTao(rao: bigint): string {
@@ -366,11 +304,6 @@ function moveOp(
 	netuid: number,
 	originHotkey: string,
 	destinationHotkey: string,
-	/**
-	 * Amount of alpha to move. Defaults to the maximum value via U64_MAX.
-	 * For full move, it's recommended to use the default value (it will not cost more fee as it's using fixed-width encoding, and fixed weight).
-	 * For partial reductions, calculate the alpha amount corresponding to the TAO reduction to avoid unnecessarily moving more stake than needed.
-	 */
 	alphaAmount: bigint = U64_MAX,
 ): MoveOperation {
 	return {

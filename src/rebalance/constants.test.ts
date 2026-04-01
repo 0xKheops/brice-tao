@@ -41,7 +41,7 @@ describe("config loading and validation", () => {
 			config.rebalance.minRebalanceTao,
 		);
 		expect(config.rebalance.freeReserveTao).toBeGreaterThan(0n);
-		expect(config.rebalance.maxSubnets).toBeGreaterThan(0);
+		expect(config.strategy.maxSubnets).toBeGreaterThan(0);
 	});
 
 	it("keeps slippage buffers in sane ranges", () => {
@@ -67,7 +67,6 @@ describe("config loading and validation", () => {
 			tmpPath,
 			[
 				"rebalance:",
-				"  maxSubnets: -1",
 				"  minPositionTao: 0.5",
 				"  freeReserveTao: 0.05",
 				"  minOperationTao: 0.01",
@@ -83,6 +82,7 @@ describe("config loading and validation", () => {
 				"  minEmissionPct: 0",
 				"  bottomPercentileCutoff: 10",
 				"  incumbencyBonus: 3",
+				"  maxSubnets: -1",
 			].join("\n"),
 		);
 		expect(() => loadConfig(tmpPath)).toThrow(

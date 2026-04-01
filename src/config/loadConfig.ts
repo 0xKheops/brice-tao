@@ -38,7 +38,6 @@ function validateRawConfig(raw: unknown): RawConfig {
 
 	return {
 		rebalance: {
-			maxSubnets: requirePositiveInt(rebalance, "maxSubnets"),
 			minPositionTao: requireNonNegativeNumber(rebalance, "minPositionTao"),
 			freeReserveTao: requireNonNegativeNumber(rebalance, "freeReserveTao"),
 			minOperationTao: requireNonNegativeNumber(rebalance, "minOperationTao"),
@@ -64,6 +63,7 @@ function validateRawConfig(raw: unknown): RawConfig {
 				"bottomPercentileCutoff",
 			),
 			incumbencyBonus: requireNonNegativeNumber(strategy, "incumbencyBonus"),
+			maxSubnets: requirePositiveInt(strategy, "maxSubnets"),
 		},
 	};
 }
@@ -71,7 +71,6 @@ function validateRawConfig(raw: unknown): RawConfig {
 function resolveConfig(raw: RawConfig): AppConfig {
 	return {
 		rebalance: {
-			maxSubnets: raw.rebalance.maxSubnets,
 			minPositionTao: parseTao(raw.rebalance.minPositionTao),
 			freeReserveTao: parseTao(raw.rebalance.freeReserveTao),
 			minOperationTao: parseTao(raw.rebalance.minOperationTao),
