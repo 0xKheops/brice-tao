@@ -3,6 +3,8 @@ export interface RawConfig {
 	rebalance: {
 		minPositionTao: number;
 		freeReserveTao: number;
+		/** Drift tolerance for reserve replenishment, in percent (e.g., 5 = 5%) */
+		freeReserveTaoDriftPercent: number;
 		minOperationTao: number;
 		minStakeTao: number;
 		minRebalanceTao: number;
@@ -29,6 +31,8 @@ export interface AppConfig {
 	rebalance: {
 		minPositionTao: bigint;
 		freeReserveTao: bigint;
+		/** Drift tolerance as decimal fraction (e.g., 0.05 for 5%) */
+		freeReserveTaoDriftPercent: number;
 		minOperationTao: bigint;
 		minStakeTao: bigint;
 		minRebalanceTao: bigint;

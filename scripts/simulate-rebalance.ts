@@ -4,12 +4,17 @@ import {
 } from "@polkadot-api/descriptors";
 import { createWsClient } from "polkadot-api/ws";
 import { Sn45Api } from "../src/api/generated/Sn45Api.ts";
+import type { Balances } from "../src/balances/getBalances.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
 import { loadConfig } from "../src/config/loadConfig.ts";
+import { computeRebalance } from "../src/rebalance/computeRebalance.ts";
+import { TAO } from "../src/rebalance/tao.ts";
+import type { RebalanceOperation } from "../src/rebalance/types.ts";
 import type { SubnetInfo } from "../src/subnets/fetchAllSubnets.ts";
 import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
 import { getBestSubnets } from "../src/subnets/getBestSubnets.ts";
 import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
+import { getStrategyTargets } from "../src/subnets/getStrategyTargets.ts";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -30,6 +35,7 @@ const coldkey = process.env.COLDKEY_ADDRESS;
 
 if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
 if (!sn45ApiKey) throw new Error("SN45_API_KEY is not set");
+if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 
 // ---------------------------------------------------------------------------
 // Metadata caching
@@ -62,17 +68,15 @@ try {
 
 	console.log("Fetching on-chain subnet info and SN45 leaderboard…");
 
-	// Fetch on-chain data
-	const subnets = await fetchAllSubnets(api);
+	// Fetch on-chain data + balances in parallel
+	const [subnets, balances] = await Promise.all([
+		fetchAllSubnets(api),
+		getBalances(api, coldkey),
+	]);
 	const healthyNetuids = getHealthySubnets(subnets);
 	const subnetMap = new Map(subnets.map((s) => [s.netuid, s]));
 	const subnetNames = new Map(subnets.map((s) => [s.netuid, s.name]));
-	// Optionally fetch balances for incumbency bonus
-	let heldNetuids: Set<number> | undefined;
-	if (coldkey) {
-		const balances = await getBalances(api, coldkey);
-		heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
-	}
+	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
 
 	// --- Eligible list: call getBestSubnets() (same logic as rebalancer) ---
 	const { winners, evaluations } = await getBestSubnets(
@@ -130,11 +134,24 @@ try {
 
 	if (hasIncumbency) {
 		console.log(`\n⭐ = held subnet (+${INCUMBENCY_BONUS} incumbency bonus)`);
-	} else if (!coldkey) {
-		console.log(
-			"\nNote: Set COLDKEY_ADDRESS to apply incumbency bonus for held subnets.",
-		);
 	}
+
+	// --- Compute strategy targets & rebalance plan ---
+	const validatorHotkey = process.env.VALIDATOR_HOTKEY;
+	const { targets, skipped: strategySkips } = await getStrategyTargets(
+		api,
+		sn45,
+		balances,
+		appConfig,
+		healthyNetuids,
+		{ subnetNames, fallbackValidatorHotkey: validatorHotkey },
+	);
+	const plan = computeRebalance(balances, targets, appConfig.rebalance);
+	plan.skipped.push(...strategySkips);
+
+	// --- Portfolio & operations terminal output ---
+	printPortfolio(balances, subnetNames, appConfig.rebalance.freeReserveTao);
+	printOperations(plan.operations, plan.skipped, subnetNames);
 
 	// --- Build markdown audit table from evaluations + on-chain data ---
 	const now = new Date()
@@ -220,6 +237,33 @@ try {
 		md += `| ${values.join(" | ")} |\n`;
 	}
 
+	// --- Portfolio section ---
+	md += `\n## Portfolio\n\n`;
+	md += `| Asset | Value (τ) |\n|---|---|\n`;
+	md += `| **Native TAO** | ${formatTao(balances.free)} (reserve: ${formatTao(appConfig.rebalance.freeReserveTao)}) |\n`;
+	for (const s of balances.stakes) {
+		const name = subnetNames.get(s.netuid) ?? `SN${s.netuid}`;
+		md += `| SN${s.netuid} ${name} | ${formatTao(s.taoValue)} |\n`;
+	}
+	md += `| **Total** | **${formatTao(balances.totalTaoValue)}** |\n`;
+
+	// --- Operations section ---
+	md += `\n## Planned Operations (${plan.operations.length})\n\n`;
+	if (plan.operations.length === 0) {
+		md += `Portfolio is balanced — nothing to do.\n`;
+	} else {
+		md += `| # | Operation | Details | ~Value (τ) |\n|---|---|---|---|\n`;
+		for (const [i, op] of plan.operations.entries()) {
+			md += `| ${i + 1} | ${formatOpKind(op)} | ${formatOpDetail(op, subnetNames)} | ${formatTao(opEstimatedValue(op))} |\n`;
+		}
+	}
+	if (plan.skipped.length > 0) {
+		md += `\n### Skipped\n\n`;
+		for (const s of plan.skipped) {
+			md += `- SN${s.netuid}: ${s.reason}\n`;
+		}
+	}
+
 	// Write simulation output
 	const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const outPath = `reports/simulation-${ts}.md`;
@@ -267,4 +311,114 @@ function formatRegistration(health: SubnetInfo | undefined): string {
 	if (health.isPruneTarget) return "⚠️ prune risk";
 	if (health.isImmune) return "🛡️ immune";
 	return "—";
+}
+
+function formatTao(rao: bigint): string {
+	const whole = rao / TAO;
+	const frac = ((rao % TAO) * 1000n) / TAO;
+	return `${whole}.${frac.toString().padStart(3, "0")}`;
+}
+
+function formatOpKind(op: RebalanceOperation): string {
+	switch (op.kind) {
+		case "swap":
+			return "Swap";
+		case "unstake":
+			return "Unstake";
+		case "unstake_partial":
+			return "Unstake (partial)";
+		case "stake":
+			return "Stake";
+		case "move":
+			return "Move hotkey";
+	}
+}
+
+function formatOpDetail(
+	op: RebalanceOperation,
+	names: Map<number, string>,
+): string {
+	const sn = (netuid: number) =>
+		`SN${netuid} ${names.get(netuid) ?? ""}`.trim();
+	switch (op.kind) {
+		case "swap":
+			return `${sn(op.originNetuid)} → ${sn(op.destinationNetuid)}`;
+		case "unstake":
+		case "unstake_partial":
+			return sn(op.netuid);
+		case "stake":
+			return sn(op.netuid);
+		case "move":
+			return `${sn(op.netuid)} (${op.originHotkey.slice(0, 8)}… → ${op.destinationHotkey.slice(0, 8)}…)`;
+	}
+}
+
+function opEstimatedValue(op: RebalanceOperation): bigint {
+	switch (op.kind) {
+		case "swap":
+		case "unstake":
+		case "unstake_partial":
+			return op.estimatedTaoValue;
+		case "stake":
+			return op.taoAmount;
+		case "move":
+			return 0n;
+	}
+}
+
+function printPortfolio(
+	balances: Balances,
+	subnetNames: Map<number, string>,
+	freeReserveTao: bigint,
+): void {
+	const reserveStatus =
+		balances.free >= freeReserveTao
+			? "✅"
+			: `⚠️  below reserve (${formatTao(freeReserveTao)})`;
+	console.log(`\n${"─".repeat(60)}`);
+	console.log("Portfolio");
+	console.log("─".repeat(60));
+	console.log(`  Native TAO:  ${formatTao(balances.free)} τ  ${reserveStatus}`);
+	console.log(`  Reserved:    ${formatTao(balances.reserved)} τ`);
+	if (balances.stakes.length > 0) {
+		console.log(`  Stakes (${balances.stakes.length}):`);
+		const sorted = [...balances.stakes].sort((a, b) =>
+			Number(b.taoValue - a.taoValue),
+		);
+		for (const s of sorted) {
+			const name = subnetNames.get(s.netuid) ?? "";
+			console.log(
+				`    SN${s.netuid.toString().padStart(3)} ${name.padEnd(20).slice(0, 20)}  ${formatTao(s.taoValue).padStart(10)} τ`,
+			);
+		}
+	}
+	console.log(`  ${"─".repeat(40)}`);
+	console.log(`  Total:       ${formatTao(balances.totalTaoValue)} τ`);
+}
+
+function printOperations(
+	operations: RebalanceOperation[],
+	skipped: Array<{ netuid: number; reason: string }>,
+	subnetNames: Map<number, string>,
+): void {
+	console.log(`\n${"─".repeat(60)}`);
+	console.log(`Operations (${operations.length})`);
+	console.log("─".repeat(60));
+	if (operations.length === 0) {
+		console.log("  Portfolio is balanced — nothing to do.");
+	} else {
+		for (const [i, op] of operations.entries()) {
+			const value = opEstimatedValue(op);
+			const valueStr = value > 0n ? `~${formatTao(value)} τ` : "";
+			console.log(
+				`  ${String(i + 1).padStart(2)}. ${formatOpKind(op).padEnd(18)} ${formatOpDetail(op, subnetNames).padEnd(30).slice(0, 30)}  ${valueStr}`,
+			);
+		}
+	}
+	if (skipped.length > 0) {
+		console.log(`\n  Skipped (${skipped.length}):`);
+		for (const s of skipped) {
+			console.log(`    SN${s.netuid}: ${s.reason}`);
+		}
+	}
 }

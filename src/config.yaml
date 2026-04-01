@@ -3,7 +3,8 @@
 
 rebalance:
   minPositionTao: 0.5
-  freeReserveTao: 0.05
+  freeReserveTao: 0.1
+  freeReserveTaoDriftPercent: 5   # 5% — skip replenishment if deficit is within this margin
   minOperationTao: 0.01
   minStakeTao: 0.01
   minRebalanceTao: 0.25

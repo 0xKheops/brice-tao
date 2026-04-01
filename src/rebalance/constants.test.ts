@@ -17,7 +17,7 @@ describe("config loading and validation", () => {
 	it("resolves TAO amounts to RAO bigints", () => {
 		config = loadConfig(configPath);
 		expect(config.rebalance.minPositionTao).toBe(parseTao(0.5));
-		expect(config.rebalance.freeReserveTao).toBe(parseTao(0.05));
+		expect(config.rebalance.freeReserveTao).toBe(parseTao(0.1));
 		expect(config.rebalance.minStakeTao).toBe(parseTao(0.01));
 		expect(config.rebalance.minOperationTao).toBe(parseTao(0.01));
 		expect(config.rebalance.minRebalanceTao).toBe(parseTao(0.25));
@@ -69,6 +69,7 @@ describe("config loading and validation", () => {
 				"rebalance:",
 				"  minPositionTao: 0.5",
 				"  freeReserveTao: 0.05",
+				"  freeReserveTaoDriftPercent: 5",
 				"  minOperationTao: 0.01",
 				"  minStakeTao: 0.01",
 				"  minRebalanceTao: 0.25",

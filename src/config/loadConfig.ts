@@ -40,6 +40,10 @@ function validateRawConfig(raw: unknown): RawConfig {
 		rebalance: {
 			minPositionTao: requireNonNegativeNumber(rebalance, "minPositionTao"),
 			freeReserveTao: requireNonNegativeNumber(rebalance, "freeReserveTao"),
+			freeReserveTaoDriftPercent: requireNonNegativeNumber(
+				rebalance,
+				"freeReserveTaoDriftPercent",
+			),
 			minOperationTao: requireNonNegativeNumber(rebalance, "minOperationTao"),
 			minStakeTao: requireNonNegativeNumber(rebalance, "minStakeTao"),
 			minRebalanceTao: requireNonNegativeNumber(rebalance, "minRebalanceTao"),
@@ -73,6 +77,8 @@ function resolveConfig(raw: RawConfig): AppConfig {
 		rebalance: {
 			minPositionTao: parseTao(raw.rebalance.minPositionTao),
 			freeReserveTao: parseTao(raw.rebalance.freeReserveTao),
+			freeReserveTaoDriftPercent:
+				raw.rebalance.freeReserveTaoDriftPercent / 100,
 			minOperationTao: parseTao(raw.rebalance.minOperationTao),
 			minStakeTao: parseTao(raw.rebalance.minStakeTao),
 			minRebalanceTao: parseTao(raw.rebalance.minRebalanceTao),

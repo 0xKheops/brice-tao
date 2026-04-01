@@ -34,12 +34,22 @@ export function computeRebalance(
 		return { targets: [], operations: [], skipped: [] };
 	}
 
+	// 1. Reserve replenishment: if free balance is below the configured
+	//    reserve, unstake the deficit from the biggest position first
+	const targetSet = new Set(targets.map((t) => t.netuid));
+	const classified = classifyPositions(balances.stakes, targetSet);
+	const {
+		operations: replenishOps,
+		adjustedFree,
+		adjustedPositions,
+	} = replenishReserve(balances.free, classified, config);
+
+	// 2. Compute available portfolio and per-target allocation
 	const available = balances.totalTaoValue - config.freeReserveTao;
 	if (available <= 0n) {
-		return { targets, operations: [], skipped: [] };
+		return { targets, operations: replenishOps, skipped: [] };
 	}
 
-	// Convert shares to absolute TAO values
 	const resolved: ResolvedTarget[] = targets.map((t) => ({
 		...t,
 		targetTaoValue:
@@ -55,31 +65,113 @@ export function computeRebalance(
 		);
 	}
 
-	const targetSet = new Set(resolved.map((t) => t.netuid));
-	const classified = classifyPositions(balances.stakes, targetSet);
-
-	for (const pos of classified) {
+	for (const pos of adjustedPositions) {
 		log.verbose(
 			`  Position SN${pos.netuid} (${pos.hotkey.slice(0, 8)}…): ${formatTao(pos.taoValue)} τ → ${pos.classification}`,
 		);
 	}
 
-	const plan = generateOperations(classified, resolved, balances.free, config);
-	return { targets, ...plan };
+	// 3. Generate rebalance operations from adjusted positions
+	const plan = generateOperations(
+		adjustedPositions,
+		resolved,
+		adjustedFree,
+		config,
+	);
+	return {
+		targets,
+		operations: [...replenishOps, ...plan.operations],
+		skipped: plan.skipped,
+	};
 }
 
 function classifyPositions(
-	stakes: StakeEntry[],
-	targetSet: Set<number>,
+	currentPositions: StakeEntry[],
+	targetPositions: Set<number>,
 ): ClassifiedPosition[] {
-	return stakes.map((s) => {
-		const classification: ClassifiedPosition["classification"] = targetSet.has(
-			s.netuid,
-		)
-			? "keep"
-			: "exit";
+	return currentPositions.map((s) => {
+		const classification: ClassifiedPosition["classification"] =
+			targetPositions.has(s.netuid) ? "keep" : "exit";
 		return { ...s, classification };
 	});
+}
+
+/**
+ * If free balance is below the reserve threshold, generate an unstake_partial
+ * to replenish it. Prefers the biggest exit position; falls back to the
+ * biggest overall position. Skips entirely if the source position cannot
+ * cover the deficit without dropping below minStakeTao.
+ */
+function replenishReserve(
+	freeBalance: bigint,
+	positions: ClassifiedPosition[],
+	config: AppConfig["rebalance"],
+): {
+	operations: RebalanceOperation[];
+	adjustedFree: bigint;
+	adjustedPositions: ClassifiedPosition[];
+} {
+	const noChange = {
+		operations: [] as RebalanceOperation[],
+		adjustedFree: freeBalance,
+		adjustedPositions: positions,
+	};
+
+	const deficit = config.freeReserveTao - freeBalance;
+	const driftMargin =
+		(config.freeReserveTao *
+			BigInt(Math.round(config.freeReserveTaoDriftPercent * 1e9))) /
+		1_000_000_000n;
+	if (
+		deficit <= 0n ||
+		deficit < config.minOperationTao ||
+		deficit <= driftMargin
+	)
+		return noChange;
+
+	const byValueDesc = (a: ClassifiedPosition, b: ClassifiedPosition) =>
+		Number(b.taoValue - a.taoValue);
+	const exits = positions
+		.filter((p) => p.classification === "exit")
+		.sort(byValueDesc);
+	const source = exits[0] ?? [...positions].sort(byValueDesc)[0];
+
+	if (!source || source.taoValue - deficit < config.minStakeTao)
+		return noChange;
+
+	const alphaToUnstake =
+		source.alphaPrice > 0n ? (deficit * TAO) / source.alphaPrice : 0n;
+	if (alphaToUnstake <= 0n) return noChange;
+
+	log.info(
+		`Reserve replenishment: unstaking ~${formatTao(deficit)} τ from SN${source.netuid} ` +
+			`(free ${formatTao(freeBalance)} τ < reserve ${formatTao(config.freeReserveTao)} τ)`,
+	);
+
+	const operation: RebalanceOperation = {
+		kind: "unstake_partial",
+		netuid: source.netuid,
+		hotkey: source.hotkey,
+		alphaAmount: alphaToUnstake,
+		estimatedTaoValue: deficit,
+		limitPrice: 0n,
+	};
+
+	const adjustedPositions = positions.map((p) =>
+		p === source
+			? {
+					...p,
+					stake: p.stake - alphaToUnstake,
+					taoValue: p.taoValue - deficit,
+				}
+			: p,
+	);
+
+	return {
+		operations: [operation],
+		adjustedFree: freeBalance + deficit,
+		adjustedPositions,
+	};
 }
 
 function generateOperations(

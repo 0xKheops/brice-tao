@@ -8,6 +8,7 @@ import type { StrategyTarget } from "./types.ts";
 const TEST_CONFIG: AppConfig["rebalance"] = {
 	minPositionTao: parseTao(0.5),
 	freeReserveTao: parseTao(0.05),
+	freeReserveTaoDriftPercent: 0.05,
 	minOperationTao: parseTao(0.01),
 	minStakeTao: parseTao(0.01),
 	minRebalanceTao: parseTao(0.25),
@@ -508,5 +509,195 @@ describe("computeRebalance", () => {
 				(op) => op.kind === "unstake_partial" && op.netuid === 10,
 			),
 		).toBeUndefined();
+	});
+
+	describe("reserve replenishment", () => {
+		it("unstakes from biggest exit position when free < reserve", () => {
+			const freeBalance = parseTao(0.01);
+			const deficit = FREE_RESERVE_TAO - freeBalance;
+			const hk = hotkey("shared");
+			const balances = makeBalances({
+				totalTaoValue: parseTao(3.06),
+				free: freeBalance,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: 2n * TAO,
+						stake: 2n * TAO,
+					}),
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: TAO,
+						stake: TAO,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			expect(plan.operations[0]).toEqual(
+				expect.objectContaining({
+					kind: "unstake_partial",
+					netuid: 99,
+					estimatedTaoValue: deficit,
+				}),
+			);
+		});
+
+		it("prefers exit over keep for replenishment even if keep is bigger", () => {
+			const freeBalance = parseTao(0.01);
+			const deficit = FREE_RESERVE_TAO - freeBalance;
+			const hk = hotkey("shared");
+			const balances = makeBalances({
+				totalTaoValue: parseTao(5.01),
+				free: freeBalance,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: 3n * TAO,
+						stake: 3n * TAO,
+					}),
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: 2n * TAO,
+						stake: 2n * TAO,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			expect(plan.operations[0]).toEqual(
+				expect.objectContaining({
+					kind: "unstake_partial",
+					netuid: 99,
+					estimatedTaoValue: deficit,
+				}),
+			);
+		});
+
+		it("falls back to biggest keep position when no exits exist", () => {
+			const freeBalance = parseTao(0.01);
+			const deficit = FREE_RESERVE_TAO - freeBalance;
+			const hk = hotkey("shared");
+			const balances = makeBalances({
+				totalTaoValue: parseTao(3.01),
+				free: freeBalance,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: 2n * TAO,
+						stake: 2n * TAO,
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: TAO,
+						stake: TAO,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }, { netuid: 20, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			expect(plan.operations[0]).toEqual(
+				expect.objectContaining({
+					kind: "unstake_partial",
+					netuid: 10,
+					estimatedTaoValue: deficit,
+				}),
+			);
+		});
+
+		it("skips replenishment when deficit is below minOperationTao", () => {
+			const freeBalance = FREE_RESERVE_TAO - MIN_OPERATION_TAO + 1n;
+			const balances = makeBalances({
+				totalTaoValue: freeBalance + 2n * TAO,
+				free: freeBalance,
+				stakes: [
+					makeStake({ netuid: 99, taoValue: 2n * TAO, stake: 2n * TAO }),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10 }),
+				TEST_CONFIG,
+			);
+
+			expect(
+				plan.operations.find(
+					(op) =>
+						op.kind === "unstake_partial" &&
+						op.estimatedTaoValue < MIN_OPERATION_TAO,
+				),
+			).toBeUndefined();
+		});
+
+		it("skips replenishment when biggest position cannot cover deficit", () => {
+			const freeBalance = parseTao(0.01);
+			const deficit = FREE_RESERVE_TAO - freeBalance;
+			const smallPosition = deficit + MIN_STAKE_TAO - 1n;
+			const balances = makeBalances({
+				totalTaoValue: freeBalance + smallPosition,
+				free: freeBalance,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						taoValue: smallPosition,
+						stake: smallPosition,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10 }),
+				TEST_CONFIG,
+			);
+
+			const replenish = plan.operations.find(
+				(op) => op.kind === "unstake_partial" && op.netuid === 99,
+			);
+			expect(replenish).toBeUndefined();
+		});
+
+		it("does not replenish when free balance equals reserve", () => {
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+				free: FREE_RESERVE_TAO,
+				stakes: [makeStake({ netuid: 10, taoValue: 2n * TAO })],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hotkey("10") }),
+				TEST_CONFIG,
+			);
+
+			const replenish = plan.operations.find(
+				(op) =>
+					op.kind === "unstake_partial" &&
+					op.estimatedTaoValue <= FREE_RESERVE_TAO,
+			);
+			expect(replenish).toBeUndefined();
+		});
 	});
 });
