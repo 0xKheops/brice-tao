@@ -75,7 +75,6 @@ describe("config loading and validation", () => {
 				"  minRebalanceTao: 0.25",
 				"  slippageBufferPercent: 0.3",
 				"  swapSlippageBufferPercent: 2",
-				"  incumbencyBonus: 3",
 				"strategy:",
 				"  minScore: 70",
 				"  minVolumeTao: 100",
@@ -83,6 +82,7 @@ describe("config loading and validation", () => {
 				"  minHolders: 500",
 				"  minEmissionPct: 0",
 				"  bottomPercentileCutoff: 10",
+				"  incumbencyBonus: 3",
 			].join("\n"),
 		);
 		expect(() => loadConfig(tmpPath)).toThrow(

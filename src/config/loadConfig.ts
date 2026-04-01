@@ -52,7 +52,6 @@ function validateRawConfig(raw: unknown): RawConfig {
 				rebalance,
 				"swapSlippageBufferPercent",
 			),
-			incumbencyBonus: requireNonNegativeNumber(rebalance, "incumbencyBonus"),
 		},
 		strategy: {
 			minScore: requireNonNegativeNumber(strategy, "minScore"),
@@ -64,6 +63,7 @@ function validateRawConfig(raw: unknown): RawConfig {
 				strategy,
 				"bottomPercentileCutoff",
 			),
+			incumbencyBonus: requireNonNegativeNumber(strategy, "incumbencyBonus"),
 		},
 	};
 }
@@ -79,7 +79,6 @@ function resolveConfig(raw: RawConfig): AppConfig {
 			minRebalanceTao: parseTao(raw.rebalance.minRebalanceTao),
 			slippageBuffer: raw.rebalance.slippageBufferPercent / 100,
 			swapSlippageBuffer: raw.rebalance.swapSlippageBufferPercent / 100,
-			incumbencyBonus: raw.rebalance.incumbencyBonus,
 		},
 		strategy: { ...raw.strategy },
 	};

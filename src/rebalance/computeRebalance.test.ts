@@ -15,7 +15,6 @@ const TEST_CONFIG: AppConfig["rebalance"] = {
 	minRebalanceTao: parseTao(0.25),
 	slippageBuffer: 0.003,
 	swapSlippageBuffer: 0.02,
-	incumbencyBonus: 3,
 };
 
 const {

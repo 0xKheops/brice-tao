@@ -125,7 +125,6 @@ try {
 		log,
 		subnetNames,
 		heldNetuids,
-		config.rebalance.incumbencyBonus,
 	);
 
 	log.info(

@@ -10,6 +10,7 @@ const BASE_CONFIG: StrategyConfig = {
 	minHolders: 500,
 	minEmissionPct: 0,
 	bottomPercentileCutoff: 10,
+	incumbencyBonus: 3,
 };
 
 interface LeaderboardEntryFixture {
@@ -278,12 +279,11 @@ describe("getBestSubnets evaluations", () => {
 
 		const { evaluations } = await getBestSubnets(
 			sn45,
-			{ ...BASE_CONFIG, bottomPercentileCutoff: 0 },
+			{ ...BASE_CONFIG, bottomPercentileCutoff: 0, incumbencyBonus: 5 },
 			undefined,
 			undefined,
 			undefined,
 			heldNetuids,
-			5,
 		);
 
 		const sn1 = evaluations.find((e) => e.netuid === 1);

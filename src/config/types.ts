@@ -11,7 +11,6 @@ export interface RawConfig {
 		slippageBufferPercent: number;
 		/** Slippage buffer for swaps, in percent (e.g., 2 = 2%) */
 		swapSlippageBufferPercent: number;
-		incumbencyBonus: number;
 	};
 	strategy: {
 		minScore: number;
@@ -21,6 +20,7 @@ export interface RawConfig {
 		minEmissionPct: number;
 		/** Drop subnets in bottom N% of vol/mcap ratio (e.g., 10 = bottom 10%) */
 		bottomPercentileCutoff: number;
+		incumbencyBonus: number;
 	};
 }
 
@@ -37,7 +37,6 @@ export interface AppConfig {
 		slippageBuffer: number;
 		/** Swap slippage buffer as decimal fraction (e.g., 0.02 for 2%) */
 		swapSlippageBuffer: number;
-		incumbencyBonus: number;
 	};
 	strategy: {
 		minScore: number;
@@ -46,5 +45,6 @@ export interface AppConfig {
 		minHolders: number;
 		minEmissionPct: number;
 		bottomPercentileCutoff: number;
+		incumbencyBonus: number;
 	};
 }

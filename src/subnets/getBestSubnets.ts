@@ -28,6 +28,8 @@ export interface StrategyConfig {
 	minEmissionPct: number;
 	/** Drop subnets in the bottom N% of volume/mcap ratio */
 	bottomPercentileCutoff: number;
+	/** Scoring bonus added to currently-held subnets */
+	incumbencyBonus: number;
 }
 
 export interface SubnetScore {
@@ -78,7 +80,6 @@ export async function getBestSubnets(
 	logger?: Logger,
 	subnetNames?: Map<number, string>,
 	heldNetuids?: Set<number>,
-	incumbencyBonus?: number,
 ): Promise<GetBestSubnetsResult> {
 	const cfg = config;
 
@@ -88,7 +89,7 @@ export async function getBestSubnets(
 			? `SN${netuid} (${subnetNames.get(netuid)})`
 			: `SN${netuid}`;
 
-	const bias = incumbencyBonus ?? 3;
+	const bias = config.incumbencyBonus;
 
 	const res = await sn45.v1.getSubnetLeaderboard({ period: "1d" });
 	const leaderboard = res.data.subnets as LeaderboardEntry[];

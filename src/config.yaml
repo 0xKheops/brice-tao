@@ -10,7 +10,6 @@ rebalance:
   minRebalanceTao: 0.25
   slippageBufferPercent: 1       # 1% for stake/unstake
   swapSlippageBufferPercent: 2     # 2% for swaps (absorbs intra-batch drift)
-  incumbencyBonus: 2
 
 strategy:
   minScore: 75
@@ -19,3 +18,4 @@ strategy:
   minHolders: 500
   minEmissionPct: 0
   bottomPercentileCutoff: 10       # drop bottom 10% by vol/mcap ratio
+  incumbencyBonus: 2

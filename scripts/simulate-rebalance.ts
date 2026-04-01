@@ -18,7 +18,7 @@ const appConfig = loadConfig(
 	new URL("../src/config.yaml", import.meta.url).pathname,
 );
 const GATES = appConfig.strategy;
-const INCUMBENCY_BONUS = appConfig.rebalance.incumbencyBonus;
+const INCUMBENCY_BONUS = appConfig.strategy.incumbencyBonus;
 const MAX_SUBNETS = appConfig.rebalance.maxSubnets;
 
 // ---------------------------------------------------------------------------
@@ -82,7 +82,6 @@ try {
 		undefined,
 		subnetNames,
 		heldNetuids,
-		INCUMBENCY_BONUS,
 	);
 
 	// --- Terminal output ---
