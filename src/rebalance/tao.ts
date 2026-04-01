@@ -1,5 +1,12 @@
 export const TAO = 1_000_000_000n;
 
+/** Format a RAO amount as a human-readable TAO string (3 decimal places). */
+export function formatTao(rao: bigint): string {
+	const whole = rao / TAO;
+	const frac = ((rao % TAO) * 1000n) / TAO;
+	return `${whole}.${frac.toString().padStart(3, "0")}`;
+}
+
 export function parseTao(value: number): bigint {
 	if (!Number.isFinite(value)) {
 		throw new Error(`Invalid TAO amount: ${String(value)} (must be finite)`);

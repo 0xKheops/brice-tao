@@ -1,20 +1,16 @@
-import {
-	bittensor,
-	getMetadata as getDescriptorsMetadata,
-} from "@polkadot-api/descriptors";
-import { createWsClient } from "polkadot-api/ws";
-import { Sn45Api } from "../src/api/generated/Sn45Api.ts";
+import { createBittensorClient } from "../src/api/createClient.ts";
 import type { Balances } from "../src/balances/getBalances.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
 import { loadConfig } from "../src/config/loadConfig.ts";
+import { Sn45Api } from "../src/external-apis/generated/Sn45Api.ts";
 import { computeRebalance } from "../src/rebalance/computeRebalance.ts";
 import { TAO } from "../src/rebalance/tao.ts";
 import type { RebalanceOperation } from "../src/rebalance/types.ts";
-import type { SubnetInfo } from "../src/subnets/fetchAllSubnets.ts";
-import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
-import { getBestSubnets } from "../src/subnets/getBestSubnets.ts";
-import { getHealthySubnets } from "../src/subnets/getHealthySubnets.ts";
-import { getStrategyTargets } from "../src/subnets/getStrategyTargets.ts";
+import type { SubnetInfo } from "../src/strategy/fetchAllSubnets.ts";
+import { fetchAllSubnets } from "../src/strategy/fetchAllSubnets.ts";
+import { getBestSubnets } from "../src/strategy/getBestSubnets.ts";
+import { getHealthySubnets } from "../src/strategy/getHealthySubnets.ts";
+import { getStrategyTargets } from "../src/strategy/getStrategyTargets.ts";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -38,34 +34,15 @@ if (!sn45ApiKey) throw new Error("SN45_API_KEY is not set");
 if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 
 // ---------------------------------------------------------------------------
-// Metadata caching
-// ---------------------------------------------------------------------------
-const CACHE_DIR = ".papi/cache";
-await Bun.write(Bun.file(`${CACHE_DIR}/.gitkeep`), "");
-
-const setMetadata = (codeHash: string, value: Uint8Array) => {
-	Bun.write(Bun.file(`${CACHE_DIR}/${codeHash}.bin`), value);
-};
-const getMetadata = async (codeHash: string) => {
-	const file = Bun.file(`${CACHE_DIR}/${codeHash}.bin`);
-	if (await file.exists()) return new Uint8Array(await file.arrayBuffer());
-	const metadata = await getDescriptorsMetadata(codeHash);
-	if (metadata) setMetadata(codeHash, metadata);
-	return metadata;
-};
-
-// ---------------------------------------------------------------------------
 // Connect
 // ---------------------------------------------------------------------------
-const client = createWsClient(wsEndpoints, { getMetadata, setMetadata });
+const { client, api } = createBittensorClient(wsEndpoints);
 const sn45 = new Sn45Api({
 	baseUrl: "https://sn45api.talisman.xyz",
 	baseApiParams: { headers: { "X-API-Key": sn45ApiKey } },
 });
 
 try {
-	const api = client.getTypedApi(bittensor);
-
 	console.log("Fetching on-chain subnet info and SN45 leaderboard…");
 
 	// Fetch on-chain data + balances in parallel
@@ -143,8 +120,7 @@ try {
 		sn45,
 		balances,
 		appConfig,
-		healthyNetuids,
-		{ subnetNames, fallbackValidatorHotkey: validatorHotkey },
+		{ fallbackValidatorHotkey: validatorHotkey },
 	);
 	const plan = computeRebalance(balances, targets, appConfig.rebalance);
 	plan.skipped.push(...strategySkips);

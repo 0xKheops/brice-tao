@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
-import type { Sn45Api } from "../api/generated/Sn45Api.ts";
+import type { Sn45Api } from "../external-apis/generated/Sn45Api.ts";
 import { getBestSubnets, type StrategyConfig } from "./getBestSubnets.ts";
 
 /** Permissive config that lets makeEntry() defaults pass all gates. */

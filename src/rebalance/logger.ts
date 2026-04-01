@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { formatTao } from "./tao.ts";
 
 const LOGS_ROOT = join(process.cwd(), "logs");
 const ENABLE_TEST_TERMINAL_LOGS = false;
@@ -111,3 +112,34 @@ export const log = {
 		return LOG_FILE ?? "file-logging-disabled";
 	},
 };
+
+export function logBalancesDetail(
+	label: string,
+	address: string,
+	balances: {
+		free: bigint;
+		reserved: bigint;
+		stakes: ReadonlyArray<{
+			netuid: number;
+			hotkey: string;
+			stake: bigint;
+			alphaPrice: bigint;
+			taoValue: bigint;
+		}>;
+		totalTaoValue: bigint;
+	},
+): void {
+	log.verbose(`=== Balances ${label} (${address}) ===`);
+	log.verbose(`  Free:      ${formatTao(balances.free)} τ`);
+	log.verbose(`  Reserved:  ${formatTao(balances.reserved)} τ`);
+	log.verbose(`  Stakes (${balances.stakes.length}):`);
+	for (const s of balances.stakes) {
+		log.verbose(
+			`    SN${s.netuid.toString().padStart(3)} | hotkey=${s.hotkey} | alpha=${s.stake} | price=${s.alphaPrice} | ~${formatTao(s.taoValue)} τ`,
+		);
+	}
+	const stakesTotal = balances.stakes.reduce((sum, s) => sum + s.taoValue, 0n);
+	log.verbose(`  Stakes total: ${formatTao(stakesTotal)} τ`);
+	log.verbose(`  Total value:  ${formatTao(balances.totalTaoValue)} τ`);
+	log.verbose(`=== End ${label} ===`);
+}

@@ -1,4 +1,4 @@
 {
 	"$schema": "node_modules/knip/schema.json",
-	"ignore": ["src/api/generated/**"]
+	"ignore": ["src/external-apis/generated/**"]
 }

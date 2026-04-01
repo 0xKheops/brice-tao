@@ -38,36 +38,43 @@ This project uses **Bun** as its package manager and runtime. **Do not use npm, 
 scripts/
   entrypoint.sh           → Docker cron setup + env loading
   run-rebalance.sh        → Lock file management + log cleanup
+  show-balances.ts        → Portfolio balance viewer (coldkey + proxy)
   simulate-rebalance.ts   → Audit simulation (calls getBestSubnets for gate validation)
 src/
-  main.ts                 → Rebalancer orchestrator (MEV-shielded batch execution)
+  main.ts                 → Rebalancer orchestrator (fetch state → strategy → plan → execute → report)
   errors.ts               → Custom error classes (RebalanceError, ConfigError, etc.)
+  accounts/
+    deriveSigner.ts       → Mnemonic → signer + SS58 address derivation
+  api/
+    createClient.ts       → PAPI WebSocket client + metadata caching
   config/
+    env.ts                → Environment variable validation (loadEnv)
     types.ts              → Config schema types (RawConfig, AppConfig)
     loadConfig.ts         → YAML parser + validator (fail-fast)
   config.yaml             → Tunable parameters (rebalance/strategy/health)
   balances/
     getBalances.ts        → TAO/Alpha balance queries via polkadot-api
-  subnets/
-    fetchAllSubnets.ts    → Subnet registry (SN45 API)
+  strategy/
+    fetchAllSubnets.ts    → Subnet registry (on-chain dynamic info)
     getHealthySubnets.ts  → Immunity & prune-risk health checks
     getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
-    getStrategyTargets.ts → Strategy entry point: subnets + validators + shares
+    getStrategyTargets.ts → Strategy entry point: fetches subnets, evaluates health, selects targets + validators + shares
     pickBestValidator.ts  → Yield-based validator selection per subnet
     resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
   notifications/
     discord.ts            → Discord webhook notifications
   rebalance/
     types.ts              → Domain types (Operation, Plan, Results)
-    tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao helper
+    tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao + formatTao helpers
     constants.ts          → Re-exports TAO from tao.ts
     computeRebalance.ts   → Operation generation from strategy targets + balances
+    executeRebalancePlan.ts → High-level plan executor: simulate slippage → submit batch → fetch post-balances
+    executeRebalance.ts   → Low-level batch build, MEV encryption, submission
     simulateSlippage.ts   → Runtime API swap simulation → price limits
-    executeRebalance.ts   → Batch build, MEV encryption, submission
     mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption
     waitForBatch.ts       → Block scanning, event extraction
-    logger.ts             → Dual logger: terminal (human-readable) + file (JSON lines)
-  api/generated/
+    logger.ts             → Dual logger: terminal (human-readable) + file (JSON lines) + logBalancesDetail
+  external-apis/generated/
     Sn45Api.ts            → Auto-generated SN45 Swagger client
   __test__/
     setup.ts              → Test preload (console suppression)
@@ -106,7 +113,7 @@ Domain-specific knowledge is available in `.github/skills/`:
 
 ## Pitfalls
 
-- `src/api/generated/` is auto-generated — never edit manually; regenerate with `bun generate-clients`
+- `src/external-apis/generated/` is auto-generated — never edit manually; regenerate with `bun generate-clients`
 - All amounts are in RAO (`bigint`), not TAO — always use `TAO` constant for conversions
 - Price limits are U64F64 fixed-point — see bittensor-staking skill for encoding
 - The rebalancer uses a proxy account (not the coldkey directly) to sign transactions
@@ -133,7 +140,7 @@ All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/
 
 ## Subnet Selection — Single Source of Truth
 
-`src/subnets/getBestSubnets.ts` is the **single source of truth** for subnet selection logic (gate evaluation, filtering, ranking). All consumers must call `getBestSubnets()` directly — never reimplement gate logic inline.
+`src/strategy/getBestSubnets.ts` is the **single source of truth** for subnet selection logic (gate evaluation, filtering, ranking). All consumers must call `getBestSubnets()` directly — never reimplement gate logic inline.
 
 **Rules:**
 - `getBestSubnets()` returns `{ winners, evaluations }` — `winners` is the filtered/ranked list, `evaluations` has per-gate pass/fail for every leaderboard subnet
@@ -144,8 +151,8 @@ All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/
 - Gate thresholds live in `src/config.yaml` — both the rebalancer and simulation read from the same config
 
 **Key files:**
-- `src/subnets/getBestSubnets.ts` — gate evaluation + filtering (source of truth)
-- `src/subnets/getHealthySubnets.ts` — on-chain health filter (immunity, prune risk)
+- `src/strategy/getBestSubnets.ts` — gate evaluation + filtering (source of truth)
+- `src/strategy/getHealthySubnets.ts` — on-chain health filter (immunity, prune risk)
 - `src/config.yaml` — tunable thresholds
 - `scripts/simulate-rebalance.ts` — simulation (consumer, not source of truth)
 - `src/main.ts` — rebalancer (consumer, not source of truth)

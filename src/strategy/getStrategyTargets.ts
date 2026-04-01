@@ -1,18 +1,19 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import type { Sn45Api } from "../api/generated/Sn45Api.ts";
 import type { Balances } from "../balances/getBalances.ts";
 import type { AppConfig } from "../config/types.ts";
+import type { Sn45Api } from "../external-apis/generated/Sn45Api.ts";
 import { log } from "../rebalance/logger.ts";
-import { TAO } from "../rebalance/tao.ts";
+import { formatTao } from "../rebalance/tao.ts";
 import type { StrategyTarget } from "../rebalance/types.ts";
+import { fetchAllSubnets } from "./fetchAllSubnets.ts";
 import { getBestSubnets } from "./getBestSubnets.ts";
+import { getHealthySubnets } from "./getHealthySubnets.ts";
 import { resolveValidators } from "./resolveValidators.ts";
 
 type Api = TypedApi<typeof bittensor>;
 
 interface GetStrategyTargetsOptions {
-	subnetNames?: Map<number, string>;
 	fallbackValidatorHotkey?: string;
 }
 
@@ -22,9 +23,9 @@ export interface GetStrategyTargetsResult {
 }
 
 /**
- * Single entry point for the strategy layer: determines which subnets
- * to target, which validators to use, and what share of the portfolio
- * each target gets.
+ * Single entry point for the strategy layer: fetches on-chain subnet data,
+ * evaluates health and quality gates, determines which subnets to target,
+ * resolves validators, and assigns portfolio shares.
  *
  * Returns fully-resolved targets ready for the rebalance layer.
  */
@@ -33,9 +34,29 @@ export async function getStrategyTargets(
 	sn45: Sn45Api<unknown>,
 	balances: Balances,
 	config: AppConfig,
-	healthyNetuids: Set<number>,
 	options?: GetStrategyTargetsOptions,
 ): Promise<GetStrategyTargetsResult> {
+	const allSubnets = await fetchAllSubnets(api);
+	const healthyNetuids = getHealthySubnets(allSubnets);
+	const subnetNames = new Map(allSubnets.map((s) => [s.netuid, s.name]));
+
+	const pruneTarget = allSubnets.find((s) => s.isPruneTarget);
+	log.verbose(
+		`Subnet health: ${healthyNetuids.size} healthy out of ${allSubnets.length} total${pruneTarget ? ` (SN${pruneTarget.netuid} next to prune)` : ""}`,
+	);
+	for (const h of allSubnets) {
+		const healthy = healthyNetuids.has(h.netuid) ? "✓" : "✗";
+		const flags = [
+			h.isImmune ? "immune" : null,
+			h.isPruneTarget ? "PRUNE_RISK" : null,
+		]
+			.filter(Boolean)
+			.join(",");
+		log.verbose(
+			`  SN${h.netuid.toString().padStart(3)} [${healthy}] emission=${h.taoInEmission} volume=${h.subnetVolume}${flags ? ` [${flags}]` : ""}`,
+		);
+	}
+
 	const heldNetuids = new Set(balances.stakes.map((s) => s.netuid));
 
 	const { winners: eligible } = await getBestSubnets(
@@ -43,7 +64,7 @@ export async function getStrategyTargets(
 		config.strategy,
 		healthyNetuids,
 		log,
-		options?.subnetNames,
+		subnetNames,
 		heldNetuids,
 	);
 
@@ -109,10 +130,4 @@ export async function getStrategyTargets(
 	}
 
 	return { targets, skipped };
-}
-
-function formatTao(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = ((rao % TAO) * 1000n) / TAO;
-	return `${whole}.${frac.toString().padStart(3, "0")}`;
 }

@@ -1,18 +1,9 @@
-import {
-	bittensor,
-	getMetadata as getDescriptorsMetadata,
-} from "@polkadot-api/descriptors";
-import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
-import {
-	entropyToMiniSecret,
-	mnemonicToEntropy,
-	ss58Address,
-} from "@polkadot-labs/hdkd-helpers";
-import { createWsClient } from "polkadot-api/ws";
+import { deriveSigner } from "../src/accounts/deriveSigner.ts";
+import { createBittensorClient } from "../src/api/createClient.ts";
 import type { Balances } from "../src/balances/getBalances.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
 import { TAO } from "../src/rebalance/tao.ts";
-import { fetchAllSubnets } from "../src/subnets/fetchAllSubnets.ts";
+import { fetchAllSubnets } from "../src/strategy/fetchAllSubnets.ts";
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -27,39 +18,16 @@ if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 // ---------------------------------------------------------------------------
 // Proxy address derivation (optional)
 // ---------------------------------------------------------------------------
-let proxyAddress: string | undefined;
-if (proxyMnemonic) {
-	const miniSecret = entropyToMiniSecret(mnemonicToEntropy(proxyMnemonic));
-	const derive = sr25519CreateDerive(miniSecret);
-	const keyPair = derive("");
-	proxyAddress = ss58Address(keyPair.publicKey, 42);
-}
-
-// ---------------------------------------------------------------------------
-// Metadata caching
-// ---------------------------------------------------------------------------
-const CACHE_DIR = ".papi/cache";
-await Bun.write(Bun.file(`${CACHE_DIR}/.gitkeep`), "");
-
-const setMetadata = (codeHash: string, value: Uint8Array) => {
-	Bun.write(Bun.file(`${CACHE_DIR}/${codeHash}.bin`), value);
-};
-const getMetadata = async (codeHash: string) => {
-	const file = Bun.file(`${CACHE_DIR}/${codeHash}.bin`);
-	if (await file.exists()) return new Uint8Array(await file.arrayBuffer());
-	const metadata = await getDescriptorsMetadata(codeHash);
-	if (metadata) setMetadata(codeHash, metadata);
-	return metadata;
-};
+const proxyAddress = proxyMnemonic
+	? deriveSigner(proxyMnemonic).address
+	: undefined;
 
 // ---------------------------------------------------------------------------
 // Connect
 // ---------------------------------------------------------------------------
-const client = createWsClient(wsEndpoints, { getMetadata, setMetadata });
+const { client, api } = createBittensorClient(wsEndpoints);
 
 try {
-	const api = client.getTypedApi(bittensor);
-
 	// Fetch subnet names + balances in parallel
 	const accounts: Array<{ label: string; address: string }> = [
 		{ label: "Coldkey", address: coldkey },

@@ -1,4 +1,4 @@
-import type { Sn45Api } from "../api/generated/Sn45Api.ts";
+import type { Sn45Api } from "../external-apis/generated/Sn45Api.ts";
 
 const RAO = 1_000_000_000;
 
