@@ -24,6 +24,7 @@ RUN apk add --no-cache bash ca-certificates libstdc++ libgcc
 
 COPY --from=build /app/rebalance /app/rebalance
 COPY scripts/ ./scripts/
+COPY src/config.yaml /app/src/config.yaml
 RUN chmod +x /app/rebalance /app/scripts/entrypoint.sh /app/scripts/run-rebalance.sh
 
 RUN mkdir -p /app/logs /app/.papi/cache

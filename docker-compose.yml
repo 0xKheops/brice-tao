@@ -8,5 +8,4 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - ./.env:/app/.env:ro
-      - ./src/config.yaml:/app/src/config.yaml:ro
       - ./logs:/app/logs

@@ -13,7 +13,7 @@ rebalance:
   incumbencyBonus: 2
 
 strategy:
-  minScore: 70
+  minScore: 75
   minVolumeTao: 100
   minMcapTao: 1000
   minHolders: 500
