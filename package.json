@@ -13,6 +13,7 @@
 		"prepare": "simple-git-hooks",
 		"generate-clients": "echo 'No API clients to generate'",
 		"balances": "bun run scripts/show-balances.ts",
+		"bunker": "bun run scripts/bunker.ts",
 		"preview": "bun run scripts/preview-rebalance.ts",
 		"rebalance": "bun run src/main.ts",
 		"scheduler": "bun run src/scheduler.ts",

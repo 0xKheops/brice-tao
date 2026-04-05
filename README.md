@@ -92,6 +92,8 @@ bun rebalance -- --strategy copy-trade --dry-run   # dry run a specific strategy
 bun preview   -- --strategy root-emission          # preview with audit report
 bun scheduler                                      # long-running scheduler
 bun scheduler -- --strategy sma-stoploss             # scheduler with specific strategy
+bun bunker                                          # emergency exit: move all positions to SN0
+bun bunker    -- --dry-run                          # preview bunker operations without executing
 ```
 
 ### `bun preview` vs `bun rebalance --dry-run`
