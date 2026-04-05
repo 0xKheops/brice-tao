@@ -149,6 +149,12 @@ All pushes and PRs to `main` are checked via GitHub Actions: lint, type-check, t
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for code style, quality gates, and PR process.
 
+## Why "brice-tao"?
+
+The name is a nod to [**Brice de Nice**](https://en.wikipedia.org/wiki/Brice_de_Nice), a cult French comedy character created by Jean Dujardin (of *The Artist* fame). Brice is an arrogant yet loveable surfer who spends every day on the waveless shores of Nice, surfboard in hand, waiting for the perfect wave that will never come. His catchphrase — *"Je t'ai cassé !"* ("I broke you!") — and his iconic yellow wetsuit made him a pop-culture phenomenon in France after the 2005 hit film.
+
+**brice-tao** = **Brice** 🏄 + **TAO** ⛓️ — like Brice patiently scanning the Mediterranean horizon for the next big wave, this bot watches the Bittensor network for the best subnets to ride.
+
 ## License
 
 [MIT](LICENSE)
