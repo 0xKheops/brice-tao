@@ -28,11 +28,15 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.tsbuildinfo
 .papi/cache
 
-# IntelliJ based IDEs
+# IDE settings
 .idea
+.vscode
 
 # Finder (MacOS) folder config
 .DS_Store
 
 # generated reports
 reports
+
+# strategy database
+data

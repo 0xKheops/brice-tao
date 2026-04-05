@@ -2,12 +2,11 @@ import type { bittensor } from "@polkadot-api/descriptors";
 import type { PolkadotClient, PolkadotSigner, TypedApi } from "polkadot-api";
 import type { Balances } from "../balances/getBalances.ts";
 import { getBalances } from "../balances/getBalances.ts";
-import type { AppConfig } from "../config/types.ts";
 import { executeRebalance } from "./executeRebalance.ts";
 import { log, logBalancesDetail } from "./logger.ts";
 import { simulateAllOperations } from "./simulateSlippage.ts";
 import { formatTao } from "./tao.ts";
-import type { BatchResult, RebalancePlan } from "./types.ts";
+import type { BatchResult, RebalanceConfig, RebalancePlan } from "./types.ts";
 
 type Api = TypedApi<typeof bittensor>;
 
@@ -20,8 +19,10 @@ export interface ExecutePlanParams {
 	plan: RebalancePlan;
 	balances: Balances;
 	proxyFreeBalance: bigint;
-	rebalanceConfig: AppConfig["rebalance"];
+	rebalanceConfig: RebalanceConfig;
 	dryRun: boolean;
+	/** Pre-fetched MEV shield public key (undefined = unavailable) */
+	mevKey: Uint8Array | undefined;
 }
 
 export interface ExecutePlanResult {
@@ -31,9 +32,9 @@ export interface ExecutePlanResult {
 }
 
 /**
- * Execute a rebalance plan end-to-end: log the plan summary, simulate
- * slippage for limit prices, submit the MEV-shielded batch, and fetch
- * post-rebalance balances.
+ * Execute a rebalance plan end-to-end: determine MEV shield availability,
+ * conditionally simulate slippage for limit prices, submit the batch
+ * (shielded or direct), and fetch post-rebalance balances.
  *
  * Returns the batch result and post-rebalance state for reporting.
  */
@@ -51,6 +52,7 @@ export async function executeRebalancePlan(
 		proxyFreeBalance,
 		rebalanceConfig,
 		dryRun,
+		mevKey,
 	} = params;
 
 	log.info(
@@ -60,12 +62,31 @@ export async function executeRebalancePlan(
 		log.verbose(`  Skipped SN${skip.netuid}: ${skip.reason}`);
 	}
 
-	// Simulate all operations to compute accurate limit prices
-	log.info("Simulating operations for limit prices...");
+	// Use the pre-fetched MEV key — no additional RPC call
+	const mevAvailable = !!mevKey;
+	const useLimits = rebalanceConfig.enforceSlippage || !mevAvailable;
+
+	if (mevAvailable) {
+		log.info(
+			useLimits
+				? "MEV Shield active — using limit-price extrinsics (enforceSlippage=true)"
+				: "MEV Shield active — using simple extrinsics (lower fees, fill-or-kill)",
+		);
+	} else {
+		log.warn(
+			"MEV Shield unavailable — falling back to limit-price extrinsics (no frontrun protection)",
+		);
+	}
+
+	// Simulate only when using limit-price extrinsics
+	if (useLimits) {
+		log.info("Simulating operations for limit prices...");
+	}
 	plan.operations = await simulateAllOperations(
 		api,
 		plan.operations,
-		rebalanceConfig,
+		rebalanceConfig.slippageBuffer,
+		useLimits,
 	);
 
 	const batchResult = await executeRebalance(
@@ -76,6 +97,8 @@ export async function executeRebalancePlan(
 		plan,
 		{
 			dryRun,
+			useLimits,
+			mevKey,
 		},
 	);
 

@@ -2,10 +2,10 @@ import { type bittensor, MultiAddress } from "@polkadot-api/descriptors";
 import { ss58Address } from "@polkadot-labs/hdkd-helpers";
 import type { PolkadotClient, PolkadotSigner, TypedApi } from "polkadot-api";
 import { Enum } from "polkadot-api";
-import { MevShieldError } from "../errors.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
-import { getNextKey, submitShieldedTx } from "./mevShield.ts";
+import { submitShieldedTx } from "./mevShield.ts";
+import { formatTao } from "./tao.ts";
 import type {
 	BatchResult,
 	RebalanceOperation,
@@ -17,12 +17,16 @@ type Api = TypedApi<typeof bittensor>;
 
 export interface ExecuteOptions {
 	dryRun?: boolean;
+	/** When true, use limit-price extrinsics (with allow_partial: false) */
+	useLimits?: boolean;
+	/** Pre-fetched MEV shield public key (undefined = unavailable) */
+	mevKey?: Uint8Array;
 }
 
 /**
  * Execute a rebalance plan: build the batch of proxy-wrapped staking calls,
- * sign, encrypt via MEV shield, and submit.
- * Then wait for the inner batch to be executed and return the result.
+ * sign, and submit — either via MEV shield (encrypted, double-nonce) or
+ * directly (single nonce) when the shield is unavailable.
  *
  * In dry-run mode, builds and prints the decoded call but does not sign or submit.
  */
@@ -35,6 +39,7 @@ export async function executeRebalance(
 	options?: ExecuteOptions,
 ): Promise<BatchResult | null> {
 	const dryRun = options?.dryRun ?? false;
+	const useLimits = options?.useLimits ?? true;
 
 	if (plan.operations.length === 0) {
 		log.info("No operations to execute — portfolio is balanced.");
@@ -47,7 +52,7 @@ export async function executeRebalance(
 
 	// Build inner staking calls, each wrapped in Proxy.proxy
 	const proxiedCalls = plan.operations.map((op, i) => {
-		const innerCall = buildStakingCall(api, op);
+		const innerCall = buildStakingCall(api, op, useLimits);
 		log.info(`  [${i + 1}/${plan.operations.length}] ${describeOperation(op)}`);
 		log.verbose(`  ${describeOperation(op)}`);
 		return api.tx.Proxy.proxy({
@@ -86,21 +91,29 @@ export async function executeRebalance(
 		return null;
 	}
 
-	// Get current nonce for MEV shield double-nonce pattern
+	// Use the pre-fetched MEV key — no additional RPC call
+	const mevKey = options?.mevKey;
+
+	if (mevKey) {
+		return submitShielded(client, api, signer, innerTx, mevKey, plan);
+	}
+	return submitDirect(client, signer, innerTx, plan);
+}
+
+/** Submit via MEV shield: sign with double-nonce, encrypt, and wait for inner batch */
+async function submitShielded(
+	client: PolkadotClient,
+	api: Api,
+	signer: PolkadotSigner,
+	innerTx: ReturnType<Api["tx"]["Utility"]["force_batch"]>,
+	nextKey: Uint8Array,
+	plan: RebalancePlan,
+): Promise<BatchResult> {
 	const proxyAddress = signerAddress(signer);
 	const account = await api.query.System.Account.getValue(proxyAddress);
 	const nonce = account.nonce;
 
-	// Get MEV shield encryption key
-	const nextKey = await getNextKey(api);
-	if (!nextKey) {
-		throw new MevShieldError(
-			"No MEV shield NextKey available — cannot submit shielded transaction",
-		);
-	}
-
-	log.verbose("Signing inner transaction...");
-	// Sign the inner tx with nonce + 1 (MEV shield reserves nonce for wrapper)
+	log.verbose("Signing inner transaction (MEV shield double-nonce)...");
 	const innerSignedBytes = await innerTx.sign(signer, { nonce: nonce + 1 });
 
 	log.verbose("Encrypting and submitting via MEV shield...");
@@ -112,12 +125,11 @@ export async function executeRebalance(
 		nonce,
 	);
 
-	const wrapperFee = extractWrapperFee(outerResult.events);
+	const wrapperFee = extractFee(outerResult.events);
 	log.info(
-		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number} (fee: ${formatFee(wrapperFee)} τ)`,
+		`✓ MEV-shielded wrapper finalized in block ${outerResult.block.number} (fee: ${formatTao(wrapperFee, 6)} τ)`,
 	);
 
-	// Wait for the inner transaction to be executed
 	log.info("Waiting for inner transaction execution...");
 	const batchResult = await waitForInnerBatch(
 		client,
@@ -129,48 +141,118 @@ export async function executeRebalance(
 
 	if (batchResult.status !== "timeout") {
 		log.info(
-			`Inner batch fee: ${formatFee(batchResult.innerBatchFee)} τ | Total fees: ${formatFee(wrapperFee + batchResult.innerBatchFee)} τ`,
+			`Inner batch fee: ${formatTao(batchResult.innerBatchFee, 6)} τ | Total fees: ${formatTao(wrapperFee + batchResult.innerBatchFee, 6)} τ`,
 		);
 	}
 
 	return batchResult;
 }
 
-function buildStakingCall(api: Api, op: RebalanceOperation) {
+/** Submit directly without MEV shield: single nonce, wait for finalization */
+async function submitDirect(
+	_client: PolkadotClient,
+	signer: PolkadotSigner,
+	innerTx: ReturnType<Api["tx"]["Utility"]["force_batch"]>,
+	plan: RebalancePlan,
+): Promise<BatchResult> {
+	log.warn(
+		"MEV shield unavailable — submitting directly (no encryption, no frontrun protection)",
+	);
+
+	const result = await innerTx.signAndSubmit(signer, {
+		mortality: { mortal: true, period: 8 },
+	});
+
+	const fee = extractFee(result.events);
+	log.info(
+		`✓ Direct batch finalized in block ${result.block.number} (fee: ${formatTao(fee, 6)} τ)`,
+	);
+
+	const innerTxHash = result.txHash;
+
+	// For direct submission, parse batch results from finalized block events
+	const directResult = await parseBatchResultFromEvents(
+		result,
+		plan.operations.length,
+		innerTxHash,
+	);
+
+	return directResult;
+}
+
+function buildStakingCall(
+	api: Api,
+	op: RebalanceOperation,
+	useLimits: boolean,
+) {
 	switch (op.kind) {
 		case "swap":
-			return api.tx.SubtensorModule.swap_stake_limit({
-				hotkey: op.hotkey,
+			if (useLimits) {
+				return api.tx.SubtensorModule.swap_stake_limit({
+					hotkey: op.hotkey,
+					origin_netuid: op.originNetuid,
+					destination_netuid: op.destinationNetuid,
+					alpha_amount: op.alphaAmount,
+					limit_price: op.limitPrice,
+					allow_partial: false,
+				});
+			}
+			// Simple path: use move_stake (supports hotkey change in one call, ~50% cheaper)
+			return api.tx.SubtensorModule.move_stake({
+				origin_hotkey: op.originHotkey ?? op.hotkey,
+				destination_hotkey: op.hotkey,
 				origin_netuid: op.originNetuid,
 				destination_netuid: op.destinationNetuid,
 				alpha_amount: op.alphaAmount,
-				limit_price: op.limitPrice,
-				allow_partial: false,
 			});
 
 		case "unstake":
+			if (useLimits) {
+				return api.tx.SubtensorModule.remove_stake_full_limit({
+					hotkey: op.hotkey,
+					netuid: op.netuid,
+					limit_price: op.limitPrice,
+				});
+			}
+			// Simple path: remove_stake_full_limit without limit_price
 			return api.tx.SubtensorModule.remove_stake_full_limit({
 				hotkey: op.hotkey,
 				netuid: op.netuid,
-				limit_price: op.limitPrice,
+				limit_price: undefined,
 			});
 
 		case "unstake_partial":
-			return api.tx.SubtensorModule.remove_stake_limit({
+			if (useLimits) {
+				return api.tx.SubtensorModule.remove_stake_limit({
+					hotkey: op.hotkey,
+					netuid: op.netuid,
+					amount_unstaked: op.alphaAmount,
+					limit_price: op.limitPrice,
+					allow_partial: false,
+				});
+			}
+			// Simple path: remove_stake (fill-or-kill by default)
+			return api.tx.SubtensorModule.remove_stake({
 				hotkey: op.hotkey,
 				netuid: op.netuid,
 				amount_unstaked: op.alphaAmount,
-				limit_price: op.limitPrice,
-				allow_partial: false,
 			});
 
 		case "stake":
-			return api.tx.SubtensorModule.add_stake_limit({
+			if (useLimits) {
+				return api.tx.SubtensorModule.add_stake_limit({
+					hotkey: op.hotkey,
+					netuid: op.netuid,
+					amount_staked: op.taoAmount,
+					limit_price: op.limitPrice,
+					allow_partial: false,
+				});
+			}
+			// Simple path: add_stake (fill-or-kill by default)
+			return api.tx.SubtensorModule.add_stake({
 				hotkey: op.hotkey,
 				netuid: op.netuid,
 				amount_staked: op.taoAmount,
-				limit_price: op.limitPrice,
-				allow_partial: false,
 			});
 
 		case "move":
@@ -205,9 +287,7 @@ function describeOperation(op: RebalanceOperation): string {
 	}
 }
 
-function extractWrapperFee(
-	events: Array<{ type: string; value: unknown }>,
-): bigint {
+function extractFee(events: Array<{ type: string; value: unknown }>): bigint {
 	for (const event of events) {
 		if (event.type === "TransactionPayment") {
 			const value = event.value as { type: string; value: unknown };
@@ -220,8 +300,53 @@ function extractWrapperFee(
 	return 0n;
 }
 
-function formatFee(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = ((rao % TAO) * 1_000_000n) / TAO;
-	return `${whole}.${frac.toString().padStart(6, "0")}`;
+/**
+ * Parse batch results from a directly-submitted (non-shielded) transaction's
+ * finalized events. Handles both single-call and force_batch results.
+ */
+async function parseBatchResultFromEvents(
+	result: {
+		block: { number: number; hash: string };
+		events: Array<{ type: string; value: unknown }>;
+	},
+	totalOps: number,
+	txHash: string,
+): Promise<BatchResult> {
+	const fee = extractFee(result.events);
+
+	// Collect per-operation results from Proxy.ProxyExecuted events
+	const proxyResults: Array<{ ok: boolean; error?: string }> = [];
+	for (const event of result.events) {
+		if (event.type !== "Proxy") continue;
+		const ev = event.value as { type: string; value?: unknown };
+		if (ev.type !== "ProxyExecuted") continue;
+		const execResult = (
+			ev.value as { result: { success: boolean; value?: unknown } }
+		).result;
+		if (execResult.success) {
+			proxyResults.push({ ok: true });
+		} else {
+			proxyResults.push({
+				ok: false,
+				error: `Proxied call failed: ${JSON.stringify(execResult.value)}`,
+			});
+		}
+	}
+
+	const operationResults = Array.from({ length: totalOps }, (_, i) => ({
+		index: i,
+		success: proxyResults[i]?.ok ?? true,
+		error: proxyResults[i]?.ok === false ? proxyResults[i].error : undefined,
+	}));
+
+	const failedCount = operationResults.filter((r) => !r.success).length;
+
+	return {
+		status: failedCount > 0 ? "partial_failure" : "completed",
+		blockNumber: result.block.number,
+		operationResults,
+		wrapperFee: 0n,
+		innerBatchFee: fee,
+		innerTxHash: txHash,
+	};
 }

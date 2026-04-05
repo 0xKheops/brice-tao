@@ -1,5 +1,7 @@
 # --- Build stage: compile into a standalone binary ---
-FROM oven/bun:latest AS build
+FROM --platform=$BUILDPLATFORM oven/bun:latest AS build
+
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -12,8 +14,8 @@ COPY src/ ./src/
 
 RUN bun build --compile --minify --sourcemap \
     --compile-exec-argv="--smol" \
-    --target=bun-linux-arm64-musl \
-    src/main.ts --outfile rebalance
+    --target=bun-linux-${TARGETARCH}-musl \
+    src/scheduler.ts --outfile scheduler
 
 # --- Runtime stage: minimal image with just the binary ---
 FROM alpine:3
@@ -22,14 +24,14 @@ WORKDIR /app
 
 RUN apk add --no-cache bash ca-certificates libstdc++ libgcc
 
-COPY --from=build /app/rebalance /app/rebalance
+COPY --from=build /app/scheduler /app/scheduler
 COPY scripts/ ./scripts/
-COPY src/config.yaml /app/src/config.yaml
-RUN chmod +x /app/rebalance /app/scripts/entrypoint.sh /app/scripts/run-rebalance.sh
+COPY src/strategies/ /app/src/strategies/
+RUN chmod +x /app/scheduler /app/scripts/entrypoint.sh
 
-RUN mkdir -p /app/logs /app/.papi/cache
+RUN mkdir -p /app/logs /app/data /app/.papi/cache
 
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-  CMD pidof crond > /dev/null || exit 1
+  CMD pidof scheduler > /dev/null || exit 1
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]

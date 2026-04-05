@@ -1,160 +1,90 @@
 # Copilot Instructions — brice-tao
 
-Automated Bittensor portfolio rebalancer: monitors subnet holdings, scores momentum, computes equal-weight allocation, simulates slippage, batches operations through MEV shield, and reports results to Discord.
+Automated Bittensor portfolio rebalancer: monitors subnet holdings, computes allocation targets via pluggable strategies, simulates slippage, batches operations through MEV shield, and reports results to Discord.
 
 ## Package Manager
 
-This project uses **Bun** as its package manager and runtime. **Do not use npm, pnpm, or yarn.** All commands (install, run, test, etc.) must use `bun`. The lockfile is `bun.lock` — never generate or reference `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.
+Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock`.
 
-## Quick Reference
+## Commands
 
 | Action | Command |
 |--------|---------|
 | Install deps | `bun install` |
-| Run rebalancer | `bun rebalance` |
-| Run rebalancer (dry run) | `bun rebalance -- --dry-run` |
-| Simulate rebalance | `bun simulate` |
+| One-shot rebalance | `bun rebalance -- --strategy <name>` |
+| Dry run | `bun rebalance -- --strategy <name> --dry-run` |
+| Preview (read-only) | `bun preview -- --strategy <name>` |
+| Scheduler | `bun scheduler -- --strategy <name>` |
+| List strategies | `bun rebalance -- --list-strategies` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
-| Dead code detection | `bun knip` |
+| Dead code | `bun knip` |
 | Tests | `bun test` |
-| Regenerate API clients | `bun generate-clients` |
 
 ## Code Conventions
 
-- **No semicolons**, double quotes, tab indentation (enforced by Biome)
-- **Imports**: named + type imports with `.ts` extension (`import { foo } from "./bar.ts"`)
-- **No default exports** — always use named exports
-- **Async**: `Promise.all()` for parallel calls; top-level `await` in scripts
-- **Constants**: named `bigint` values; `TAO = 1e9` RAO conversion in [src/rebalance/tao.ts](../src/rebalance/tao.ts)
-- **Types**: union types for operation kinds, interfaces for domain models — see [src/rebalance/types.ts](../src/rebalance/types.ts)
-- **Config**: tunable parameters in `src/config.yaml` (YAML), loaded at startup — see [src/config/loadConfig.ts](../src/config/loadConfig.ts)
-- **Errors**: custom error classes in [src/errors.ts](../src/errors.ts) — use typed catch blocks in orchestrator
-- **Logging**: dual logger (terminal + JSON file) in [src/rebalance/logger.ts](../src/rebalance/logger.ts) with levels: `info`, `verbose`, `warn`, `error`
+- No semicolons, double quotes, tab indentation (Biome)
+- Named + type imports with `.ts` extension (`import { foo } from "./bar.ts"`)
+- No default exports — always named exports
+- `Promise.all()` for parallel calls; top-level `await` in scripts
+- All amounts in RAO (`bigint`) — use `TAO` constant from `src/rebalance/tao.ts`
+- Union types for operation kinds, interfaces for domain models — see `src/rebalance/types.ts`
+- Custom error classes from `src/errors.ts` — use typed catch blocks
+- Dual logger (terminal + JSON file) in `src/rebalance/logger.ts`: `info`, `verbose`, `warn`, `error`
+- Tests co-located with source files (e.g., `foo.test.ts` next to `foo.ts`)
 
-## Architecture
+## Key Entrypoints
 
-```
-scripts/
-  entrypoint.sh           → Docker cron setup + env loading
-  run-rebalance.sh        → Lock file management + log cleanup
-  show-balances.ts        → Portfolio balance viewer (coldkey + proxy)
-  simulate-rebalance.ts   → Audit simulation (calls getBestSubnets for gate validation)
-src/
-  main.ts                 → Rebalancer orchestrator (fetch state → strategy → plan → execute → report)
-  errors.ts               → Custom error classes (RebalanceError, ConfigError, etc.)
-  accounts/
-    deriveSigner.ts       → Mnemonic → signer + SS58 address derivation
-  api/
-    createClient.ts       → PAPI WebSocket client + metadata caching
-  config/
-    env.ts                → Environment variable validation (loadEnv)
-    types.ts              → Config schema types (RawConfig, AppConfig)
-    loadConfig.ts         → YAML parser + validator (fail-fast)
-  config.yaml             → Tunable parameters (rebalance/strategy/health)
-  balances/
-    getBalances.ts        → TAO/Alpha balance queries via polkadot-api
-  strategy/
-    fetchAllSubnets.ts    → Subnet registry (on-chain dynamic info)
-    getHealthySubnets.ts  → Immunity & prune-risk health checks
-    getBestSubnets.ts     → Subnet selection (SN45 score ranking + quality gates)
-    getStrategyTargets.ts → Strategy entry point: fetches subnets, evaluates health, selects targets + validators + shares
-    pickBestValidator.ts  → Yield-based validator selection per subnet
-    resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
-  notifications/
-    discord.ts            → Discord webhook notifications
-  rebalance/
-    types.ts              → Domain types (Operation, Plan, Results)
-    tao.ts                → TAO constant (1 TAO = 1e9 RAO) + parseTao + formatTao helpers
-    constants.ts          → Re-exports TAO from tao.ts
-    computeRebalance.ts   → Operation generation from strategy targets + balances
-    executeRebalancePlan.ts → High-level plan executor: simulate slippage → submit batch → fetch post-balances
-    executeRebalance.ts   → Low-level batch build, MEV encryption, submission
-    simulateSlippage.ts   → Runtime API swap simulation → price limits
-    mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption
-    waitForBatch.ts       → Block scanning, event extraction
-    logger.ts             → Dual logger: terminal (human-readable) + file (JSON lines) + logBalancesDetail
-  external-apis/generated/
-    Sn45Api.ts            → Auto-generated SN45 Swagger client
-  __test__/
-    setup.ts              → Test preload (console suppression)
-```
+- `src/main.ts` — one-shot CLI; `src/scheduler.ts` — long-running scheduler
+- `src/strategies/types.ts` — strategy contract (`StrategyFn`, `StrategyModule`, `StrategyResult`)
+- `src/strategies/loader.ts` — strategy registry + CLI arg parsing
+- `src/rebalance/` — shared pipeline (compute, execute, slippage, MEV shield)
+- `src/scheduling/` — cron runner, one-shot runner, shared context
+- `src/config/env.ts` — environment variable validation
+- `src/validators/` — shared default validator selection (yield-based)
 
-Tests are co-located with source files (e.g., `getBalances.test.ts` next to `getBalances.ts`).
+## Strategy System
+
+- Each strategy is a self-contained folder under `src/strategies/<name>/` with `index.ts`, `runner.ts`, `config.yaml`
+- Strategies export a `StrategyModule` (`getStrategyTargets` + `createRunner`) — see `src/strategies/types.ts`
+- Strategies must be **statically imported** and registered in `src/strategies/loader.ts` (dynamic `import()` breaks Bun-compiled binaries)
+- Strategy folders are self-contained — do not import from other strategy folders. Shared infra (`src/validators/`, `src/rebalance/`, `src/scheduling/`) is fine.
+- Each strategy owns its config, scoring, scheduling, and audit rendering
+- See `docs/custom-strategies.md` for the full guide
 
 ## Environment Variables
 
-| Variable | Used by | Description |
-|----------|---------|-------------|
-| `WS_ENDPOINT` | all | RPC WebSocket endpoints (comma-separated for failover) |
-| `COLDKEY_ADDRESS` | all | SS58 coldkey address |
-| `PROXY_MNEMONIC` | rebalance | Mnemonic for proxy account (transaction signer) |
-| `VALIDATOR_HOTKEY` | rebalance | Optional fallback hotkey when yield-based validator selection fails |
-| `DISCORD_WEBHOOK_URL` | rebalance | Discord notifications webhook |
-| `SN45_API_KEY` | all | SN45 leaderboard API key |
-| `CRON_SCHEDULE` | Docker only | Cron expression for rebalance schedule (default: `0 */12 * * *`). |
+| Variable | Description |
+|----------|-------------|
+| `WS_ENDPOINT` | RPC WebSocket endpoints (comma-separated for failover) |
+| `COLDKEY_ADDRESS` | SS58 coldkey address |
+| `PROXY_MNEMONIC` | Proxy account mnemonic (transaction signer) |
+| `VALIDATOR_HOTKEY` | Optional fallback hotkey for validator selection |
+| `DISCORD_WEBHOOK_URL` | Discord webhook (optional — silent if unset) |
+| `STRATEGY` | Active strategy name (overridden by `--strategy` flag) |
+| `ARCHIVE_WS_ENDPOINT` | Optional archive node endpoints for indicator warmup |
 
-No `.env` file — variables must be set externally (Docker uses `.env` mounted as a volume).
+No `.env` file in repo — variables set externally (Docker mounts `.env`).
 
-## Key Domain Concepts
+## Domain Concepts
 
 - **TAO/Alpha**: TAO is the base token (1 TAO = 1e9 RAO). Alpha is per-subnet staking token.
-- **Price limits**: U64F64 fixed-point values that protect swaps against slippage.
-- **MEV Shield**: Encrypts transaction batches to prevent frontrunning (XChaCha20-Poly1305 + ML-KEM-768).
-- **Slippage buffers**: configured in `src/config.yaml` — base buffer for stake/unstake, larger buffer for swaps.
-
-## Skills
-
-Domain-specific knowledge is available in `.github/skills/`:
-
-- **bittensor-staking** — TAO staking extrinsics, runtime APIs, price limit math
-- **hdkd** — Mnemonic → key derivation for polkadot-api signers
-- **polkadot-api** — Substrate client setup, queries, transactions, code generation
+- **Price limits**: U64F64 fixed-point values protecting swaps against slippage. The runtime's `get_max_amount_move` is broken for swap v3 subnets.
+- **MEV Shield**: XChaCha20-Poly1305 + ML-KEM-768 encrypted batches. Falls back to limit-price extrinsics when unavailable (NextKey=null).
+- **`enforceSlippage`**: when `false` (default), uses simple extrinsics when MEV Shield is active (lower fees). When `true`, always uses limit-price extrinsics.
 
 ## Pitfalls
 
-- `src/external-apis/generated/` is auto-generated — never edit manually; regenerate with `bun generate-clients`
-- All amounts are in RAO (`bigint`), not TAO — always use `TAO` constant for conversions
-- Price limits are U64F64 fixed-point — see bittensor-staking skill for encoding
-- The rebalancer uses a proxy account (not the coldkey directly) to sign transactions
-- `src/config.yaml` is required — the rebalancer will fail fast if it's missing or invalid
-- Error classes should be used for all throw sites — enables typed Discord error notifications
+- All amounts are RAO (`bigint`) — always use `TAO` constant for conversions
+- Price limits are U64F64 fixed-point
+- The rebalancer signs with a proxy account, never the coldkey
+- RPC rate limit ~100 req/min — use throttled batches via `src/api/rpcThrottle.ts`
+- Each strategy's `config.yaml` is required — fail-fast if missing
 
 ## Quality Gates
 
-Before completing work on any task, ensure that the following checks pass:
-- `bun check --fix` (linter)
-- `bun typecheck` (TypeScript type-checking)
-- `bun knip` (dead code detection)
-- `bun test` (unit tests, if applicable)
-
-Also ensure that this file and tests stays up to date with any new conventions or architectural changes.
-
-## Continuous Integration
-
-All pushes and PRs to `main` are checked via GitHub Actions (`.github/workflows/ci.yml`):
-- Lint (`bun check`)
-- Type-check (`bun typecheck`)
-- Tests (`bun test`)
-- Dead code detection (`bun knip`)
-
-## Subnet Selection — Single Source of Truth
-
-`src/strategy/getBestSubnets.ts` is the **single source of truth** for subnet selection logic (gate evaluation, filtering, ranking). All consumers must call `getBestSubnets()` directly — never reimplement gate logic inline.
-
-**Rules:**
-- `getBestSubnets()` returns `{ winners, evaluations }` — `winners` is the filtered/ranked list, `evaluations` has per-gate pass/fail for every leaderboard subnet
-- `scripts/simulate-rebalance.ts` must call `getBestSubnets()` for its eligible list and use `evaluations` for its audit table — it must **not** contain its own gate evaluation code
-- Any change to gate logic in `getBestSubnets.ts` is automatically reflected in the simulation (no manual sync needed)
-- Any change to `getHealthySubnets.ts` thresholds or criteria must be tested against the simulation output
-- If a PR introduces gate evaluation logic outside of `getBestSubnets.ts`, **push back** — direct the author to modify `getBestSubnets.ts` instead
-- Gate thresholds live in `src/config.yaml` — both the rebalancer and simulation read from the same config
-
-**Key files:**
-- `src/strategy/getBestSubnets.ts` — gate evaluation + filtering (source of truth)
-- `src/strategy/getHealthySubnets.ts` — on-chain health filter (immunity, prune risk)
-- `src/config.yaml` — tunable thresholds
-- `scripts/simulate-rebalance.ts` — simulation (consumer, not source of truth)
-- `src/main.ts` — rebalancer (consumer, not source of truth)
-
-Also ensure that this file and tests stays up to date with any new conventions or architectural changes.
+Run after every change:
+- `bun check --fix` (lint)
+- `bun typecheck` (types)
+- `bun knip` (dead code)
+- `bun test` (tests)

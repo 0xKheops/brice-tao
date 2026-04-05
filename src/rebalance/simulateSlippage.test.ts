@@ -3,10 +3,7 @@ import { TAO } from "./constants.ts";
 import { simulateAllOperations } from "./simulateSlippage.ts";
 import type { RebalanceOperation } from "./types.ts";
 
-const TEST_SLIPPAGE = {
-	slippageBuffer: 0.003,
-	swapSlippageBuffer: 0.02,
-} as const;
+const TEST_SLIPPAGE_BUFFER = 0.02;
 
 function makeApi() {
 	return {
@@ -73,7 +70,8 @@ describe("simulateAllOperations", () => {
 		const simulated = await simulateAllOperations(
 			api as never,
 			operations,
-			TEST_SLIPPAGE,
+			TEST_SLIPPAGE_BUFFER,
+			true,
 		);
 
 		expect(simulated).toEqual([
@@ -82,7 +80,7 @@ describe("simulateAllOperations", () => {
 				netuid: 1,
 				hotkey: "hk",
 				taoAmount: TAO,
-				limitPrice: 2006000000n,
+				limitPrice: 2040000000n,
 			},
 			{
 				kind: "unstake",
@@ -90,7 +88,7 @@ describe("simulateAllOperations", () => {
 				hotkey: "hk",
 				alphaAmount: TAO,
 				estimatedTaoValue: TAO,
-				limitPrice: 2991000000n,
+				limitPrice: 2940000000n,
 			},
 			{
 				kind: "unstake_partial",
@@ -98,7 +96,7 @@ describe("simulateAllOperations", () => {
 				hotkey: "hk",
 				alphaAmount: 2n * TAO,
 				estimatedTaoValue: TAO,
-				limitPrice: 2492500000n,
+				limitPrice: 2450000000n,
 			},
 			{
 				kind: "swap",
@@ -161,7 +159,8 @@ describe("simulateAllOperations", () => {
 		const simulated = await simulateAllOperations(
 			api as never,
 			operations,
-			TEST_SLIPPAGE,
+			TEST_SLIPPAGE_BUFFER,
+			true,
 		);
 		expect(simulated).toEqual(operations);
 	});

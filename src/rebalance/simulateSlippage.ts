@@ -1,6 +1,5 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
-import type { AppConfig } from "../config/types.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import type {
@@ -16,6 +15,10 @@ type Api = TypedApi<typeof bittensor>;
 /**
  * Fill in simulation-based limit prices for all operations.
  *
+ * When `useLimits` is false (MEV-shielded simple path), returns operations unchanged
+ * — no simulation RPCs are made, limit prices stay 0.
+ *
+ * When `useLimits` is true:
  * - stake:          sim_swap_tao_for_alpha → effective price + buffer (max price to pay)
  * - unstake/partial: sim_swap_alpha_for_tao → effective price − buffer (min price to accept)
  * - swap:           current price ratio (origin/dest) − buffer (min acceptable ratio)
@@ -23,27 +26,29 @@ type Api = TypedApi<typeof bittensor>;
 export async function simulateAllOperations(
 	api: Api,
 	operations: RebalanceOperation[],
-	config: Pick<AppConfig["rebalance"], "slippageBuffer" | "swapSlippageBuffer">,
+	slippageBuffer: number,
+	useLimits: boolean,
 ): Promise<RebalanceOperation[]> {
+	if (!useLimits) return operations;
 	return Promise.all(
-		operations.map((op) => simulateOperation(api, op, config)),
+		operations.map((op) => simulateOperation(api, op, slippageBuffer)),
 	);
 }
 
 function simulateOperation(
 	api: Api,
 	op: RebalanceOperation,
-	config: Pick<AppConfig["rebalance"], "slippageBuffer" | "swapSlippageBuffer">,
+	slippageBuffer: number,
 ): Promise<RebalanceOperation> {
 	switch (op.kind) {
 		case "stake":
-			return simulateStake(api, op, config.slippageBuffer);
+			return simulateStake(api, op, slippageBuffer);
 		case "unstake":
-			return simulateUnstake(api, op, config.slippageBuffer);
+			return simulateUnstake(api, op, slippageBuffer);
 		case "unstake_partial":
-			return simulateUnstakePartial(api, op, config.slippageBuffer);
+			return simulateUnstakePartial(api, op, slippageBuffer);
 		case "swap":
-			return simulateSwap(api, op, config.swapSlippageBuffer);
+			return simulateSwap(api, op, slippageBuffer);
 		case "move":
 			return Promise.resolve(op);
 	}

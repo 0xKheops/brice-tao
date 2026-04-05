@@ -1,0 +1,39 @@
+# SMA crossover momentum strategy with trailing stop-loss
+# Demonstrates: technical indicators, stop-loss, SQLite persistence
+# All TAO amounts are in TAO (not RAO). Percent values are in percent.
+
+cronSchedule: "0 */4 * * *"              # rebalance every 4 hours
+staleTimeoutMinutes: 5                    # max time for one rebalance cycle
+
+rebalance:
+  minPositionTao: 0.3                     # smallest position to maintain (TAO)
+  freeReserveTao: 0.05                    # idle TAO kept for transaction fees
+  freeReserveTaoDriftPercent: 5           # allowable drift % before rebalancing reserve
+  minOperationTao: 0.01                   # minimum operation size (skip smaller ops)
+  minStakeTao: 0.01                       # minimum stake amount per extrinsic
+  minRebalanceTao: 0.15                   # skip entire cycle if total rebalance < this
+  slippageBufferPercent: 3                # buffer applied to slippage simulations
+  enforceSlippage: false                  # true = always use limit-price extrinsics
+  allocationDriftPercent: 25              # rebalance when position drifts > 25% from target
+
+strategy:
+  # --- Allocation ---
+  maxSubnets: 3                           # top N subnets, remainder → SN0
+
+  # --- Gates ---
+  minTaoIn: 50                            # min TAO in AMM pool (liquidity gate)
+  minSubnetAgeDays: 5                     # min subnet age in days
+  incumbencyBonus: 3                      # additive score bonus (%) for held subnets
+
+  # --- SMA Indicator ---
+  smaFastPeriod: 6                        # fast SMA period (in cron ticks)
+  smaSlowPeriod: 14                       # slow SMA period (in cron ticks)
+  maxPriceSamples: 30                     # max samples retained in DB per subnet
+
+  # --- Scoring Weights ---
+  momentumWeight: 60                      # weight for SMA momentum component (%)
+  emissionWeight: 40                      # weight for emission yield component (%)
+
+  # --- Stop-Loss ---
+  stopLossPercent: 15                     # trailing stop distance (%)
+  cooldownBlocks: 5400                    # blocks before re-entry after stop (~18h)

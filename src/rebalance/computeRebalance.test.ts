@@ -1,19 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
-import type { AppConfig } from "../config/types.ts";
 import { computeRebalance } from "./computeRebalance.ts";
 import { parseTao, TAO } from "./tao.ts";
-import type { StrategyTarget } from "./types.ts";
+import type { RebalanceConfig, StrategyTarget } from "./types.ts";
 
-const TEST_CONFIG: AppConfig["rebalance"] = {
+const TEST_CONFIG: RebalanceConfig = {
 	minPositionTao: parseTao(0.5),
 	freeReserveTao: parseTao(0.05),
 	freeReserveTaoDriftPercent: 0.05,
 	minOperationTao: parseTao(0.01),
 	minStakeTao: parseTao(0.01),
 	minRebalanceTao: parseTao(0.25),
-	slippageBuffer: 0.003,
-	swapSlippageBuffer: 0.02,
+	slippageBuffer: 0.02,
+	enforceSlippage: false,
+	allocationDriftPercent: 0.25,
 };
 
 const {
@@ -184,7 +184,7 @@ describe("computeRebalance", () => {
 		).toBeUndefined();
 		expect(plan.skipped).toContainEqual({
 			netuid: 44,
-			reason: "Position too small to exit (0.009 τ)",
+			reason: "Position too small to exit (0.0099 τ)",
 		});
 	});
 
@@ -267,17 +267,26 @@ describe("computeRebalance", () => {
 			TEST_CONFIG,
 		);
 
-		const unstake = plan.operations.find(
-			(op) => op.kind === "unstake" && op.netuid === 70,
+		// Reserve replenishment: unstake_partial to cover the free reserve
+		const replenish = plan.operations.find(
+			(op) => op.kind === "unstake_partial" && op.netuid === 70,
 		);
-		expect(unstake).toBeDefined();
+		expect(replenish).toBeDefined();
+		expect(replenish).toEqual(
+			expect.objectContaining({ estimatedTaoValue: FREE_RESERVE_TAO }),
+		);
 
-		const stakes = plan.operations.filter((op) => op.kind === "stake");
-		const totalStaked = stakes.reduce(
-			(sum, op) => sum + (op.kind === "stake" ? op.taoAmount : 0n),
+		// Exit position should be split-swapped to targets (not unstaked then re-staked)
+		const swaps = plan.operations.filter(
+			(op) => op.kind === "swap" && op.originNetuid === 70,
+		);
+		expect(swaps.length).toBe(3);
+
+		const totalSwapped = swaps.reduce(
+			(sum, op) => sum + (op.kind === "swap" ? op.estimatedTaoValue : 0n),
 			0n,
 		);
-		expect(totalStaked).toBe(unstakeValue - FREE_RESERVE_TAO);
+		expect(totalSwapped).toBe(unstakeValue - FREE_RESERVE_TAO);
 	});
 
 	it("reports insufficient free balance per target when deficits cannot be funded", () => {
@@ -430,7 +439,126 @@ describe("computeRebalance", () => {
 		).toBeUndefined();
 	});
 
-	it("unstakes when exit position exceeds 2× target allocation", () => {
+	it("splits exit position across multiple underweight targets proportionally", () => {
+		// Reproduces the production bug: SN0 (1.758 τ) should split to SN10 + SN56
+		const posValue = parseTao(1.758);
+		const hk = hotkey("validator");
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + posValue,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 0,
+					hotkey: hk,
+					taoValue: posValue,
+					stake: posValue,
+				}),
+			],
+		});
+
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 10, hotkey: hk }, { netuid: 56, hotkey: hk }),
+			TEST_CONFIG,
+		);
+
+		// Should produce TWO swap operations, not one
+		const swaps = plan.operations.filter(
+			(op) => op.kind === "swap" && op.originNetuid === 0,
+		);
+		expect(swaps.length).toBe(2);
+
+		const sn10Swap = swaps.find(
+			(op) => op.kind === "swap" && op.destinationNetuid === 10,
+		);
+		const sn56Swap = swaps.find(
+			(op) => op.kind === "swap" && op.destinationNetuid === 56,
+		);
+		expect(sn10Swap).toBeDefined();
+		expect(sn56Swap).toBeDefined();
+
+		// Both targets have equal deficit → roughly equal allocation
+		if (sn10Swap?.kind === "swap" && sn56Swap?.kind === "swap") {
+			const total = sn10Swap.estimatedTaoValue + sn56Swap.estimatedTaoValue;
+			expect(total).toBe(posValue);
+			// Each should be roughly half (allow rounding dust)
+			const halfValue = posValue / 2n;
+			expect(sn10Swap.estimatedTaoValue).toBeGreaterThanOrEqual(halfValue - 1n);
+			expect(sn56Swap.estimatedTaoValue).toBeGreaterThanOrEqual(halfValue - 1n);
+		}
+
+		// SN56 should NOT be skipped
+		expect(plan.skipped.find((s) => s.netuid === 56)).toBeUndefined();
+	});
+
+	it("splits exit with different hotkeys generates move ops when useLimits=true", () => {
+		const posValue = parseTao(2.0);
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + posValue,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 0,
+					hotkey: hotkey("source"),
+					taoValue: posValue,
+					stake: posValue,
+				}),
+			],
+		});
+
+		const plan = computeRebalance(
+			balances,
+			targets(
+				{ netuid: 10, hotkey: hotkey("valA") },
+				{ netuid: 20, hotkey: hotkey("valB") },
+			),
+			TEST_CONFIG,
+			{ useLimits: true },
+		);
+
+		// Should have move ops before each swap
+		const moves = plan.operations.filter((op) => op.kind === "move");
+		const swaps = plan.operations.filter(
+			(op) => op.kind === "swap" && op.originNetuid === 0,
+		);
+		expect(moves.length).toBe(2);
+		expect(swaps.length).toBe(2);
+	});
+
+	it("sends full position to single target when position fits within its deficit", () => {
+		const posValue = parseTao(0.5);
+		const hk = hotkey("validator");
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + 3n * TAO,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({
+					netuid: 99,
+					hotkey: hk,
+					taoValue: posValue,
+					stake: posValue,
+				}),
+			],
+		});
+
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 10, hotkey: hk }, { netuid: 20, hotkey: hk }),
+			TEST_CONFIG,
+		);
+
+		// Position (0.5 τ) fits within one target's deficit (~1.475 τ) → single swap
+		const swaps = plan.operations.filter(
+			(op) => op.kind === "swap" && op.originNetuid === 99,
+		);
+		expect(swaps.length).toBe(1);
+		// Should swap full position amount
+		expect(swaps[0]).toEqual(
+			expect.objectContaining({ alphaAmount: posValue }),
+		);
+	});
+
+	it("splits large exit position across multiple targets instead of unstaking", () => {
 		const balances = makeBalances({
 			totalTaoValue: parseTao(3.6),
 			free: parseTao(0.1),
@@ -458,13 +586,14 @@ describe("computeRebalance", () => {
 			TEST_CONFIG,
 		);
 
+		// SN99 (3.0 τ) should be split-swapped across underweight targets,
+		// not unstaked — swapping directly is cheaper and avoids slippage.
+		const swaps = plan.operations.filter(
+			(op) => op.kind === "swap" && op.originNetuid === 99,
+		);
+		expect(swaps.length).toBeGreaterThanOrEqual(2);
 		expect(
 			plan.operations.find((op) => op.kind === "unstake" && op.netuid === 99),
-		).toBeDefined();
-		expect(
-			plan.operations.find(
-				(op) => op.kind === "swap" && op.originNetuid === 99,
-			),
 		).toBeUndefined();
 	});
 
@@ -509,6 +638,41 @@ describe("computeRebalance", () => {
 				(op) => op.kind === "unstake_partial" && op.netuid === 10,
 			),
 		).toBeUndefined();
+	});
+
+	it("emits single swap with originHotkey when useLimits=false and hotkey differs", () => {
+		const balances = makeBalances({
+			totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+			free: FREE_RESERVE_TAO,
+			stakes: [
+				makeStake({ netuid: 77, hotkey: hotkey("source"), taoValue: TAO }),
+			],
+		});
+
+		const plan = computeRebalance(
+			balances,
+			targets({ netuid: 5, hotkey: hotkey("different") }),
+			TEST_CONFIG,
+			{ useLimits: false },
+		);
+
+		// Should NOT have a move operation
+		expect(plan.operations.find((op) => op.kind === "move")).toBeUndefined();
+
+		// Should have a single swap with originHotkey set
+		const swap = plan.operations.find(
+			(op) => op.kind === "swap" && op.originNetuid === 77,
+		);
+		expect(swap).toBeDefined();
+		expect(swap).toEqual(
+			expect.objectContaining({
+				kind: "swap",
+				originNetuid: 77,
+				destinationNetuid: 5,
+				hotkey: hotkey("different"),
+				originHotkey: hotkey("source"),
+			}),
+		);
 	});
 
 	describe("reserve replenishment", () => {
@@ -698,6 +862,436 @@ describe("computeRebalance", () => {
 					op.estimatedTaoValue <= FREE_RESERVE_TAO,
 			);
 			expect(replenish).toBeUndefined();
+		});
+	});
+
+	describe("allocation drift tolerance", () => {
+		it("routes exit position to single target when within drift tolerance", () => {
+			// 0.6 τ position going to 4 targets of ~0.5 τ each.
+			// Overshoot: 0.6 / 0.5 - 1 = 20%, within 25% drift → single swap.
+			const hk = hotkey("validator");
+			const posValue = parseTao(0.6);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets(
+					{ netuid: 10, hotkey: hk },
+					{ netuid: 20, hotkey: hk },
+					{ netuid: 30, hotkey: hk },
+					{ netuid: 40, hotkey: hk },
+				),
+				TEST_CONFIG,
+			);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			);
+			expect(swaps.length).toBe(1);
+			expect(swaps[0]).toEqual(
+				expect.objectContaining({ alphaAmount: posValue }),
+			);
+		});
+
+		it("still splits when overshoot exceeds drift tolerance", () => {
+			// 1.758 τ position going to 2 targets of ~0.879 τ each.
+			// Overshoot: 1.758 / 0.879 - 1 = 100%, far beyond 25% → must split.
+			const hk = hotkey("validator");
+			const posValue = parseTao(1.758);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + posValue,
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 0,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }, { netuid: 56, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 0,
+			);
+			expect(swaps.length).toBe(2);
+		});
+
+		it("skips overweight reduction within drift tolerance", () => {
+			// SN10 has 1.1 τ vs target of 0.975 τ → excess 0.125 τ (12.8%).
+			// Drift band: 0.975 × 0.25 = 0.244 τ → 0.125 < 0.244 → skip.
+			const hk = hotkey("validator");
+			const balances = makeBalances({
+				totalTaoValue: parseTao(2.0),
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(1.1),
+						stake: parseTao(1.1),
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: parseTao(0.85),
+						stake: parseTao(0.85),
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }, { netuid: 20, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			// Should NOT generate any overweight reduction swap from SN10
+			const overweightOps = plan.operations.filter(
+				(op) =>
+					(op.kind === "swap" && op.originNetuid === 10) ||
+					(op.kind === "unstake_partial" && op.netuid === 10),
+			);
+			expect(overweightOps.length).toBe(0);
+		});
+
+		it("skips free-balance staking for deficit within drift tolerance", () => {
+			// SN10 fulfilled at 0.9 τ vs target ~0.975 τ → deficit 0.075 τ (7.7%).
+			// Drift band: 0.975 × 0.25 = 0.244 τ → 0.075 < 0.244 → skip.
+			const hk = hotkey("validator");
+			const balances = makeBalances({
+				totalTaoValue: parseTao(2.0),
+				free: FREE_RESERVE_TAO + parseTao(0.2),
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(0.9),
+						stake: parseTao(0.9),
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: parseTao(0.85),
+						stake: parseTao(0.85),
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets({ netuid: 10, hotkey: hk }, { netuid: 20, hotkey: hk }),
+				TEST_CONFIG,
+			);
+
+			// Should NOT stake into SN10 or SN20 since both are within drift
+			const stakeOps = plan.operations.filter((op) => op.kind === "stake");
+			expect(stakeOps.length).toBe(0);
+		});
+
+		it("prefers target with smallest overshoot when multiple within drift", () => {
+			// Two equal-weight targets (0.5 each), SN10 partially filled (0.05 τ).
+			// available = 1.0 τ → each target = 0.5 τ, maxAllowed = 0.625 τ.
+			// Exit SN99 (0.55 τ): exceeds topTarget deficit (0.5) → findBestSingleTarget.
+			// SN10: afterFulfilled = 0.05+0.55 = 0.60 ≤ 0.625 ✓ overshoot = 0.10
+			// SN20: afterFulfilled = 0+0.55 = 0.55 ≤ 0.625 ✓ overshoot = 0.05
+			// SN20 has smaller overshoot → should be chosen.
+			const hk = hotkey("validator");
+			const posValue = parseTao(0.55);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + TAO,
+				free: FREE_RESERVE_TAO + parseTao(0.4),
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(0.05),
+						stake: parseTao(0.05),
+					}),
+				],
+			});
+
+			const tgts: StrategyTarget[] = [
+				{ netuid: 10, hotkey: hk, share: 0.5 },
+				{ netuid: 20, hotkey: hk, share: 0.5 },
+			];
+
+			const plan = computeRebalance(balances, tgts, TEST_CONFIG);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			);
+			expect(swaps.length).toBe(1);
+			// SN20 has smaller overshoot → should be chosen
+			expect(swaps[0]).toEqual(
+				expect.objectContaining({ destinationNetuid: 20 }),
+			);
+		});
+
+		it("falls back to split when no single target is within drift tolerance", () => {
+			// 3.0 τ position vs 3 targets of ~1.17 τ each.
+			// 3.0 / 1.17 - 1 = 156% → way beyond 25% drift for any single target.
+			const hk = hotkey("validator");
+			const posValue = parseTao(3.0);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + posValue,
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets(
+					{ netuid: 10, hotkey: hk },
+					{ netuid: 20, hotkey: hk },
+					{ netuid: 30, hotkey: hk },
+				),
+				TEST_CONFIG,
+			);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			);
+			expect(swaps.length).toBeGreaterThanOrEqual(2);
+		});
+
+		it("with zero drift behaves like original (always splits)", () => {
+			const noDriftConfig = { ...TEST_CONFIG, allocationDriftPercent: 0 };
+			const hk = hotkey("validator");
+			const posValue = parseTao(0.6);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets(
+					{ netuid: 10, hotkey: hk },
+					{ netuid: 20, hotkey: hk },
+					{ netuid: 30, hotkey: hk },
+					{ netuid: 40, hotkey: hk },
+				),
+				noDriftConfig,
+			);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			);
+			// With 0% drift, 0.6 τ > 0.5 τ target → must split
+			expect(swaps.length).toBeGreaterThanOrEqual(2);
+		});
+
+		it("still reduces overweight when a destination target is beyond its drift band", () => {
+			// Uses lower minRebalanceTao so drift logic is the deciding factor.
+			// SN10 holds 1.2 τ (target ~1.0 τ, excess 0.2 τ within its drift band 0.25 τ).
+			// SN20 holds 0.2 τ (target ~0.4 τ, deficit 0.2 τ > drift band 0.1 τ).
+			// Free balance = reserve only → no free to fund SN20.
+			// Without the stranding fix, drift would skip the SN10 trim and SN20 stays underweight.
+			// With the fix, SN10 is reduced and swapped to SN20.
+			const lowerMinConfig = {
+				...TEST_CONFIG,
+				minRebalanceTao: parseTao(0.1),
+			};
+			const hk = hotkey("validator");
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + parseTao(1.4),
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(1.2),
+						stake: parseTao(1.2),
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: parseTao(0.2),
+						stake: parseTao(0.2),
+					}),
+				],
+			});
+
+			// 5/7 and 2/7 shares → target SN10 = 1.0 τ, target SN20 = 0.4 τ
+			const tgts: StrategyTarget[] = [
+				{ netuid: 10, hotkey: hk, share: 5 / 7 },
+				{ netuid: 20, hotkey: hk, share: 2 / 7 },
+			];
+
+			const plan = computeRebalance(balances, tgts, lowerMinConfig);
+
+			// Should produce a swap from SN10 → SN20
+			const swapOps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 10,
+			);
+			expect(swapOps.length).toBe(1);
+			expect(swapOps[0]).toEqual(
+				expect.objectContaining({ destinationNetuid: 20 }),
+			);
+		});
+
+		it("skips overweight reduction within drift when all targets are within drift", () => {
+			// Both targets within drift band → no operations needed.
+			// SN10: 1.1 τ vs target 1.0 τ → excess 0.1 τ, drift band 0.25 τ → within
+			// SN20: 0.35 τ vs target 0.4 τ → deficit 0.05 τ, drift band 0.1 τ → within
+			const hk = hotkey("validator");
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + parseTao(1.45),
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(1.1),
+						stake: parseTao(1.1),
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: parseTao(0.35),
+						stake: parseTao(0.35),
+					}),
+				],
+			});
+
+			const tgts: StrategyTarget[] = [
+				{ netuid: 10, hotkey: hk, share: 5 / 7 },
+				{ netuid: 20, hotkey: hk, share: 2 / 7 },
+			];
+
+			const plan = computeRebalance(balances, tgts, TEST_CONFIG);
+
+			const rebalanceOps = plan.operations.filter(
+				(op) => op.kind === "swap" || op.kind === "unstake_partial",
+			);
+			expect(rebalanceOps.length).toBe(0);
+		});
+
+		it("routes exit to single target at exact drift boundary", () => {
+			// Position exactly at drift limit: 0.625 τ = 0.5 × 1.25.
+			// afterFulfilled (0.625) <= maxAllowed (0.625) → should route to single target.
+			const hk = hotkey("validator");
+			const posValue = parseTao(0.625);
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + 2n * TAO,
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 99,
+						hotkey: hk,
+						taoValue: posValue,
+						stake: posValue,
+					}),
+				],
+			});
+
+			const plan = computeRebalance(
+				balances,
+				targets(
+					{ netuid: 10, hotkey: hk },
+					{ netuid: 20, hotkey: hk },
+					{ netuid: 30, hotkey: hk },
+					{ netuid: 40, hotkey: hk },
+				),
+				TEST_CONFIG,
+			);
+
+			const swaps = plan.operations.filter(
+				(op) => op.kind === "swap" && op.originNetuid === 99,
+			);
+			// Exactly at boundary (<=) → single swap
+			expect(swaps.length).toBe(1);
+		});
+
+		it("stops overweight reduction once all destinations are within drift", () => {
+			// 3 equal targets. SN10 and SN20 both overweight within drift.
+			// SN30 is underweight beyond drift. After one swap fills SN30,
+			// the second overweight source should be skipped (all now within drift).
+			const lowerMinConfig = {
+				...TEST_CONFIG,
+				minRebalanceTao: parseTao(0.1),
+			};
+			const hk = hotkey("validator");
+			const balances = makeBalances({
+				totalTaoValue: FREE_RESERVE_TAO + parseTao(2.9),
+				free: FREE_RESERVE_TAO,
+				stakes: [
+					makeStake({
+						netuid: 10,
+						hotkey: hk,
+						taoValue: parseTao(1.2),
+						stake: parseTao(1.2),
+					}),
+					makeStake({
+						netuid: 20,
+						hotkey: hk,
+						taoValue: parseTao(1.2),
+						stake: parseTao(1.2),
+					}),
+					makeStake({
+						netuid: 30,
+						hotkey: hk,
+						taoValue: parseTao(0.5),
+						stake: parseTao(0.5),
+					}),
+				],
+			});
+
+			// Equal shares → each target ≈ 0.9667 τ, drift band ≈ 0.2417 τ
+			const tgts: StrategyTarget[] = [
+				{ netuid: 10, hotkey: hk, share: 1 / 3 },
+				{ netuid: 20, hotkey: hk, share: 1 / 3 },
+				{ netuid: 30, hotkey: hk, share: 1 / 3 },
+			];
+
+			const plan = computeRebalance(balances, tgts, lowerMinConfig);
+
+			// Only one swap should fire (first overweight fills SN30),
+			// second overweight should be skipped since all targets are now within drift.
+			const swapOps = plan.operations.filter((op) => op.kind === "swap");
+			expect(swapOps.length).toBe(1);
+			expect(swapOps[0]).toEqual(
+				expect.objectContaining({ destinationNetuid: 30 }),
+			);
 		});
 	});
 });

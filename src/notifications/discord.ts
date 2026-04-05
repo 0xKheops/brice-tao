@@ -1,5 +1,5 @@
 import type { Balances } from "../balances/getBalances.ts";
-import { parseTao, TAO } from "../rebalance/tao.ts";
+import { formatTao, parseTao } from "../rebalance/tao.ts";
 import type {
 	BatchResult,
 	OperationResult,
@@ -15,12 +15,6 @@ function formatDuration(ms: number): string {
 	const seconds = totalSeconds % 60;
 	if (minutes > 0) return `${minutes}m ${seconds}s`;
 	return `${seconds}s`;
-}
-
-function formatTao(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = ((rao % TAO) * 1000n) / TAO;
-	return `${whole}.${frac.toString().padStart(3, "0")}`;
 }
 
 function describeOp(op: RebalanceOperation): string {
@@ -65,7 +59,7 @@ function buildBalancesTable(balances: Balances): string {
 		lines.push(`${"TAO".padEnd(5)} │ ${formatTao(balances.free)} τ`);
 	}
 
-	const sortedStakes = balances.stakes.sort((a, b) =>
+	const sortedStakes = balances.stakes.toSorted((a, b) =>
 		Number(b.taoValue - a.taoValue),
 	);
 	for (const s of sortedStakes) {
@@ -136,7 +130,7 @@ function feesField(
 		if (result.wrapperFee != null && result.wrapperFee > 0n) {
 			return {
 				name: "💸 Transaction Fees",
-				value: `Wrapper: ${formatTao(result.wrapperFee)} τ (inner batch unknown)`,
+				value: `Wrapper: ${formatTao(result.wrapperFee, 6)} τ (inner batch unknown)`,
 				inline: false,
 			};
 		}
@@ -146,7 +140,7 @@ function feesField(
 	const total = result.wrapperFee + result.innerBatchFee;
 	return {
 		name: "💸 Transaction Fees",
-		value: `${formatTao(total)} τ`,
+		value: `${formatTao(total, 6)} τ`,
 		inline: false,
 	};
 }
@@ -254,46 +248,17 @@ export async function sendRebalanceNotification(
 	await postWebhook(webhookUrl, { embeds });
 }
 
-export async function sendNoRebalanceNotification(
-	webhookUrl: string,
-	balances: Balances,
-	proxyFreeBalance: bigint,
-	durationMs: number,
-): Promise<void> {
-	const balancesCount = balances.stakes.length + (balances.free > 0n ? 1 : 0);
-
-	const embeds = [
-		{
-			title: "⚖️ Portfolio Balanced",
-			description: "No operations needed — portfolio is already balanced.",
-			color: 0x3498db,
-			fields: [
-				{
-					name: "💰 Portfolio Value",
-					value: `${formatTao(balances.totalTaoValue + proxyFreeBalance)} τ`,
-					inline: false,
-				},
-				proxyBalanceField(proxyFreeBalance),
-				{
-					name: `📊 Balances (${balancesCount})`,
-					value: buildBalancesTable(balances),
-					inline: false,
-				},
-			],
-			footer: { text: `Completed in ${formatDuration(durationMs)}` },
-			timestamp: new Date().toISOString(),
-		},
-	];
-
-	await postWebhook(webhookUrl, { embeds });
-}
-
 export async function sendErrorNotification(
 	webhookUrl: string,
 	error: unknown,
 	durationMs: number,
 ): Promise<void> {
-	const message = error instanceof Error ? error.message : String(error);
+	const message =
+		error instanceof Error
+			? error.message
+			: typeof error === "string"
+				? error
+				: (JSON.stringify(error, null, 2)?.slice(0, 1000) ?? "Unknown error");
 	const stack =
 		error instanceof Error && error.stack
 			? `\`\`\`\n${error.stack.slice(0, 1000)}\n\`\`\``
@@ -325,6 +290,7 @@ async function postWebhook(
 		body: JSON.stringify(body),
 	});
 	if (!res.ok) {
-		console.error(`Discord webhook failed: ${res.status} ${await res.text()}`);
+		const text = await res.text().catch(() => "");
+		throw new Error(`Discord webhook ${res.status}: ${text}`);
 	}
 }

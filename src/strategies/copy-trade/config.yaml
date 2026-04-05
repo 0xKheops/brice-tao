@@ -1,0 +1,19 @@
+# Copy-Trade strategy — mirrors a leader wallet's portfolio allocation.
+# Watches for the leader's staking events and rebalances to match their proportions.
+# All TAO amounts are in TAO (not RAO). Slippage values are in percent.
+
+staleTimeoutMinutes: 10                    # max time allowed for one rebalance cycle
+
+rebalance:
+  minPositionTao: 0.5                      # smallest position to maintain (TAO)
+  freeReserveTao: 0.1                      # idle TAO kept for transaction fees
+  freeReserveTaoDriftPercent: 5            # allowable drift % before rebalancing reserve
+  minOperationTao: 0.01                    # minimum operation size (skip smaller ops)
+  minStakeTao: 0.01                        # minimum stake amount per extrinsic
+  minRebalanceTao: 0.1                     # skip entire cycle if total rebalance < this
+  slippageBufferPercent: 2                 # buffer applied to slippage simulations
+  enforceSlippage: false                   # true = always use limit-price extrinsics
+  allocationDriftPercent: 25               # rebalance when position drifts > 25% from target
+
+strategy:
+  leaderAddress: ""                        # leader coldkey to mirror (set via LEADER_ADDRESS env var)

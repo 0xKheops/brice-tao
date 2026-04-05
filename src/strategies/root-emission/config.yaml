@@ -1,0 +1,24 @@
+cronSchedule: "0 */12 * * *"              # rebalance every 12 hours
+staleTimeoutMinutes: 5                     # max time allowed for one rebalance cycle
+
+# Root + Best Emission strategy — optimized for small portfolios (<2 TAO)
+# Keeps a fixed percentage in root (SN0) for stability, allocates the rest
+# to the single subnet with the highest emission yield.
+# All TAO amounts are in TAO (not RAO). Slippage values are in percent.
+
+rebalance:
+  minPositionTao: 0.3                      # smallest position to maintain (TAO)
+  freeReserveTao: 0.05                     # idle TAO kept for transaction fees
+  freeReserveTaoDriftPercent: 5            # allowable drift % before rebalancing reserve
+  minOperationTao: 0.01                    # minimum operation size (skip smaller ops)
+  minStakeTao: 0.01                        # minimum stake amount per extrinsic
+  minRebalanceTao: 0.15                    # skip entire cycle if total rebalance < this
+  slippageBufferPercent: 3                 # buffer applied to slippage simulations
+  enforceSlippage: false                   # true = always use limit-price extrinsics
+  allocationDriftPercent: 25               # rebalance when position drifts > 25% from target
+
+strategy:
+  rootSharePct: 65                         # percentage of portfolio allocated to root (SN0)
+  minTaoIn: 50                             # minimum TAO in AMM pool (liquidity gate)
+  minSubnetAgeDays: 7                      # minimum subnet age in days
+  incumbencyBonus: 3                       # additive score bonus (%) for currently-held subnets

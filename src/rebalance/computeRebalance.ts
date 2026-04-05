@@ -1,9 +1,10 @@
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
-import type { AppConfig } from "../config/types.ts";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
+import { formatTao } from "./tao.ts";
 import type {
 	MoveOperation,
+	RebalanceConfig,
 	RebalanceOperation,
 	RebalancePlan,
 	StrategyTarget,
@@ -28,7 +29,8 @@ interface ResolvedTarget extends StrategyTarget {
 export function computeRebalance(
 	balances: Balances,
 	targets: StrategyTarget[],
-	config: AppConfig["rebalance"],
+	config: RebalanceConfig,
+	options?: { useLimits?: boolean },
 ): RebalancePlan {
 	if (targets.length === 0) {
 		return { targets: [], operations: [], skipped: [] };
@@ -77,6 +79,7 @@ export function computeRebalance(
 		resolved,
 		adjustedFree,
 		config,
+		options?.useLimits ?? true,
 	);
 	return {
 		targets,
@@ -105,7 +108,7 @@ function classifyPositions(
 function replenishReserve(
 	freeBalance: bigint,
 	positions: ClassifiedPosition[],
-	config: AppConfig["rebalance"],
+	config: RebalanceConfig,
 ): {
 	operations: RebalanceOperation[];
 	adjustedFree: bigint;
@@ -178,7 +181,8 @@ function generateOperations(
 	positions: ClassifiedPosition[],
 	targets: ResolvedTarget[],
 	freeBalance: bigint,
-	config: AppConfig["rebalance"],
+	config: RebalanceConfig,
+	useLimits: boolean,
 ): { operations: RebalanceOperation[]; skipped: RebalancePlan["skipped"] } {
 	const operations: RebalanceOperation[] = [];
 	const skipped: RebalancePlan["skipped"] = [];
@@ -192,7 +196,7 @@ function generateOperations(
 		fulfilled.set(t.netuid, existing);
 	}
 
-	// 1. Full exits — swap to underweight target, moving hotkey on origin subnet first if needed.
+	// 1. Full exits — swap to underweight targets, splitting across multiple when needed.
 	for (const pos of positions) {
 		if (pos.classification !== "exit") continue;
 		if (pos.taoValue < config.minOperationTao) {
@@ -203,72 +207,224 @@ function generateOperations(
 			continue;
 		}
 
-		const bestSwapTarget = targets
-			.filter((t) => {
+		// Collect eligible targets with remaining deficit, sorted by deficit descending
+		const eligible = targets
+			.map((t) => {
 				const currentFulfilled = fulfilled.get(t.netuid) ?? 0n;
-				const deficit = t.targetTaoValue - currentFulfilled;
-				if (deficit <= 0n) return false;
-				return currentFulfilled + pos.taoValue <= 2n * t.targetTaoValue;
+				return {
+					target: t,
+					deficit: t.targetTaoValue - currentFulfilled,
+					currentFulfilled,
+				};
 			})
-			.sort((a, b) =>
-				Number(
-					b.targetTaoValue -
-						(fulfilled.get(b.netuid) ?? 0n) -
-						(a.targetTaoValue - (fulfilled.get(a.netuid) ?? 0n)),
-				),
-			)[0];
+			.filter((e) => e.deficit > 0n)
+			.sort((a, b) => Number(b.deficit - a.deficit));
 
-		if (bestSwapTarget) {
-			const needsHotkeyChange = bestSwapTarget.hotkey !== pos.hotkey;
-			if (needsHotkeyChange) {
-				operations.push(moveOp(pos.netuid, pos.hotkey, bestSwapTarget.hotkey));
-			}
+		if (eligible.length === 0) {
 			operations.push({
-				kind: "swap",
-				originNetuid: pos.netuid,
-				destinationNetuid: bestSwapTarget.netuid,
-				hotkey: needsHotkeyChange ? bestSwapTarget.hotkey : pos.hotkey,
+				kind: "unstake",
+				netuid: pos.netuid,
+				hotkey: pos.hotkey,
 				alphaAmount: pos.stake,
-				estimatedTaoValue: pos.taoValue,
 				limitPrice: 0n,
+				estimatedTaoValue: pos.taoValue,
 			});
-			if (needsHotkeyChange) {
-				log.verbose(
-					`  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ`,
-				);
-			} else {
-				log.verbose(
-					`  OP: swap SN${pos.netuid}→SN${bestSwapTarget.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
-				);
-			}
-			fulfilled.set(
-				bestSwapTarget.netuid,
-				(fulfilled.get(bestSwapTarget.netuid) ?? 0n) + pos.taoValue,
+			log.verbose(
+				`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target with deficit)`,
 			);
 			continue;
 		}
 
-		operations.push({
-			kind: "unstake",
-			netuid: pos.netuid,
-			hotkey: pos.hotkey,
-			alphaAmount: pos.stake,
-			limitPrice: 0n,
-			estimatedTaoValue: pos.taoValue,
-		});
-		log.verbose(
-			`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target within overfill cap)`,
+		// Single-target fast path: position fits within one target's deficit,
+		// only one target has deficit, or position fits within one target's
+		// drift tolerance — send the whole position as one swap.
+		const topTarget = eligible[0];
+		const singleTarget = topTarget
+			? eligible.length === 1 || pos.taoValue <= topTarget.deficit
+				? topTarget
+				: findBestSingleTarget(
+						eligible,
+						pos.taoValue,
+						config.allocationDriftPercent,
+					)
+			: undefined;
+		if (singleTarget) {
+			const best = singleTarget;
+			// Overfill guard: don't overshoot beyond 2× allocation
+			if (
+				best.currentFulfilled + pos.taoValue >
+				2n * best.target.targetTaoValue
+			) {
+				operations.push({
+					kind: "unstake",
+					netuid: pos.netuid,
+					hotkey: pos.hotkey,
+					alphaAmount: pos.stake,
+					limitPrice: 0n,
+					estimatedTaoValue: pos.taoValue,
+				});
+				log.verbose(
+					`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target within overfill cap)`,
+				);
+				continue;
+			}
+
+			const needsHotkeyChange = best.target.hotkey !== pos.hotkey;
+			if (needsHotkeyChange && useLimits) {
+				operations.push(moveOp(pos.netuid, pos.hotkey, best.target.hotkey));
+			}
+			operations.push({
+				kind: "swap",
+				originNetuid: pos.netuid,
+				destinationNetuid: best.target.netuid,
+				hotkey: needsHotkeyChange ? best.target.hotkey : pos.hotkey,
+				alphaAmount: pos.stake,
+				estimatedTaoValue: pos.taoValue,
+				limitPrice: 0n,
+				originHotkey: needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
+			});
+			if (needsHotkeyChange) {
+				log.verbose(
+					`  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${best.target.netuid}: ~${formatTao(pos.taoValue)} τ`,
+				);
+			} else {
+				log.verbose(
+					`  OP: swap SN${pos.netuid}→SN${best.target.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
+				);
+			}
+			fulfilled.set(best.target.netuid, best.currentFulfilled + pos.taoValue);
+			continue;
+		}
+
+		// Multi-target split: position exceeds any single target's deficit —
+		// distribute proportionally across all underweight targets by deficit ratio.
+		const totalDeficit = eligible.reduce((sum, e) => sum + e.deficit, 0n);
+		const distributableTao =
+			pos.taoValue < totalDeficit ? pos.taoValue : totalDeficit;
+
+		// Compute proportional allocations capped at each target's deficit
+		let allocations = eligible.map((e) => ({
+			target: e.target,
+			taoAmount:
+				totalDeficit > 0n ? (distributableTao * e.deficit) / totalDeficit : 0n,
+		}));
+
+		// Filter out allocations below minOperationTao
+		allocations = allocations.filter(
+			(a) => a.taoAmount >= config.minOperationTao,
 		);
+
+		if (allocations.length === 0) {
+			operations.push({
+				kind: "unstake",
+				netuid: pos.netuid,
+				hotkey: pos.hotkey,
+				alphaAmount: pos.stake,
+				limitPrice: 0n,
+				estimatedTaoValue: pos.taoValue,
+			});
+			log.verbose(
+				`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (all split allocations below minimum)`,
+			);
+			continue;
+		}
+
+		// Absorb bigint rounding dust into last allocation
+		const allocatedSum = allocations.reduce((sum, a) => sum + a.taoAmount, 0n);
+		const roundingDust = distributableTao - allocatedSum;
+		if (roundingDust > 0n) {
+			const lastAlloc = allocations.at(-1);
+			if (lastAlloc) lastAlloc.taoAmount += roundingDust;
+		}
+
+		// Generate partial swaps
+		let usedAlpha = 0n;
+		for (const [i, alloc] of allocations.entries()) {
+			const isLast = i === allocations.length - 1;
+
+			// Last allocation sweeps remaining alpha when position is fully
+			// distributed (avoids conversion rounding dust)
+			const swapAlpha =
+				isLast && pos.taoValue <= totalDeficit
+					? pos.stake - usedAlpha
+					: pos.alphaPrice > 0n
+						? (alloc.taoAmount * TAO) / pos.alphaPrice
+						: 0n;
+
+			const needsHotkeyChange = alloc.target.hotkey !== pos.hotkey;
+			if (needsHotkeyChange && useLimits) {
+				operations.push(
+					moveOp(pos.netuid, pos.hotkey, alloc.target.hotkey, swapAlpha),
+				);
+			}
+			operations.push({
+				kind: "swap",
+				originNetuid: pos.netuid,
+				destinationNetuid: alloc.target.netuid,
+				hotkey: needsHotkeyChange ? alloc.target.hotkey : pos.hotkey,
+				alphaAmount: swapAlpha,
+				estimatedTaoValue: alloc.taoAmount,
+				limitPrice: 0n,
+				originHotkey: needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
+			});
+			log.verbose(
+				needsHotkeyChange
+					? `  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${alloc.target.netuid}: ~${formatTao(alloc.taoAmount)} τ`
+					: `  OP: swap SN${pos.netuid}→SN${alloc.target.netuid}: ~${formatTao(alloc.taoAmount)} τ (matching hotkey)`,
+			);
+			fulfilled.set(
+				alloc.target.netuid,
+				(fulfilled.get(alloc.target.netuid) ?? 0n) + alloc.taoAmount,
+			);
+			usedAlpha += swapAlpha;
+		}
+
+		// If position exceeds total deficit, unstake the remainder
+		if (pos.taoValue > totalDeficit) {
+			const remainderAlpha = pos.stake - usedAlpha;
+			const remainderTao = pos.taoValue - distributableTao;
+			if (remainderTao >= config.minOperationTao && remainderAlpha > 0n) {
+				operations.push({
+					kind: "unstake_partial",
+					netuid: pos.netuid,
+					hotkey: pos.hotkey,
+					alphaAmount: remainderAlpha,
+					estimatedTaoValue: remainderTao,
+					limitPrice: 0n,
+				});
+				log.verbose(
+					`  OP: unstake remainder SN${pos.netuid}: ~${formatTao(remainderTao)} τ`,
+				);
+			}
+		}
 	}
 
 	// 2. Overweight reductions — swap excess to underweight target.
+	//    Skip reductions within drift band only when no target is
+	//    materially underweight (beyond its own drift band).
+	//    Recomputed per position since fulfilled changes after each swap.
 	for (const target of targets) {
 		const keepPositions = positions.filter(
 			(p) => p.netuid === target.netuid && p.classification === "keep",
 		);
 		for (const pos of keepPositions) {
 			const excess = pos.taoValue - target.targetTaoValue;
-			if (excess < config.minRebalanceTao) continue;
+			const driftBand = driftThreshold(
+				target.targetTaoValue,
+				config.allocationDriftPercent,
+			);
+			const anyTargetBeyondDrift = targets.some((t) => {
+				const f = fulfilled.get(t.netuid) ?? 0n;
+				const d = t.targetTaoValue - f;
+				return (
+					d > driftThreshold(t.targetTaoValue, config.allocationDriftPercent)
+				);
+			});
+			if (
+				excess < config.minRebalanceTao ||
+				(excess <= driftBand && !anyTargetBeyondDrift)
+			)
+				continue;
 
 			const maxReducible = pos.taoValue - config.minStakeTao;
 			const reduceAmount = excess < maxReducible ? excess : maxReducible;
@@ -302,7 +458,7 @@ function generateOperations(
 			if (fullSwapTarget) {
 				const destFulfilled = fulfilled.get(fullSwapTarget.netuid) ?? 0n;
 				const needsHotkeyChange = fullSwapTarget.hotkey !== pos.hotkey;
-				if (needsHotkeyChange) {
+				if (needsHotkeyChange && useLimits) {
 					operations.push(
 						moveOp(pos.netuid, pos.hotkey, fullSwapTarget.hotkey, reduceAlpha),
 					);
@@ -315,6 +471,8 @@ function generateOperations(
 					alphaAmount: reduceAlpha,
 					estimatedTaoValue: reduceAmount,
 					limitPrice: 0n,
+					originHotkey:
+						needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
 				});
 				if (needsHotkeyChange) {
 					log.verbose(
@@ -356,7 +514,11 @@ function generateOperations(
 	for (const target of targets) {
 		const currentFulfilled = fulfilled.get(target.netuid) ?? 0n;
 		const deficit = target.targetTaoValue - currentFulfilled;
-		if (deficit < config.minRebalanceTao) continue;
+		const driftBand = driftThreshold(
+			target.targetTaoValue,
+			config.allocationDriftPercent,
+		);
+		if (deficit < config.minRebalanceTao || deficit <= driftBand) continue;
 
 		const stakeAmount = deficit < availableFree ? deficit : availableFree;
 		if (stakeAmount < config.minRebalanceTao) {
@@ -386,12 +548,6 @@ function generateOperations(
 	return { operations, skipped };
 }
 
-function formatTao(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = ((rao % TAO) * 1000n) / TAO;
-	return `${whole}.${frac.toString().padStart(3, "0")}`;
-}
-
 function moveOp(
 	netuid: number,
 	originHotkey: string,
@@ -405,4 +561,45 @@ function moveOp(
 		destinationHotkey,
 		alphaAmount,
 	};
+}
+
+/** Compute the absolute drift band for a given target value and drift fraction */
+function driftThreshold(targetTaoValue: bigint, driftPercent: number): bigint {
+	return (
+		(targetTaoValue * BigInt(Math.round(driftPercent * 1e9))) / 1_000_000_000n
+	);
+}
+
+/**
+ * Among eligible targets, find the one where routing the entire position
+ * keeps the post-swap allocation within drift tolerance. Prefers the
+ * candidate with the smallest overshoot (closest to target).
+ */
+function findBestSingleTarget(
+	eligible: Array<{
+		target: ResolvedTarget;
+		deficit: bigint;
+		currentFulfilled: bigint;
+	}>,
+	positionValue: bigint,
+	driftPercent: number,
+):
+	| { target: ResolvedTarget; deficit: bigint; currentFulfilled: bigint }
+	| undefined {
+	const candidates = eligible.filter((e) => {
+		const afterFulfilled = e.currentFulfilled + positionValue;
+		const maxAllowed =
+			e.target.targetTaoValue +
+			driftThreshold(e.target.targetTaoValue, driftPercent);
+		return afterFulfilled <= maxAllowed;
+	});
+	if (candidates.length === 0) return undefined;
+	// Prefer smallest overshoot (closest to target after filling)
+	return candidates.sort((a, b) => {
+		const devA = a.currentFulfilled + positionValue - a.target.targetTaoValue;
+		const devB = b.currentFulfilled + positionValue - b.target.targetTaoValue;
+		if (devA < devB) return -1;
+		if (devA > devB) return 1;
+		return 0;
+	})[0];
 }

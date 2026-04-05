@@ -20,7 +20,7 @@ const getMetadata = async (codeHash: string) => {
 	return metadata;
 };
 
-type Api = TypedApi<typeof bittensor>;
+export type Api = TypedApi<typeof bittensor>;
 
 export interface BittensorClient {
 	client: PolkadotClient;

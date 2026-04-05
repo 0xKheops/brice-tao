@@ -1,10 +1,13 @@
 export const TAO = 1_000_000_000n;
 
-/** Format a RAO amount as a human-readable TAO string (3 decimal places). */
-export function formatTao(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = ((rao % TAO) * 1000n) / TAO;
-	return `${whole}.${frac.toString().padStart(3, "0")}`;
+/** Format a RAO amount as a human-readable TAO string. */
+export function formatTao(rao: bigint, decimals = 4): string {
+	const abs = rao < 0n ? -rao : rao;
+	const sign = rao < 0n ? "-" : "";
+	const whole = abs / TAO;
+	const multiplier = 10n ** BigInt(decimals);
+	const frac = ((abs % TAO) * multiplier) / TAO;
+	return `${sign}${whole}.${frac.toString().padStart(decimals, "0")}`;
 }
 
 export function parseTao(value: number): bigint {

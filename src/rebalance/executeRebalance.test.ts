@@ -5,14 +5,13 @@ vi.mock("@polkadot-labs/hdkd-helpers", () => ({
 }));
 
 vi.mock("./mevShield.ts", () => ({
-	getNextKey: vi.fn(),
 	submitShieldedTx: vi.fn(),
 }));
 
 import { ReplaySubject } from "rxjs";
 import { TAO } from "./constants.ts";
 import { executeRebalance } from "./executeRebalance.ts";
-import { getNextKey, submitShieldedTx } from "./mevShield.ts";
+import { submitShieldedTx } from "./mevShield.ts";
 import type { RebalancePlan } from "./types.ts";
 
 function makeApi(nonce = 7) {
@@ -36,11 +35,20 @@ function makeApi(nonce = 7) {
 					add_stake_limit: vi.fn((params: unknown) => ({
 						decodedCall: { stake: params },
 					})),
+					add_stake: vi.fn((params: unknown) => ({
+						decodedCall: { stake_simple: params },
+					})),
 					remove_stake_full_limit: vi.fn((params: unknown) => ({
 						decodedCall: { unstake: params },
 					})),
 					remove_stake_limit: vi.fn(),
+					remove_stake: vi.fn((params: unknown) => ({
+						decodedCall: { unstake_simple: params },
+					})),
 					swap_stake_limit: vi.fn(),
+					move_stake: vi.fn((params: unknown) => ({
+						decodedCall: { move: params },
+					})),
 				},
 			},
 			query: {
@@ -117,7 +125,6 @@ describe("executeRebalance", () => {
 		);
 
 		expect(result).toBeNull();
-		expect(getNextKey).not.toHaveBeenCalled();
 	});
 
 	it("does not wrap in force_batch for a single operation (dry run)", async () => {
@@ -165,26 +172,54 @@ describe("executeRebalance", () => {
 		expect(submitShieldedTx).not.toHaveBeenCalled();
 	});
 
-	it("throws when no MEV shield key is available", async () => {
+	it("submits directly when no MEV shield key is available", async () => {
 		const { api } = makeApi();
-		(getNextKey as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
-		await expect(
-			executeRebalance(
-				{} as never,
-				api as never,
-				{ publicKey: new Uint8Array([2]) } as never,
-				"5cold",
-				makePlan(),
-			),
-		).rejects.toThrow("No MEV shield NextKey available");
+		const signAndSubmit = vi.fn().mockResolvedValue({
+			block: { number: 42, hash: "0xdirect" },
+			txHash: "0xdeadbeef",
+			events: [
+				{
+					type: "TransactionPayment",
+					value: {
+						type: "TransactionFeePaid",
+						value: { actual_fee: 5n },
+					},
+				},
+				{
+					type: "Proxy",
+					value: {
+						type: "ProxyExecuted",
+						value: { result: { success: true } },
+					},
+				},
+			],
+		});
+
+		// Mock the proxy call to return a tx with signAndSubmit
+		api.tx.Proxy.proxy = vi.fn(() => ({
+			decodedCall: { proxy: "mocked" },
+			sign: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+			signAndSubmit,
+		}));
+
+		const result = await executeRebalance(
+			{} as never,
+			api as never,
+			{ publicKey: new Uint8Array([2]) } as never,
+			"5cold",
+			makePlan(),
+		);
+
+		expect(result).toBeDefined();
+		expect(result?.status).toBe("completed");
+		expect(result?.wrapperFee).toBe(0n);
+		expect(submitShieldedTx).not.toHaveBeenCalled();
 	});
 
 	it("signs, submits and waits for inner tx with expected nonce flow (single op)", async () => {
 		const { api, proxy, force_batch } = makeApi(14);
-		(getNextKey as ReturnType<typeof vi.fn>).mockResolvedValue(
-			new Uint8Array([9, 9]),
-		);
+		const mevKey = new Uint8Array([9, 9]);
 		(submitShieldedTx as ReturnType<typeof vi.fn>).mockResolvedValue({
 			block: { number: 99 },
 			events: [
@@ -233,6 +268,7 @@ describe("executeRebalance", () => {
 			signer as never,
 			"5cold",
 			makePlan(),
+			{ mevKey },
 		);
 		const result = await resultPromise;
 
@@ -246,7 +282,7 @@ describe("executeRebalance", () => {
 			api,
 			signer,
 			new Uint8Array([1, 2, 3]),
-			new Uint8Array([9, 9]),
+			mevKey,
 			14,
 		);
 		expect(getBlockBody).toHaveBeenCalledWith("0xinner");

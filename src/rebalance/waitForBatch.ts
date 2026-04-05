@@ -113,7 +113,8 @@ async function findTxInFinalizedBlocks(
 	timeoutMs: number,
 ): Promise<FoundTx> {
 	return new Promise<FoundTx>((resolve, reject) => {
-		const sub = client.finalizedBlock$.pipe(rxTimeout(timeoutMs)).subscribe({
+		const deadline = new Date(Date.now() + timeoutMs);
+		const sub = client.finalizedBlock$.pipe(rxTimeout(deadline)).subscribe({
 			next: async (block) => {
 				try {
 					log.verbose(

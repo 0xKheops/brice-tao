@@ -1,3 +1,22 @@
+/** Resolved rebalance config — ready for use in code (RAO bigints, decimal fractions) */
+export interface RebalanceConfig {
+	minPositionTao: bigint;
+	freeReserveTao: bigint;
+	/** Drift tolerance as decimal fraction (e.g., 0.05 for 5%) */
+	freeReserveTaoDriftPercent: number;
+	minOperationTao: bigint;
+	minStakeTao: bigint;
+	minRebalanceTao: bigint;
+	/** Slippage buffer as decimal fraction (e.g., 0.02 for 2%) */
+	slippageBuffer: number;
+	/** If true, always use limit-price extrinsics regardless of MEV shield status */
+	enforceSlippage: boolean;
+	/** Allocation drift tolerance as decimal fraction (e.g., 0.25 for 25%).
+	 *  Allows routing an exit position to a single target even if it slightly
+	 *  overfills it, and skips overweight/underweight corrections within this band. */
+	allocationDriftPercent: number;
+}
+
 export interface SwapOperation {
 	kind: "swap";
 	originNetuid: number;
@@ -9,6 +28,8 @@ export interface SwapOperation {
 	estimatedTaoValue: bigint;
 	/** Price limit for destination alpha (with slippage buffer) */
 	limitPrice: bigint;
+	/** Origin hotkey when swap also changes hotkeys (for single move_stake call without limits) */
+	originHotkey?: string;
 }
 
 export interface UnstakeOperation {
@@ -89,7 +110,7 @@ export type BatchResult =
 			status: "completed";
 			blockNumber: number;
 			operationResults: OperationResult[];
-			/** Fee paid for the MEV-shield wrapper tx (RAO) */
+			/** Fee paid for the MEV-shield wrapper tx (RAO), 0 if unshielded */
 			wrapperFee: bigint;
 			/** Fee paid for the inner batch tx (RAO) */
 			innerBatchFee: bigint;
@@ -100,7 +121,7 @@ export type BatchResult =
 			status: "partial_failure";
 			blockNumber: number;
 			operationResults: OperationResult[];
-			/** Fee paid for the MEV-shield wrapper tx (RAO) */
+			/** Fee paid for the MEV-shield wrapper tx (RAO), 0 if unshielded */
 			wrapperFee: bigint;
 			/** Fee paid for the inner batch tx (RAO) */
 			innerBatchFee: bigint;

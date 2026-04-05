@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Balances } from "../balances/getBalances.ts";
 import { parseTao, TAO } from "../rebalance/tao.ts";
 import type { BatchResult, RebalancePlan } from "../rebalance/types.ts";
-import {
-	sendErrorNotification,
-	sendNoRebalanceNotification,
-	sendRebalanceNotification,
-} from "./discord.ts";
+import { sendErrorNotification, sendRebalanceNotification } from "./discord.ts";
 
 const webhookUrl = "https://discord.example/webhook";
 const originalFetch = globalThis.fetch;
@@ -103,7 +99,7 @@ describe("discord notifications", () => {
 		const feesField = body.embeds[0]?.fields.find((f) =>
 			f.name.includes("Fees"),
 		);
-		expect(feesField?.value).toContain("0.002 τ");
+		expect(feesField?.value).toContain("0.002000 τ");
 		const operationsField = body.embeds[0]?.fields.find((f) =>
 			f.name.includes("Operations"),
 		);
@@ -143,7 +139,7 @@ describe("discord notifications", () => {
 		const feesField = body.embeds[0]?.fields.find((f) =>
 			f.name.includes("Fees"),
 		);
-		expect(feesField?.value).toContain("Wrapper: 0.004 τ");
+		expect(feesField?.value).toContain("Wrapper: 0.004000 τ");
 	});
 
 	it("sends error notification with message and stack", async () => {
@@ -165,7 +161,7 @@ describe("discord notifications", () => {
 		expect(fields[1]?.value).toContain("Error: rebalance exploded");
 	});
 
-	it("logs webhook errors when discord responds with non-OK status", async () => {
+	it("throws when discord responds with non-OK status", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: false,
 			status: 500,
@@ -176,17 +172,9 @@ describe("discord notifications", () => {
 			writable: true,
 			configurable: true,
 		});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		await sendNoRebalanceNotification(
-			webhookUrl,
-			makeBalances(),
-			100_000_000n,
-			5_000,
-		);
-
-		expect(errorSpy).toHaveBeenCalledWith(
-			"Discord webhook failed: 500 internal error",
-		);
+		await expect(
+			sendErrorNotification(webhookUrl, new Error("test"), 1_000),
+		).rejects.toThrow("Discord webhook 500: internal error");
 	});
 });

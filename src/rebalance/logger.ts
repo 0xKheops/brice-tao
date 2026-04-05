@@ -62,6 +62,11 @@ function writeToFile(
 			stack: err.stack,
 			...("code" in err ? { code: String(err.code) } : {}),
 		};
+	} else if (err !== undefined) {
+		entry.error = {
+			name: "UnknownError",
+			message: typeof err === "string" ? err : JSON.stringify(err),
+		};
 	}
 	appendFileSync(LOG_FILE, `${JSON.stringify(entry)}\n`);
 }
@@ -102,7 +107,15 @@ export const log = {
 	/** Error: both terminal and file */
 	error(message: string, err?: unknown, data?: LogData): void {
 		if (TERMINAL_LOGGING_ENABLED) {
-			console.error(`✗ ${message}`);
+			if (err instanceof Error) {
+				console.error(`✗ ${message}: ${err.message}`);
+			} else if (err !== undefined) {
+				console.error(
+					`✗ ${message}: ${typeof err === "string" ? err : JSON.stringify(err)}`,
+				);
+			} else {
+				console.error(`✗ ${message}`);
+			}
 		}
 		writeToFile("ERROR", message, data, err);
 	},

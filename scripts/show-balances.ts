@@ -1,9 +1,9 @@
 import { deriveSigner } from "../src/accounts/deriveSigner.ts";
 import { createBittensorClient } from "../src/api/createClient.ts";
+import { fetchSubnetNames } from "../src/api/fetchSubnetNames.ts";
 import type { Balances } from "../src/balances/getBalances.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
 import { TAO } from "../src/rebalance/tao.ts";
-import { fetchAllSubnets } from "../src/strategy/fetchAllSubnets.ts";
 
 // ---------------------------------------------------------------------------
 // Environment
@@ -36,12 +36,10 @@ try {
 		accounts.push({ label: "Proxy", address: proxyAddress });
 	}
 
-	const [subnets, ...balanceResults] = await Promise.all([
-		fetchAllSubnets(api),
+	const [subnetNames, ...balanceResults] = await Promise.all([
+		fetchSubnetNames(api),
 		...accounts.map((a) => getBalances(api, a.address)),
 	]);
-
-	const subnetNames = new Map(subnets.map((s) => [s.netuid, s.name]));
 
 	// -----------------------------------------------------------------------
 	// Display

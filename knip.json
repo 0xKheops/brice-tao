@@ -1,4 +1,5 @@
 {
 	"$schema": "node_modules/knip/schema.json",
-	"ignore": ["src/external-apis/generated/**"]
+	"entry": ["scripts/*.ts", "src/strategies/*/index.ts"],
+	"ignoreDependencies": ["bun-types"]
 }
