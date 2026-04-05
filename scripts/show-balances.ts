@@ -89,14 +89,12 @@ function fmt(rao: bigint): string {
 	return `${whole}.${frac.toString().padStart(9, "0")} τ`;
 }
 
-function fmtAlpha(rao: bigint): string {
-	const whole = rao / TAO;
-	const frac = (rao < 0n ? -rao : rao) % TAO;
-	return `${whole}.${frac.toString().padStart(9, "0")} α`;
-}
-
 function truncate(address: string): string {
 	return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+function truncateName(name: string, maxLen: number): string {
+	return name.length > maxLen ? `${name.slice(0, maxLen - 1)}…` : name;
 }
 
 function printStakesTable(
@@ -133,13 +131,17 @@ function printStakesTable(
 		a[1].totalTao > b[1].totalTao ? -1 : a[1].totalTao < b[1].totalTao ? 1 : 0,
 	);
 
+	const NAME_MAX = 16;
 	console.log("  Stakes:");
 	for (const [netuid, agg] of entries) {
-		const name = (subnetNames.get(netuid) ?? "Unknown").padEnd(14);
+		const name = truncateName(
+			subnetNames.get(netuid) ?? "Unknown",
+			NAME_MAX,
+		).padEnd(NAME_MAX);
 		const snLabel = `SN${netuid.toString().padStart(3, " ")}`;
 		const hotkeys = agg.count > 1 ? ` (${agg.count} validators)` : "";
 		console.log(
-			`    ${snLabel} │ ${name} │ ${fmtAlpha(agg.totalAlpha).padStart(22)} ≈ ${fmt(agg.totalTao).padStart(22)}${hotkeys}`,
+			`    ${snLabel} │ ${name} │ ${fmt(agg.totalTao).padStart(22)}${hotkeys}`,
 		);
 	}
 }

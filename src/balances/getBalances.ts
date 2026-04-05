@@ -24,12 +24,6 @@ export interface Balances {
 	totalTaoValue: bigint;
 }
 
-function formatAmount(rao: bigint, symbol: string): string {
-	const whole = rao / TAO;
-	const frac = rao % TAO;
-	return `${whole}.${frac.toString().padStart(9, "0")} ${symbol}`;
-}
-
 export async function getBalances(
 	api: TypedApi<typeof bittensor>,
 	address: string,
@@ -67,25 +61,4 @@ export async function getBalances(
 		stakes,
 		totalTaoValue,
 	};
-}
-
-function _printBalances(address: string, balances: Balances): void {
-	console.log(`\nBalances for ${address}`);
-	console.log(`  Free:     ${formatAmount(balances.free, "τ")}`);
-	console.log(`  Reserved: ${formatAmount(balances.reserved, "τ")}`);
-
-	if (balances.stakes.length === 0) {
-		console.log("  Stakes:   (none)");
-	} else {
-		console.log("  Stakes:");
-		for (const s of balances.stakes) {
-			console.log(
-				`    SN${s.netuid.toString().padStart(3, " ")} | ${s.hotkey.slice(0, 8)}… | ${formatAmount(s.stake, "α")} ≈ ${formatAmount(s.taoValue, "τ")}`,
-			);
-		}
-	}
-
-	console.log(
-		`\n  Total estimated value: ${formatAmount(balances.totalTaoValue, "τ")}`,
-	);
 }
