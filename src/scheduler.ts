@@ -1,7 +1,13 @@
 import { createBittensorClient } from "./api/createClient.ts";
+import { suppressRpcNoise } from "./api/suppressRpcNoise.ts";
 import { loadEnv } from "./config/env.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
 import { loadStrategy, resolveStrategyName } from "./strategies/loader.ts";
+
+// Silence harmless "RpcError: Method not found" (-32601) warnings that
+// polkadot-api emits when its archive_v1_* fallback hits Bittensor nodes
+// (which don't implement the archive JSON-RPC spec). See suppressRpcNoise.ts.
+suppressRpcNoise();
 
 // --- Resolve strategy ---
 const env = loadEnv();
