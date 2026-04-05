@@ -1,6 +1,11 @@
 import type { PolkadotClient } from "polkadot-api";
 import { createBittensorClient } from "../../api/createClient.ts";
-import { isZeroHash, rpcBatchDelayMs, sleep } from "../../api/rpcThrottle.ts";
+import {
+	getBlockHash,
+	isZeroHash,
+	rpcBatchDelayMs,
+	sleep,
+} from "../../api/rpcThrottle.ts";
 import { log } from "../../rebalance/logger.ts";
 import type { PriceDatabase } from "./db.ts";
 
@@ -78,8 +83,7 @@ export async function warmupPriceHistory(
 			const results = await Promise.all(
 				batch.map(async (blockNum) => {
 					try {
-						const blockHash =
-							await api.query.System.BlockHash.getValue(blockNum);
+						const blockHash = await getBlockHash(client, blockNum);
 						if (!blockHash || isZeroHash(blockHash)) return null;
 
 						const alphaPrices =

@@ -6,6 +6,8 @@
  * backfill) stay comfortably below that ceiling.
  */
 
+import type { PolkadotClient } from "polkadot-api";
+
 const ZERO_HASH = `0x${"0".repeat(64)}`;
 
 export function sleep(ms: number): Promise<void> {
@@ -29,4 +31,18 @@ export function rpcBatchDelayMs(
 	maxPerMinute: number,
 ): number {
 	return Math.ceil((callCount / maxPerMinute) * 60_000 * 1.1);
+}
+
+/**
+ * Resolve a block number to its hash via the `chain_getBlockHash` legacy RPC.
+ *
+ * Unlike `System.BlockHash` storage (capped at the last ~2400 blocks on
+ * Bittensor), this queries the node's block DB directly and works for any
+ * historical block on archive nodes.
+ */
+export function getBlockHash(
+	client: PolkadotClient,
+	blockNumber: number,
+): Promise<string> {
+	return client._request<string>("chain_getBlockHash", [blockNumber]);
 }
