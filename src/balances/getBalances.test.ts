@@ -29,11 +29,12 @@ function mockApi(opts: {
 				get_stake_info_for_coldkey: vi.fn().mockResolvedValue(stakeInfos),
 			},
 			SwapRuntimeApi: {
-				current_alpha_price: vi
-					.fn()
-					.mockImplementation(async (netuid: number) => {
-						return prices.get(netuid) ?? 0n;
-					}),
+				current_alpha_price_all: vi.fn().mockResolvedValue(
+					[...prices.entries()].map(([netuid, price]) => ({
+						netuid,
+						price,
+					})),
+				),
 			},
 		},
 	} as unknown as Parameters<typeof getBalances>[0];
@@ -96,7 +97,7 @@ describe("getBalances", () => {
 		expect(result.totalTaoValue).toBe(80n * TAO);
 	});
 
-	it("fetches alpha price only once for stakes on the same subnet", async () => {
+	it("uses a single bulk price call for stakes on the same subnet", async () => {
 		const api = mockApi({
 			stakeInfos: [
 				{ hotkey: "0xa", netuid: 3, stake: 5n * TAO },
@@ -107,10 +108,9 @@ describe("getBalances", () => {
 
 		await getBalances(api, ADDR);
 
-		expect(api.apis.SwapRuntimeApi.current_alpha_price).toHaveBeenCalledTimes(
-			1,
-		);
-		expect(api.apis.SwapRuntimeApi.current_alpha_price).toHaveBeenCalledWith(3);
+		expect(
+			api.apis.SwapRuntimeApi.current_alpha_price_all,
+		).toHaveBeenCalledTimes(1);
 	});
 
 	it("returns empty stakes and free+reserved total when no stakes exist", async () => {
@@ -123,7 +123,9 @@ describe("getBalances", () => {
 
 		expect(result.stakes).toHaveLength(0);
 		expect(result.totalTaoValue).toBe(55n * TAO);
-		expect(api.apis.SwapRuntimeApi.current_alpha_price).not.toHaveBeenCalled();
+		expect(
+			api.apis.SwapRuntimeApi.current_alpha_price_all,
+		).toHaveBeenCalledTimes(1);
 	});
 
 	it("computes taoValue as 0 when alpha price is zero", async () => {

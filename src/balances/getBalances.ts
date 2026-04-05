@@ -34,20 +34,16 @@ export async function getBalances(
 	api: TypedApi<typeof bittensor>,
 	address: string,
 ): Promise<Balances> {
-	const [account, stakeInfos] = await Promise.all([
+	const [account, stakeInfos, alphaPrices] = await Promise.all([
 		api.query.System.Account.getValue(address),
 		api.apis.StakeInfoRuntimeApi.get_stake_info_for_coldkey(address),
+		api.apis.SwapRuntimeApi.current_alpha_price_all(),
 	]);
 
-	// Collect unique netuids to fetch alpha prices
-	const netuids = [...new Set(stakeInfos.map((s) => s.netuid))];
 	const prices = new Map<number, bigint>();
-	await Promise.all(
-		netuids.map(async (netuid) => {
-			const price = await api.apis.SwapRuntimeApi.current_alpha_price(netuid);
-			prices.set(netuid, price);
-		}),
-	);
+	for (const entry of alphaPrices) {
+		prices.set(entry.netuid, entry.price);
+	}
 
 	const stakes: StakeEntry[] = stakeInfos.map((s) => {
 		const alphaPrice = prices.get(s.netuid) ?? 0n;
