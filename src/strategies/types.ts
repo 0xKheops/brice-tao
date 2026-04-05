@@ -30,4 +30,10 @@ export interface StrategyResult {
 export interface StrategyModule {
 	getStrategyTargets: StrategyFn;
 	createRunner: CreateRunnerFn;
+	/**
+	 * Optional hook called by the preview script to hydrate shared state
+	 * (e.g. load indicator histories from the DB) before running the strategy.
+	 * Strategies that don't need this can omit it.
+	 */
+	preparePreview?: () => Promise<void>;
 }

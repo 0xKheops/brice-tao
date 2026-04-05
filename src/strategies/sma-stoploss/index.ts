@@ -9,6 +9,7 @@ import type { StrategyTarget } from "../../rebalance/types.ts";
 import { resolveValidators } from "../../validators/index.ts";
 import type { AuditSections, StrategyResult } from "../types.ts";
 import { loadSmaStoplossConfig } from "./config.ts";
+import { openPriceDatabase } from "./db.ts";
 import { fetchAllSubnetData } from "./fetchSubnetData.ts";
 import { type SubnetEvaluation, scoreSubnets } from "./scoreSubnets.ts";
 import type {
@@ -39,6 +40,22 @@ let sharedState: SharedState | null = null;
 /** Called by the runner to share its state with getStrategyTargets */
 export function setSharedState(state: SharedState): void {
 	sharedState = state;
+}
+
+const DB_PATH = join("data", "sma-stoploss.sqlite");
+
+/**
+ * Hydrate shared state from the SQLite DB so that preview/dry-run gets
+ * accurate indicator and stop-loss data without a running scheduler.
+ */
+export async function preparePreview(): Promise<void> {
+	const db = openPriceDatabase(DB_PATH);
+	const priceHistories = db.getAllPriceHistories();
+	const stoppedOut = new Map(db.getAllStoppedOut().map((r) => [r.netuid, r]));
+	sharedState = { priceHistories, stoppedOut };
+	log.info(
+		`Preview: loaded ${priceHistories.size} subnet histories, ${stoppedOut.size} stopped-out from DB`,
+	);
 }
 
 /** Get the current config path (for runner to load config) */

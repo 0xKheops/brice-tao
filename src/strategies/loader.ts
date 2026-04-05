@@ -4,7 +4,10 @@ import { getStrategyTargets as copyTrade } from "./copy-trade/index.ts";
 import { createRunner as copyTradeRunner } from "./copy-trade/runner.ts";
 import { getStrategyTargets as rootEmission } from "./root-emission/index.ts";
 import { createRunner as rootEmissionRunner } from "./root-emission/runner.ts";
-import { getStrategyTargets as smaStoploss } from "./sma-stoploss/index.ts";
+import {
+	getStrategyTargets as smaStoploss,
+	preparePreview as smaStoplossPreview,
+} from "./sma-stoploss/index.ts";
 import { createRunner as smaStoplossRunner } from "./sma-stoploss/runner.ts";
 import type { StrategyModule } from "./types.ts";
 
@@ -29,6 +32,7 @@ const strategyRegistry: Record<string, StrategyModule> = {
 	"sma-stoploss": {
 		getStrategyTargets: smaStoploss,
 		createRunner: smaStoplossRunner,
+		preparePreview: smaStoplossPreview,
 	},
 };
 

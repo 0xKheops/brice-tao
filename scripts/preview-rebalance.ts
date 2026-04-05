@@ -18,8 +18,13 @@ if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
 if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
 
 const strategyName = resolveStrategyName(envStrategy);
-const { getStrategyTargets } = await loadStrategy(strategyName);
+const { getStrategyTargets, preparePreview } = await loadStrategy(strategyName);
 console.log(`Strategy: ${strategyName}`);
+
+// Hydrate strategy-specific shared state from DB (if the strategy supports it)
+if (preparePreview) {
+	await preparePreview();
+}
 
 // ---------------------------------------------------------------------------
 // Connect
