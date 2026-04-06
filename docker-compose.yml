@@ -3,8 +3,6 @@ services:
     build: .
     restart: unless-stopped
     container_name: brice-tao-rebalance
-    environment:
-      - TZ=${TZ:-UTC}
     volumes:
       - ./.env:/app/.env:ro
       - ./logs:/app/logs
