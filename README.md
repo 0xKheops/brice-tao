@@ -123,7 +123,7 @@ cat logs/rebalance-*.log         # view execution logs (persisted on host)
 Set `TZ` in your environment to control the container timezone (defaults to UTC):
 
 ```bash
-TZ=America/New_York docker compose up -d --build
+docker compose up -d --build
 ```
 
 ## Architecture
