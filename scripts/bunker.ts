@@ -126,6 +126,7 @@ try {
 			proxyFreeBalanceAfter,
 			batchResult,
 			durationMs: performance.now() - startedAt,
+			coldkeyAddress: coldkey,
 		});
 	}
 

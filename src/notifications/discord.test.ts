@@ -87,25 +87,40 @@ describe("discord notifications", () => {
 			proxyFreeBalanceAfter: 20_000_000n,
 			batchResult,
 			durationMs: 12_500,
+			coldkeyAddress: "5FakeAddress",
 		});
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		const body = parsePostedBody(fetchMock);
 		expect(body.embeds[0]?.title).toBe("⚠️ Rebalance Partial Failure");
-		const batchField = body.embeds[0]?.fields.find((f) =>
-			f.name.includes("Batch Partial Failure"),
+		// Merged transaction field includes batch status, fees, and link
+		const txField = body.embeds[0]?.fields.find((f) =>
+			f.name.includes("Transaction"),
 		);
-		expect(batchField?.value).toContain("1/2 succeeded, 1 failed");
-		const feesField = body.embeds[0]?.fields.find((f) =>
-			f.name.includes("Fees"),
-		);
-		expect(feesField?.value).toContain("0.002000 τ");
+		expect(txField?.name).toContain("Partial Failure");
+		expect(txField?.value).toContain("1/2 succeeded, 1 failed");
+		expect(txField?.value).toContain("View transaction on explorer");
+		expect(txField?.value).toContain("0.002000 τ");
 		const operationsField = body.embeds[0]?.fields.find((f) =>
 			f.name.includes("Operations"),
 		);
 		expect(operationsField?.value).toContain("✅ 📥 STAKE SN1");
 		expect(operationsField?.value).toContain("❌ 📤 UNSTAKE SN2");
 		expect(operationsField?.value).toContain("Token::FundsUnavailable");
+		// Balances section includes proxy and explorer link, field name has portfolio total
+		const balancesField = body.embeds[0]?.fields.find((f) =>
+			f.name.includes("Portfolio"),
+		);
+		expect(balancesField?.name).toContain("📊");
+		expect(balancesField?.value).toContain("**Proxy**");
+		expect(balancesField?.value).toContain("taostats.io/account/5FakeAddress");
+		// No separate Portfolio Value or Proxy Balance fields
+		expect(
+			body.embeds[0]?.fields.find((f) => f.name.includes("Portfolio Value")),
+		).toBeUndefined();
+		expect(
+			body.embeds[0]?.fields.find((f) => f.name.includes("Proxy Balance")),
+		).toBeUndefined();
 	});
 
 	it("sends timeout outcome and wrapper-only fee in timeout mode", async () => {
@@ -128,18 +143,17 @@ describe("discord notifications", () => {
 				innerTxHash: "0xabc",
 			},
 			durationMs: 60_000,
+			coldkeyAddress: "5FakeAddress",
 		});
 
 		const body = parsePostedBody(fetchMock);
 		expect(body.embeds[0]?.title).toBe("❓ Rebalance Outcome Unknown");
 		const batchField = body.embeds[0]?.fields.find((f) =>
-			f.name.includes("Batch Execution Unknown"),
+			f.name.includes("Outcome Unknown"),
 		);
 		expect(batchField?.value).toContain("Timed out waiting for inner batch");
-		const feesField = body.embeds[0]?.fields.find((f) =>
-			f.name.includes("Fees"),
-		);
-		expect(feesField?.value).toContain("Wrapper: 0.004000 τ");
+		expect(batchField?.value).toContain("View transaction on explorer");
+		expect(batchField?.value).toContain("0.004000 τ");
 	});
 
 	it("sends error notification with message and stack", async () => {

@@ -52,7 +52,11 @@ function getOperationResult(
 	return batchResult.operationResults[index] ?? null;
 }
 
-function buildBalancesTable(balances: Balances): string {
+function buildBalancesSection(
+	balances: Balances,
+	proxyFreeBalance: bigint,
+	coldkeyAddress: string,
+): string {
 	const lines: string[] = [];
 
 	if (balances.free > 0n) {
@@ -68,92 +72,61 @@ function buildBalancesTable(balances: Balances): string {
 		);
 	}
 
-	if (lines.length === 0) return "*No balances*";
-	return `\`\`\`\n${lines.join("\n")}\n\`\`\``;
-}
+	const table =
+		lines.length > 0 ? `\`\`\`\n${lines.join("\n")}\n\`\`\`` : "*No balances*";
 
-function proxyBalanceField(proxyFreeBalance: bigint): {
-	name: string;
-	value: string;
-	inline: boolean;
-} {
 	const low = proxyFreeBalance < LOW_PROXY_THRESHOLD;
-	const indicator = low ? "🔴" : "🟢";
-	const warning = low ? " ⚠️ **LOW — refill needed**" : "";
-	return {
-		name: `${indicator} Proxy Balance`,
-		value: `${formatTao(proxyFreeBalance)} τ${warning}`,
-		inline: false,
-	};
+	const proxyIndicator = low ? "🔴" : "🟢";
+	const proxyWarning = low ? " ⚠️ **LOW — refill needed**" : "";
+
+	const footer = [
+		`${proxyIndicator} **Proxy** ${formatTao(proxyFreeBalance)} τ${proxyWarning}`,
+		`[View account on explorer](https://taostats.io/account/${coldkeyAddress})`,
+	].join("\n");
+
+	return `${table}\n${footer}`;
 }
 
-function batchResultField(
+function transactionField(
 	result: BatchResult | null,
 	totalOps: number,
 ): { name: string; value: string; inline: boolean } | null {
 	if (!result) return null;
 
+	const link = `[View transaction on explorer](https://taostats.io/transaction/${result.innerTxHash})`;
+
 	switch (result.status) {
 		case "completed": {
 			const succeeded = result.operationResults.filter((r) => r.success).length;
+			const total = result.wrapperFee + result.innerBatchFee;
 			return {
-				name: "🟢 Batch Execution",
-				value: `All ${succeeded} operations executed successfully (block #${result.blockNumber})`,
+				name: "🟢 Transaction",
+				value: `All ${succeeded} operations executed (block #${result.blockNumber})\nFees: ${formatTao(total, 6)} τ\n${link}`,
 				inline: false,
 			};
 		}
 		case "partial_failure": {
 			const succeeded = result.operationResults.filter((r) => r.success).length;
 			const failed = result.operationResults.filter((r) => !r.success).length;
+			const total = result.wrapperFee + result.innerBatchFee;
 			return {
-				name: "🟡 Batch Partial Failure",
-				value: `${succeeded}/${totalOps} succeeded, ${failed} failed (block #${result.blockNumber})`,
+				name: "🟡 Transaction — Partial Failure",
+				value: `${succeeded}/${totalOps} succeeded, ${failed} failed (block #${result.blockNumber})\nFees: ${formatTao(total, 6)} τ\n${link}`,
 				inline: false,
 			};
 		}
-		case "timeout":
+		case "timeout": {
+			const feeLine =
+				result.wrapperFee != null && result.wrapperFee > 0n
+					? `\nFees: ${formatTao(result.wrapperFee, 6)} τ (wrapper only, inner unknown)`
+					: "";
 			return {
-				name: "🔴 Batch Execution Unknown",
-				value:
-					"Timed out waiting for inner batch execution. Check chain explorer for results.",
-				inline: false,
-			};
-	}
-}
-
-function feesField(
-	result: BatchResult | null,
-): { name: string; value: string; inline: boolean } | null {
-	if (!result) return null;
-
-	if (result.status === "timeout") {
-		if (result.wrapperFee != null && result.wrapperFee > 0n) {
-			return {
-				name: "💸 Transaction Fees",
-				value: `Wrapper: ${formatTao(result.wrapperFee, 6)} τ (inner batch unknown)`,
+				name: "🔴 Transaction — Outcome Unknown",
+				value: `Timed out waiting for inner batch execution.${feeLine}\n${link}`,
 				inline: false,
 			};
 		}
-		return null;
 	}
-
-	const total = result.wrapperFee + result.innerBatchFee;
-	return {
-		name: "💸 Transaction Fees",
-		value: `${formatTao(total, 6)} τ`,
-		inline: false,
-	};
-}
-
-function txLinkField(
-	result: BatchResult | null,
-): { name: string; value: string; inline: boolean } | null {
-	if (!result) return null;
-	return {
-		name: "🔗 Transaction",
-		value: `[View on Taostats](https://taostats.io/transaction/${result.innerTxHash})`,
-		inline: false,
-	};
 }
 
 export async function sendRebalanceNotification(
@@ -166,16 +139,16 @@ export async function sendRebalanceNotification(
 		proxyFreeBalanceAfter: bigint;
 		batchResult: BatchResult | null;
 		durationMs: number;
+		coldkeyAddress: string;
 	},
 ): Promise<void> {
 	const {
 		plan,
-		balancesBefore,
 		balancesAfter,
-		proxyFreeBalanceBefore,
 		proxyFreeBalanceAfter,
 		batchResult,
 		durationMs,
+		coldkeyAddress,
 	} = opts;
 
 	let title: string;
@@ -201,42 +174,28 @@ export async function sendRebalanceNotification(
 					.join("\n")
 			: "Portfolio is balanced — no operations needed.";
 
-	const valueBefore = formatTao(
-		balancesBefore.totalTaoValue + proxyFreeBalanceBefore,
-	);
-	const valueAfter = formatTao(
-		balancesAfter.totalTaoValue + proxyFreeBalanceAfter,
-	);
+	const tx = transactionField(batchResult, plan.operations.length);
 
-	const batchField = batchResultField(batchResult, plan.operations.length);
-	const feeField = feesField(batchResult);
-	const txLink = txLinkField(batchResult);
-
-	const balancesCount =
-		balancesAfter.stakes.length + (balancesAfter.free > 0n ? 1 : 0);
+	const portfolioValue = balancesAfter.totalTaoValue + proxyFreeBalanceAfter;
 
 	const embeds = [
 		{
 			title,
 			color,
 			fields: [
-				{
-					name: "💰 Portfolio Value",
-					value: `${valueBefore} τ → ${valueAfter} τ`,
-					inline: false,
-				},
-				proxyBalanceField(proxyFreeBalanceAfter),
-				...(batchField ? [batchField] : []),
-				...(txLink ? [txLink] : []),
-				...(feeField ? [feeField] : []),
+				...(tx ? [tx] : []),
 				{
 					name: `📋 Operations (${plan.operations.length})`,
 					value: operationLines,
 					inline: false,
 				},
 				{
-					name: `📊 Balances (${balancesCount})`,
-					value: buildBalancesTable(balancesAfter),
+					name: `📊 Portfolio ${formatTao(portfolioValue)} τ`,
+					value: buildBalancesSection(
+						balancesAfter,
+						proxyFreeBalanceAfter,
+						coldkeyAddress,
+					),
 					inline: false,
 				},
 			],

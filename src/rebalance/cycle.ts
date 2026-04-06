@@ -102,6 +102,7 @@ export async function executeRebalanceCycle(
 					proxyFreeBalanceAfter,
 					batchResult,
 					durationMs: performance.now() - startedAt,
+					coldkeyAddress: env.coldkey,
 				});
 			}
 		}
