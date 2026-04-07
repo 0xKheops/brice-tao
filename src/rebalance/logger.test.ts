@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { GIT_COMMIT } from "../version.ts";
 import { initLog, log } from "./logger.ts";
 
 describe("logger", () => {
@@ -31,5 +32,16 @@ describe("logger", () => {
 		).not.toThrow();
 		expect(() => log.error("plain error", new Error("oops"))).not.toThrow();
 		expect(() => log.error("no error object")).not.toThrow();
+	});
+});
+
+describe("GIT_COMMIT", () => {
+	it("resolves to a non-empty string", () => {
+		expect(typeof GIT_COMMIT).toBe("string");
+		expect(GIT_COMMIT.length).toBeGreaterThan(0);
+	});
+
+	it("is not 'unknown' in a git repository", () => {
+		expect(GIT_COMMIT).not.toBe("unknown");
 	});
 });

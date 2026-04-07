@@ -54,6 +54,7 @@ Set the following in your environment or `.env` file (see `.env.example`):
 | `STRATEGY` | | Active strategy (default: `root-emission`) |
 | `LEADER_ADDRESS` | | Leader coldkey to mirror (copy-trade strategy only) |
 | `ARCHIVE_WS_ENDPOINT` | | Archive node for price history warmup (sma-stoploss) |
+| `GIT_COMMIT` | | Git commit hash for log traceability (auto-detected locally; set via Docker build arg) |
 
 ### Strategy config
 
@@ -118,6 +119,12 @@ docker compose up -d --build     # start (or rebuild after changes)
 docker compose down              # stop
 docker ps                        # check status
 cat logs/rebalance-*.log         # view execution logs (persisted on host)
+```
+
+To tag the build with the current git commit (embedded in every log entry):
+
+```bash
+GIT_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
 Set `TZ` in your environment to control the container timezone (defaults to UTC):

@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { GIT_COMMIT } from "../version.ts";
 import { formatTao } from "./tao.ts";
 
 const LOGS_ROOT = join(process.cwd(), "logs");
@@ -22,7 +23,7 @@ function initLogFile(subdir: string): void {
 	mkdirSync(logDir, { recursive: true });
 	LOG_FILE = join(
 		logDir,
-		`rebalance-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
+		`rebalance-${GIT_COMMIT}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
 	);
 }
 
@@ -33,6 +34,7 @@ interface LogData {
 interface JsonLogEntry {
 	timestamp: string;
 	level: string;
+	commit: string;
 	message: string;
 	data?: LogData;
 	error?: { name: string; message: string; stack?: string; code?: string };
@@ -50,6 +52,7 @@ function writeToFile(
 	const entry: JsonLogEntry = {
 		timestamp: new Date().toISOString(),
 		level,
+		commit: GIT_COMMIT,
 		message,
 	};
 	if (data && Object.keys(data).length > 0) {

@@ -2,6 +2,7 @@
 FROM --platform=$BUILDPLATFORM oven/bun:latest AS build
 
 ARG TARGETARCH
+ARG GIT_COMMIT=unknown
 
 WORKDIR /app
 
@@ -15,6 +16,7 @@ COPY src/ ./src/
 RUN bun build --compile --minify --sourcemap \
     --compile-exec-argv="--smol" \
     --target=bun-linux-${TARGETARCH}-musl \
+    --define "process.env.GIT_COMMIT='${GIT_COMMIT}'" \
     src/scheduler.ts --outfile scheduler
 
 # --- Runtime stage: minimal image with just the binary ---

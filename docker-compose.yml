@@ -1,6 +1,9 @@
 services:
   rebalance:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     restart: unless-stopped
     container_name: brice-tao-rebalance
     volumes:

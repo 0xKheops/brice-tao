@@ -31,7 +31,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 - All amounts in RAO (`bigint`) — use `TAO` constant from `src/rebalance/tao.ts`
 - Union types for operation kinds, interfaces for domain models — see `src/rebalance/types.ts`
 - Custom error classes from `src/errors.ts` — use typed catch blocks
-- Dual logger (terminal + JSON file) in `src/rebalance/logger.ts`: `info`, `verbose`, `warn`, `error`
+- Dual logger (terminal + JSON file) in `src/rebalance/logger.ts`: `info`, `verbose`, `warn`, `error` — every JSON entry includes the git commit hash from `src/version.ts`
 - Tests co-located with source files (e.g., `foo.test.ts` next to `foo.ts`)
 
 ## Key Entrypoints
@@ -64,6 +64,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 | `DISCORD_WEBHOOK_URL` | Discord webhook (optional — silent if unset) |
 | `STRATEGY` | Active strategy name (overridden by `--strategy` flag) |
 | `ARCHIVE_WS_ENDPOINT` | Optional archive node endpoints for indicator warmup |
+| `GIT_COMMIT` | Git commit hash embedded in log entries (auto-detected locally; baked in via Docker build arg) |
 
 No `.env` file in repo — variables set externally (Docker mounts `.env`).
 
