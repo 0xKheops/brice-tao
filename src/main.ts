@@ -1,6 +1,8 @@
+import { join } from "node:path";
 import { createBittensorClient } from "./api/createClient.ts";
 import { suppressRpcNoise } from "./api/suppressRpcNoise.ts";
 import { loadEnv } from "./config/env.ts";
+import { openHistoryDatabase } from "./history/db.ts";
 import { log } from "./rebalance/logger.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
 import { createOneShotRunner } from "./scheduling/once.ts";
@@ -24,6 +26,7 @@ export async function runRebalance({
 	log.info(`Strategy: ${strategyName}`);
 
 	const bittensorClient = createBittensorClient(env.wsEndpoints);
+	const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
 
 	try {
 		const context = buildRunnerContext(
@@ -32,6 +35,7 @@ export async function runRebalance({
 			strategyName,
 			getStrategyTargets,
 			{ dryRun },
+			historyDb,
 		);
 
 		let cycleExitCode = 0;
@@ -43,6 +47,7 @@ export async function runRebalance({
 		await runner.start();
 		return cycleExitCode;
 	} finally {
+		historyDb.close();
 		bittensorClient.client.destroy();
 	}
 }

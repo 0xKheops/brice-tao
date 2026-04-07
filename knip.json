@@ -1,5 +1,9 @@
 {
 	"$schema": "node_modules/knip/schema.json",
-	"entry": ["scripts/*.ts", "src/strategies/*/index.ts"],
+	"entry": [
+		"scripts/*.ts",
+		"src/strategies/*/index.ts",
+		"src/history/index.ts"
+	],
 	"ignoreDependencies": ["bun-types"]
 }

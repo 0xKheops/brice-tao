@@ -17,6 +17,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 | Scheduler | `bun scheduler -- --strategy <name>` |
 | List strategies | `bun rebalance -- --list-strategies` |
 | Emergency exit (SN0) | `bun bunker` (dry run: `bun bunker -- --dry-run`) |
+| Backfill history DB | `bun backfill -- --days 30` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
 | Dead code | `bun knip` |
@@ -40,6 +41,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 - `src/strategies/types.ts` — strategy contract (`StrategyFn`, `StrategyModule`, `StrategyResult`)
 - `src/strategies/loader.ts` — strategy registry + CLI arg parsing
 - `src/rebalance/` — shared pipeline (compute, execute, slippage, MEV shield)
+- `src/history/` — shared history database (`data/history.sqlite`) — records finalized block + subnet data on a 25-block grid (~5 min) for all strategies (future backtesting)
 - `src/scheduling/` — cron runner, one-shot runner, shared context
 - `src/config/env.ts` — environment variable validation
 - `src/validators/` — shared default validator selection (yield-based)
@@ -80,8 +82,22 @@ No `.env` file in repo — variables set externally (Docker mounts `.env`).
 - All amounts are RAO (`bigint`) — always use `TAO` constant for conversions
 - Price limits are U64F64 fixed-point
 - The rebalancer signs with a proxy account, never the coldkey
-- RPC rate limit ~100 req/min — use throttled batches via `src/api/rpcThrottle.ts`
+- RPC rate limits are enforced server-side — calls will throw if the limit is hit
 - Each strategy's `config.yaml` is required — fail-fast if missing
+
+## History Database — 25-Block Grid
+
+The shared history DB (`data/history.sqlite`) records on-chain subnet snapshots on a fixed **25-block grid** (~5 min per sample, since Bittensor produces 1 block every ~12 s). This keeps disk usage manageable for long-term backtesting while providing sufficient resolution.
+
+**Invariant:** every `block_number` in the DB satisfies `block_number % 25 === 0`. Enforced at:
+1. Code level — `recordCurrentBlock()` calls `isGridBlock()` and skips non-grid blocks
+2. Schema level — `CHECK(block_number % 25 = 0)` on the `blocks` table
+
+**Rules for backfill / backtest scripts:**
+- Iterate in steps of `BLOCK_INTERVAL` (25): `for (let b = snapToGrid(start); b <= end; b += BLOCK_INTERVAL)`
+- Use `snapToGrid()` and `isGridBlock()` from `src/history/constants.ts` — never hardcode `25`
+- Only query archive nodes at grid-aligned block numbers
+- The `recordCurrentBlock()` function in `src/history/record.ts` is the only way to populate the DB during live operation; backfill scripts may use `db.recordSnapshot()` directly but must pre-validate block numbers
 
 ## Quality Gates
 

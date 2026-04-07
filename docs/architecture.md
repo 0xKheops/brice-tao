@@ -17,7 +17,7 @@ src/
     deriveSigner.ts       → Mnemonic → signer + SS58 address derivation
   api/
     createClient.ts       → PAPI WebSocket client + metadata caching
-    rpcThrottle.ts        → RPC rate-limit helpers
+    rpcThrottle.ts        → RPC block-lookup helpers
   config/
     env.ts                → Environment variable validation
   balances/

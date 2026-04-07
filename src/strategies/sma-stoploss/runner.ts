@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
 import { Cron } from "croner";
 import type { TypedApi } from "polkadot-api";
+import { recordCurrentBlock } from "../../history/record.ts";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { RunnerContext, StrategyRunner } from "../../scheduling/types.ts";
@@ -70,6 +71,10 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 
 			try {
 				console.log(`[${label}] Starting tick...`);
+
+				// Record finalized block to shared history DB
+				await recordCurrentBlock(ctx.client, ctx.historyDb);
+
 				const api: Api = ctx.client.getTypedApi(bittensor);
 
 				// 1. Fetch current subnet data (with spot prices)

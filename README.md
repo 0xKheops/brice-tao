@@ -150,6 +150,14 @@ See [docs/architecture.md](docs/architecture.md) for the full system design.
 - **Price limits** — U64F64 fixed-point values protecting swaps against slippage, computed via on-chain simulation.
 - **Proxy account** — The bot signs with a staking-only proxy, never the coldkey. Limits blast radius.
 
+### History database
+
+All strategies record on-chain subnet data to a shared SQLite database (`data/history.sqlite`) for future backtesting. Data is stored on a fixed **25-block grid** (~5 minutes per sample) to balance resolution with disk usage.
+
+- Every `block_number` in the DB satisfies `block_number % 25 === 0` — enforced by both code and a SQL CHECK constraint
+- `recordCurrentBlock()` from `src/history/record.ts` is called by every strategy runner and silently skips non-grid blocks
+- Backfill scripts must iterate in steps of `BLOCK_INTERVAL` (25) using helpers from `src/history/constants.ts`
+
 ## CI
 
 All pushes and PRs to `main` are checked via GitHub Actions: lint, type-check, tests, and dead-code detection.

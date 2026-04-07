@@ -1,6 +1,8 @@
+import { join } from "node:path";
 import { createBittensorClient } from "./api/createClient.ts";
 import { suppressRpcNoise } from "./api/suppressRpcNoise.ts";
 import { loadEnv } from "./config/env.ts";
+import { openHistoryDatabase } from "./history/db.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
 import { loadStrategy, resolveStrategyName } from "./strategies/loader.ts";
 
@@ -14,6 +16,9 @@ const env = loadEnv();
 const strategyName = resolveStrategyName(env.strategy);
 const { getStrategyTargets, createRunner } = await loadStrategy(strategyName);
 
+// --- Open shared history DB ---
+const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
+
 // --- Build context ---
 const bittensorClient = createBittensorClient(env.wsEndpoints);
 const context = buildRunnerContext(
@@ -22,6 +27,7 @@ const context = buildRunnerContext(
 	strategyName,
 	getStrategyTargets,
 	{ dryRun: false },
+	historyDb,
 );
 
 // --- Start strategy runner ---
@@ -35,6 +41,7 @@ const shutdown = async () => {
 	isShuttingDown = true;
 	console.log("[scheduler] Shutting down...");
 	await runner.stop();
+	historyDb.close();
 	bittensorClient.client.destroy();
 	process.exit(0);
 };

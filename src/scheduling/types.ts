@@ -1,5 +1,6 @@
 import type { PolkadotClient } from "polkadot-api";
 import type { Env } from "../config/env.ts";
+import type { HistoryDatabase } from "../history/db.ts";
 
 /** Schedule config for cron-based strategies — parsed from config.yaml top-level fields */
 export interface CronScheduleConfig {
@@ -20,6 +21,8 @@ export interface RunnerContext {
 	client: PolkadotClient;
 	env: Env;
 	strategyName: string;
+	/** Shared history database for recording subnet snapshots */
+	historyDb: HistoryDatabase;
 	/** Execute a full rebalance cycle: fetch balances → compute targets → execute → notify */
 	runRebalanceCycle(): Promise<RebalanceCycleResult>;
 }

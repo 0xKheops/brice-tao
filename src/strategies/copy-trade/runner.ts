@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
 import type { TypedApi } from "polkadot-api";
 import type { Subscription } from "rxjs";
+import { recordCurrentBlock } from "../../history/record.ts";
 import type { RunnerContext, StrategyRunner } from "../../scheduling/types.ts";
 import { loadCopyTradeConfig } from "./config.ts";
 
@@ -39,6 +40,7 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 
 		try {
 			console.log(`[${label}] Starting rebalance cycle...`);
+			await recordCurrentBlock(ctx.client, ctx.historyDb);
 			const { exitCode } = await ctx.runRebalanceCycle();
 			if (exitCode === 0) {
 				console.log(`[${label}] Cycle finished successfully`);

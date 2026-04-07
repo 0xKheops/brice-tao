@@ -71,6 +71,7 @@ CI runs these same checks on every push and PR to `main`.
 |-----------|---------|
 | `src/strategies/` | Strategy implementations — each strategy lives in its own self-contained subfolder |
 | `src/rebalance/` | Shared rebalance pipeline (compute, execute, slippage, MEV shield) |
+| `src/history/` | Shared historical data recording — all strategies record finalized block + subnet data here |
 | `src/scheduling/` | Cron and one-shot runner utilities |
 | `scripts/` | CLI tools (preview rebalance, show balances) |
 

@@ -1,11 +1,6 @@
 import type { PolkadotClient } from "polkadot-api";
 import { createBittensorClient } from "../../api/createClient.ts";
-import {
-	getBlockHash,
-	isZeroHash,
-	rpcBatchDelayMs,
-	sleep,
-} from "../../api/rpcThrottle.ts";
+import { getBlockHash, isZeroHash } from "../../api/rpcThrottle.ts";
 import { log } from "../../rebalance/logger.ts";
 import type { PriceDatabase } from "./db.ts";
 
@@ -70,11 +65,7 @@ export async function warmupPriceHistory(
 			`Fetching ${blockNumbers.length} historical snapshots from block ${blockNumbers[0]} to ${alignedEnd}...`,
 		);
 
-		// Fetch in small batches with rate-limit delays.
-		// Each block needs 2 RPC calls (hash + alpha prices).
 		const BATCH_SIZE = 5;
-		const RPCS_PER_BLOCK = 2;
-		const RPC_RATE_LIMIT = 80;
 		let fetched = 0;
 
 		for (let i = 0; i < blockNumbers.length; i += BATCH_SIZE) {
@@ -119,13 +110,6 @@ export async function warmupPriceHistory(
 			if (fetched > 0 && fetched % 20 === 0) {
 				log.verbose(
 					`Warmup progress: ${fetched}/${blockNumbers.length} snapshots fetched`,
-				);
-			}
-
-			// Throttle between batches
-			if (i + BATCH_SIZE < blockNumbers.length) {
-				await sleep(
-					rpcBatchDelayMs(batch.length * RPCS_PER_BLOCK, RPC_RATE_LIMIT),
 				);
 			}
 		}
