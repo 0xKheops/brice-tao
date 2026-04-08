@@ -89,7 +89,7 @@ Multiple leader events in the same block trigger only **one** rebalance cycle. T
 All settings live in `config.yaml`:
 
 ```yaml
-staleTimeoutMinutes: 10    # Warn if a cycle exceeds this duration
+staleTimeoutMinutes: 10    # Warn if a cycle exceeds 10 minutes
 
 rebalance:
   minPositionTao: 0.5      # Drop leader subnets where follower allocation < this

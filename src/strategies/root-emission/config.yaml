@@ -1,4 +1,4 @@
-cronSchedule: "0 */12 * * *"              # rebalance every 12 hours
+cronSchedule: "0 */12 * * *"              # rebalance every 12 hours (UTC)
 staleTimeoutMinutes: 5                     # max time allowed for one rebalance cycle
 
 # Root + Best Emission strategy — optimized for small portfolios (<2 TAO)

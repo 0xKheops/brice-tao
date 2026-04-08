@@ -70,6 +70,26 @@ export interface BacktestStrategy {
 	): BacktestStep;
 }
 
+// ---------------------------------------------------------------------------
+// Backtest schedule types
+// ---------------------------------------------------------------------------
+
+/** Cron-based schedule for backtesting — evaluated in UTC */
+export interface CronBacktestSchedule {
+	type: "cron";
+	cronSchedule: string;
+}
+
+/** Block-modulo schedule for backtesting */
+export interface BlockIntervalBacktestSchedule {
+	type: "block-interval";
+	intervalBlocks: number;
+}
+
+export type BacktestSchedule =
+	| CronBacktestSchedule
+	| BlockIntervalBacktestSchedule;
+
 /** Full strategy module: what to allocate + how to schedule */
 export interface StrategyModule {
 	getStrategyTargets: StrategyFn;
@@ -86,4 +106,11 @@ export interface StrategyModule {
 	 * historical snapshots without a live RPC connection.
 	 */
 	createBacktest?: () => BacktestStrategy;
+	/**
+	 * Optional schedule descriptor for backtesting.
+	 * Tells the backtest script when to trigger rebalances — either at
+	 * block-modulo intervals or by evaluating a cron expression (UTC)
+	 * against historical block timestamps.
+	 */
+	getBacktestSchedule?: () => BacktestSchedule;
 }

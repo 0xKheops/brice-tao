@@ -2,8 +2,8 @@
 # Demonstrates: technical indicators, stop-loss, SQLite persistence
 # All TAO amounts are in TAO (not RAO). Percent values are in percent.
 
-cronSchedule: "0 */4 * * *"              # rebalance every 4 hours
-staleTimeoutMinutes: 5                    # max time for one rebalance cycle
+rebalanceIntervalBlocks: 1200              # rebalance every 1200 blocks (~4 hours at 12s/block)
+staleTimeoutBlocks: 25                    # max time for one rebalance cycle (~5 min)
 
 rebalance:
   minPositionTao: 0.3                     # smallest position to maintain (TAO)

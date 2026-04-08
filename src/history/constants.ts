@@ -1,4 +1,10 @@
 /**
+ * Average block production time on Bittensor, in seconds.
+ * Used to convert between wall-clock durations and block counts.
+ */
+export const SECONDS_PER_BLOCK = 12;
+
+/**
  * History DB block-interval constant.
  *
  * Bittensor produces 1 block every ~12 s. Recording every 25th block
@@ -15,17 +21,17 @@
  * for (let b = snapToGrid(start); b <= end; b += BLOCK_INTERVAL) { … }
  * ```
  */
-export const BLOCK_INTERVAL = 25;
+export const DB_HISTORY_BLOCK_INTERVAL = 25;
 
 /** Returns `true` if `blockNumber` falls on the 25-block recording grid. */
-export function isGridBlock(blockNumber: number): boolean {
-	return blockNumber % BLOCK_INTERVAL === 0;
+export function isDbHistoryBlock(blockNumber: number): boolean {
+	return blockNumber % DB_HISTORY_BLOCK_INTERVAL === 0;
 }
 
 /**
  * Snap a block number **down** to the nearest grid point.
  * Useful for backfill start/end alignment.
  */
-export function snapToGrid(blockNumber: number): number {
-	return blockNumber - (blockNumber % BLOCK_INTERVAL);
+export function snapToDbHistory(blockNumber: number): number {
+	return blockNumber - (blockNumber % DB_HISTORY_BLOCK_INTERVAL);
 }

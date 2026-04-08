@@ -8,6 +8,12 @@ export interface CronScheduleConfig {
 	staleTimeoutMinutes: number;
 }
 
+/** Schedule config for block-interval strategies — parsed from config.yaml top-level fields */
+export interface BlockIntervalConfig {
+	rebalanceIntervalBlocks: number;
+	staleTimeoutBlocks: number;
+}
+
 export interface RebalanceCycleResult {
 	exitCode: number;
 }
@@ -29,7 +35,8 @@ export interface RunnerContext {
 
 /**
  * Strategy runner — owns the scheduling lifecycle.
- * Cron strategies set up a periodic job; always-online strategies
+ * Cron strategies set up a periodic job; block-interval strategies subscribe to
+ * finalized blocks and fire on modulo-aligned block numbers; always-online strategies
  * may subscribe to blocks or other on-chain events.
  */
 export interface StrategyRunner {

@@ -62,8 +62,9 @@ export interface RunnerContext {
 
 **Runner types:**
 
-- **Cron-based** — Use the shared `createCronRunner` from `src/scheduling/cron.ts`. Runs on a schedule with overlap protection and stale timeout. Best for simple strategies. (Used by `root-emission`)
-- **Event-driven** — Custom runner that subscribes to chain events (e.g., `finalizedBlock$`). Best for real-time strategies. (Used by `copy-trade`)
+- **Block-interval** — Use the shared `createBlockIntervalRunner` from `src/scheduling/blockInterval.ts`. Subscribes to `finalizedBlock$` and fires on every block where `blockNumber % rebalanceIntervalBlocks === 0`. Includes overlap protection and stale timeout. Best for periodic strategies that need deterministic backtesting. (Used by `sma-stoploss`)
+- **Cron-based** — Use `createCronRunner` from `src/scheduling/cron.ts`. Evaluates a UTC cron expression via `croner`. Includes overlap protection and stale timeout. Best for periodic strategies where wall-clock scheduling is preferred. (Used by `root-emission`)
+- **Event-driven** — Custom runner that subscribes to chain events (e.g., `finalizedBlock$` for specific events). Best for reactive strategies. (Used by `copy-trade`)
 
 ---
 
@@ -83,9 +84,13 @@ src/strategies/my-strategy/
 ### Step 2: Create `config.yaml`
 
 ```yaml
-# Required for cron strategies:
-cronSchedule: "0 */6 * * *"     # every 6 hours
-staleTimeoutMinutes: 10          # max time for one cycle
+# Option A: Block-interval scheduling (for deterministic backtesting):
+rebalanceIntervalBlocks: 1800    # every 1800 blocks (~6 hours). Must be a multiple of 25.
+staleTimeoutBlocks: 50           # max blocks before stale warning (~10 min)
+
+# Option B: Cron-based scheduling (UTC):
+# cronSchedule: "0 */6 * * *"   # every 6 hours
+# staleTimeoutMinutes: 10       # max minutes before stale warning
 
 # Rebalance parameters (controls operation generation):
 # TAO amounts are in TAO (not RAO). Slippage/drift values are in percent.
@@ -125,7 +130,7 @@ import { parse } from "yaml"
 import { ConfigError } from "../../errors.ts"
 import { parseTao } from "../../rebalance/tao.ts"
 import type { RebalanceConfig } from "../../rebalance/types.ts"
-import type { CronScheduleConfig } from "../../scheduling/types.ts"
+import type { BlockIntervalConfig } from "../../scheduling/types.ts"
 import type { MyStrategyConfig } from "./types.ts"
 
 // Handle compiled binary vs source paths
@@ -141,7 +146,7 @@ const CONFIG_PATH = metaDir.startsWith("/$bunfs")
 	: new URL("./config.yaml", import.meta.url).pathname
 
 export interface MyStrategyAppConfig {
-	schedule: CronScheduleConfig
+	schedule: BlockIntervalConfig
 	rebalance: RebalanceConfig
 	strategy: MyStrategyConfig
 }
@@ -167,8 +172,8 @@ export function loadConfig(): MyStrategyAppConfig {
 
 	return {
 		schedule: {
-			cronSchedule: raw.cronSchedule as string,
-			staleTimeoutMinutes: raw.staleTimeoutMinutes as number,
+			rebalanceIntervalBlocks: raw.rebalanceIntervalBlocks as number,
+			staleTimeoutBlocks: raw.staleTimeoutBlocks as number,
 		},
 		rebalance: {
 			minPositionTao: parseTao(rebalance.minPositionTao),
@@ -252,18 +257,45 @@ export async function getStrategyTargets(
 
 ### Step 6: Implement `createRunner` in `runner.ts`
 
-For a **cron-based strategy** (simplest):
+For a **block-interval strategy** (deterministic backtesting):
+
+```typescript
+import { createBlockIntervalRunner } from "../../scheduling/blockInterval.ts"
+import type { RunnerContext, StrategyRunner } from "../../scheduling/types.ts"
+import { recordCurrentBlock } from "../../history/record.ts"
+import { loadConfig } from "./config.ts"
+
+export function createRunner(ctx: RunnerContext): StrategyRunner {
+	const config = loadConfig()
+	return createBlockIntervalRunner({
+		client: ctx.client,
+		intervalBlocks: config.schedule.rebalanceIntervalBlocks,
+		staleTimeoutBlocks: config.schedule.staleTimeoutBlocks,
+		onTick: async () => {
+			await recordCurrentBlock(ctx.client, ctx.historyDb)
+			return ctx.runRebalanceCycle()
+		},
+		label: `scheduler:${ctx.strategyName}`,
+	})
+}
+```
+
+For a **cron-based strategy** (UTC wall-clock scheduling):
 
 ```typescript
 import { createCronRunner } from "../../scheduling/cron.ts"
 import type { RunnerContext, StrategyRunner } from "../../scheduling/types.ts"
+import { recordCurrentBlock } from "../../history/record.ts"
 import { loadConfig } from "./config.ts"
 
 export function createRunner(ctx: RunnerContext): StrategyRunner {
 	const { schedule } = loadConfig()
 	return createCronRunner({
 		schedule,
-		onTick: () => ctx.runRebalanceCycle(),
+		onTick: async () => {
+			await recordCurrentBlock(ctx.client, ctx.historyDb)
+			return ctx.runRebalanceCycle()
+		},
 		label: `scheduler:${ctx.strategyName}`,
 	})
 }

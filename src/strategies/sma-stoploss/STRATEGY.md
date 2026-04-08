@@ -1,6 +1,6 @@
 # SMA Crossover + Stop-Loss Strategy
 
-Cron-based momentum strategy using Simple Moving Average crossover with a fixed-percentage trailing stop-loss for Bittensor alpha token trading.
+Block-interval momentum strategy using Simple Moving Average crossover with a fixed-percentage trailing stop-loss for Bittensor alpha token trading.
 
 ## Overview
 
@@ -20,7 +20,7 @@ The portfolio is split into at most **3 equal slots** (33% each):
 
 ## SMA Crossover Indicator
 
-The [Simple Moving Average](https://en.wikipedia.org/wiki/Moving_average#Simple_moving_average) is computed from price samples taken at each cron tick (every 4 hours by default).
+The [Simple Moving Average](https://en.wikipedia.org/wiki/Moving_average#Simple_moving_average) is computed from price samples taken at each block-interval tick (every 1200 blocks / ~4 hours by default).
 
 - **Fast SMA** (period 6): average of the 6 most recent price samples
 - **Slow SMA** (period 14): average of the 14 most recent price samples
@@ -29,7 +29,7 @@ The [Simple Moving Average](https://en.wikipedia.org/wiki/Moving_average#Simple_
 
 ### Cold Start
 
-Until enough price samples accumulate for the slow SMA (14 ticks × 4h = ~2.3 days), the strategy will not select any subnets and parks 100% in SN0. With archive node warmup configured, this cold start period is eliminated.
+Until enough price samples accumulate for the slow SMA (14 ticks × 1200 blocks = ~2.8 days), the strategy will not select any subnets and parks 100% in SN0. With archive node warmup configured, this cold start period is eliminated.
 
 ## Scoring Engine
 
@@ -63,7 +63,7 @@ Held subnets receive an additive score bonus to reduce unnecessary churn.
 After a stop triggers, the subnet enters a cooldown period (`cooldownBlocks`, default ~18h). During cooldown, the subnet is excluded from scoring and cannot be re-entered.
 
 ### 4-Hour Check Interval (Caveat)
-Since this is a cron-based strategy (not always-online), stop-losses are only checked every 4 hours. Price can gap far below the stop or dip and recover between ticks. This is a deliberate simplification — for real-time protection, see the always-online architecture pattern used by more advanced strategies.
+Since this is a block-interval strategy (not always-online), stop-losses are only checked every 1200 blocks (~4 hours). Price can gap far below the stop or dip and recover between ticks. This is a deliberate simplification — for real-time protection, see the always-online architecture pattern used by more advanced strategies.
 
 ## Database Schema
 
@@ -81,7 +81,7 @@ Old price samples are evicted to keep at most `maxPriceSamples` per subnet.
 
 On startup, if `ARCHIVE_WS_ENDPOINT` is set and the DB is empty:
 1. Create a temporary PAPI client to the archive node
-2. Fetch historical spot prices via `current_alpha_price_all()` at ~1200-block intervals
+2. Fetch historical spot prices via `current_alpha_price_all()` at ~1200-block intervals (matching `rebalanceIntervalBlocks`)
 3. Insert into DB — SMA is immediately usable after warmup
 4. Graceful fallback: if archive is unavailable, start with cold indicators
 
@@ -119,7 +119,7 @@ Key sections:
 | File | Purpose |
 |------|---------|
 | `index.ts` | `getStrategyTargets()` — read-only scoring + allocation + audit |
-| `runner.ts` | Custom cron runner: startup warmup, per-tick state updates, DB lifecycle |
+| `runner.ts` | Block-interval runner: startup warmup, per-tick state updates, DB lifecycle |
 | `config.yaml` / `config.ts` | Configuration and validation |
 | `types.ts` | Strategy-specific type definitions |
 | `db.ts` | SQLite price database (bun:sqlite, WAL mode) |

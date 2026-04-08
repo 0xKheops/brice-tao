@@ -14,12 +14,17 @@ const PRICE_SCALE = 1_000_000_000n;
  * ensuring data consistency and predictability.
  *
  * Invariant: only finalized blocks are fetched (via client.getFinalizedBlock()).
+ *
+ * @param preFetchedBlock — optional pre-fetched finalized block to avoid a
+ *   redundant RPC call when the caller already has it (e.g., recordCurrentBlock
+ *   checks the grid before fetching snapshot data).
  */
 export async function fetchHistorySnapshot(
 	client: PolkadotClient,
+	preFetchedBlock?: { hash: string; number: number },
 ): Promise<HistorySnapshot> {
 	const api = client.getTypedApi(bittensor);
-	const finalizedBlock = await client.getFinalizedBlock();
+	const finalizedBlock = preFetchedBlock ?? (await client.getFinalizedBlock());
 
 	const atOptions = { at: finalizedBlock.hash };
 

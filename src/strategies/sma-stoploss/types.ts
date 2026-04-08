@@ -2,8 +2,8 @@
 
 export interface RawSmaStoplossConfig {
 	schedule: {
-		cronSchedule: string;
-		staleTimeoutMinutes: number;
+		rebalanceIntervalBlocks: number;
+		staleTimeoutBlocks: number;
 	};
 	rebalance: {
 		minPositionTao: number;

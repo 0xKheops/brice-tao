@@ -42,7 +42,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 - `src/strategies/loader.ts` — strategy registry + CLI arg parsing
 - `src/rebalance/` — shared pipeline (compute, execute, slippage, MEV shield)
 - `src/history/` — shared history database (`data/history.sqlite`) — records finalized block + subnet data on a 25-block grid (~5 min) for all strategies (future backtesting)
-- `src/scheduling/` — cron runner, one-shot runner, shared context
+- `src/scheduling/` — block-interval runner, one-shot runner, shared context
 - `src/config/env.ts` — environment variable validation
 - `src/validators/` — shared default validator selection (yield-based)
 
@@ -98,6 +98,50 @@ The shared history DB (`data/history.sqlite`) records on-chain subnet snapshots 
 - Use `snapToGrid()` and `isGridBlock()` from `src/history/constants.ts` — never hardcode `25`
 - Only query archive nodes at grid-aligned block numbers
 - The `recordCurrentBlock()` function in `src/history/record.ts` is the only way to populate the DB during live operation; backfill scripts may use `db.recordSnapshot()` directly but must pre-validate block numbers
+
+## Strategy Scheduling
+
+Strategies can use different scheduling mechanisms. The `StrategyRunner` interface is generic (`start()`/`stop()`), and three concrete runner types exist:
+
+1. **Cron-based** (`src/scheduling/cron.ts`) — UTC cron expression via `croner`. Used by `root-emission`.
+2. **Block-interval** (`src/scheduling/blockInterval.ts`) — fires on `blockNumber % intervalBlocks === 0`. Used by `sma-stoploss`.
+3. **Event-driven** — custom runner subscribing to on-chain events. Used by `copy-trade`.
+
+**Key constants** (from `src/history/constants.ts`):
+- `SECONDS_PER_BLOCK = 12` — Bittensor block time
+- `BLOCK_INTERVAL = 25` — history DB grid (25 blocks ≈ 5 min)
+
+**Rules for block-interval strategies:**
+- `rebalanceIntervalBlocks` must be a **multiple of `BLOCK_INTERVAL` (25)** — enforced at runtime by `createBlockIntervalRunner`
+- Config files use `rebalanceIntervalBlocks` and `staleTimeoutBlocks`
+
+**Rules for cron strategies:**
+- Cron expressions are always evaluated in **UTC** (both live and backtest)
+- Config files use `cronSchedule` and `staleTimeoutMinutes`
+
+**Rules for event-driven strategies:**
+- Config files use `staleTimeoutMinutes` for cycle timeout
+- Event-driven strategies are not currently backtestable
+
+## Backtesting
+
+The backtest script (`scripts/backtest.ts`) supports both scheduling types:
+
+- **Block-interval**: pure modulo check (`blockNumber % intervalBlocks === 0`)
+- **Cron**: evaluates cron expressions in UTC against historical block timestamps. Uses a persistent `nextScheduledAt` and triggers on the first snapshot at-or-after the scheduled time.
+
+Schedule is auto-detected from the strategy's `getBacktestSchedule()` hook. CLI overrides: `--interval-blocks <n>` or `--cron "<expr>"`.
+
+### Backtesting Limitations
+
+This is a **price-only** simulation with known limitations:
+
+- **No emission accrual**: backtests do NOT model staking emission rewards. Real returns will differ from backtest returns because emission yield is a significant component of Bittensor staking returns.
+- **Fee model**: backtests apply a **0.05% pool fee** per trade + a fixed **transaction fee** (`TX_FEE_RAO`). This approximates the AMM swap fee but does not capture dynamic slippage from pool depth changes.
+- **No AMM slippage**: trades execute at spot price (after pool fee). In reality, large trades move the price.
+- **No validator rewards/take**: validator commission is not modeled.
+
+When interpreting backtest results, treat them as a relative comparison tool between strategies rather than an absolute return prediction.
 
 ## Quality Gates
 

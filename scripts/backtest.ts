@@ -6,14 +6,28 @@
  * price changes and rebalance trades. It does NOT model emission rewards,
  * staking fees, or AMM slippage. Results represent an idealised upper bound.
  *
+ * Fee model:
+ * - 0.05% pool fee per trade (approximates AMM swap fee)
+ * - Fixed transaction fee per trade (TX_FEE_RAO)
+ *
+ * Schedule detection:
+ * - Reads the strategy's native schedule via `getBacktestSchedule()`.
+ *   Cron schedules are evaluated in UTC against historical block timestamps.
+ *   Block-interval schedules use modulo-aligned block numbers.
+ * - CLI overrides: `--interval-blocks <n>` or `--cron "<expr>"` force a
+ *   specific schedule regardless of strategy config.
+ *
  * Usage:
- *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>]
+ *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"]
  */
 
 import { join } from "node:path";
+import { Cron } from "croner";
+import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
 import { openHistoryDatabase } from "../src/history/index.ts";
 import { formatTao, TAO } from "../src/rebalance/tao.ts";
 import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
+import type { BacktestSchedule } from "../src/strategies/types.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,9 +35,15 @@ import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
 
 const F32 = 1n << 32n;
 
+/** Pool fee applied per trade (0.05% = 5 basis points) */
+const POOL_FEE_BPS = 5n;
+const POOL_FEE_DENOM = 10_000n;
+
+/** Fixed transaction fee per trade (~0.0001 TAO) */
+const TX_FEE_RAO = TAO / 10_000n;
+
 const DB_PATH = join("data", "history.sqlite");
 const DEFAULT_INITIAL_TAO = 100;
-const DEFAULT_INTERVAL_BLOCKS = 7200; // ~1 day at 12s/block
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -45,12 +65,77 @@ function parseIntArg(flag: string, fallback: number): number {
 	return value;
 }
 
+function parseStringArg(flag: string): string | undefined {
+	const idx = process.argv.indexOf(flag);
+	if (idx === -1) return undefined;
+	const raw = process.argv[idx + 1];
+	if (!raw || raw.startsWith("--")) {
+		console.error(`${flag} requires a value`);
+		process.exit(1);
+	}
+	return raw;
+}
+
 const strategyName = resolveStrategyName(process.env.STRATEGY);
 const initialTao = parseIntArg("--initial-tao", DEFAULT_INITIAL_TAO);
-const intervalBlocks = parseIntArg(
-	"--interval-blocks",
-	DEFAULT_INTERVAL_BLOCKS,
-);
+const cliIntervalBlocks = process.argv.includes("--interval-blocks")
+	? parseIntArg("--interval-blocks", 0)
+	: undefined;
+const cliCron = parseStringArg("--cron");
+
+if (cliIntervalBlocks !== undefined && cliCron !== undefined) {
+	console.error("Cannot specify both --interval-blocks and --cron");
+	process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Backfill gap: bring history DB up to the current finalized block
+// ---------------------------------------------------------------------------
+
+const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
+const archiveEndpoints = process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [];
+
+if (!wsEndpoints.length || !archiveEndpoints.length) {
+	console.warn(
+		"⚠ WS_ENDPOINT or ARCHIVE_WS_ENDPOINT not set — skipping auto-backfill. History may be stale.",
+	);
+} else {
+	// Determine how many days to request: cover the entire DB range + gap to now.
+	// The backfill script auto-resumes and only fetches missing blocks, so
+	// requesting a generous window is cheap when most data already exists.
+	const db0 = openHistoryDatabase(DB_PATH);
+	const existingMetas = db0.getBlockMetas();
+	db0.close();
+
+	// Default to 30 days if DB is empty; otherwise cover from latest block to now
+	const backfillDays =
+		existingMetas.length > 0
+			? Math.ceil(
+					(Date.now() -
+						(existingMetas[existingMetas.length - 1]?.timestamp ?? 0)) /
+						86_400_000,
+				) + 1
+			: 30;
+
+	if (backfillDays > 0) {
+		console.log(`\n🔄 Backfilling history (${backfillDays} day window)...`);
+		const result = Bun.spawnSync(
+			[
+				"bun",
+				"run",
+				"scripts/backfill-history.ts",
+				"--days",
+				String(backfillDays),
+			],
+			{ cwd: process.cwd(), stdout: "inherit", stderr: "inherit" },
+		);
+		if (result.exitCode !== 0) {
+			console.warn("⚠ Backfill failed — continuing with existing data.\n");
+		} else {
+			console.log();
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Load strategy
@@ -64,6 +149,35 @@ if (!strategyModule.createBacktest) {
 	process.exit(1);
 }
 const strategy = strategyModule.createBacktest();
+
+// ---------------------------------------------------------------------------
+// Resolve schedule: CLI override → strategy config → error
+// ---------------------------------------------------------------------------
+
+let schedule: BacktestSchedule;
+if (cliCron) {
+	schedule = { type: "cron", cronSchedule: cliCron };
+} else if (cliIntervalBlocks !== undefined) {
+	schedule = { type: "block-interval", intervalBlocks: cliIntervalBlocks };
+} else if (strategyModule.getBacktestSchedule) {
+	schedule = strategyModule.getBacktestSchedule();
+} else {
+	console.error(
+		`Strategy "${strategyName}" has no getBacktestSchedule() — provide --interval-blocks or --cron`,
+	);
+	process.exit(1);
+}
+
+// Validate block-interval alignment
+if (
+	schedule.type === "block-interval" &&
+	schedule.intervalBlocks % DB_HISTORY_BLOCK_INTERVAL !== 0
+) {
+	console.error(
+		`--interval-blocks (${schedule.intervalBlocks}) must be a multiple of BLOCK_INTERVAL (${DB_HISTORY_BLOCK_INTERVAL}) for history DB alignment`,
+	);
+	process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Load history
@@ -85,12 +199,20 @@ const firstBlock = blockMetas[0]!;
 // biome-ignore lint/style/noNonNullAssertion: length >= 2 guaranteed above
 const lastBlock = blockMetas[blockMetas.length - 1]!;
 
+const scheduleLabel =
+	schedule.type === "cron"
+		? `cron "${schedule.cronSchedule}" (UTC)`
+		: `every ${schedule.intervalBlocks} blocks`;
+
 console.log(`\n📊 Backtest: ${strategyName} (price-only, no emission accrual)`);
+console.log(
+	`   Fee model: 0.05% pool fee + ${formatTao(TX_FEE_RAO)} τ tx fee per trade`,
+);
 console.log(`   Initial capital: ${initialTao} τ`);
 console.log(
 	`   Period: block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots)`,
 );
-console.log(`   Rebalance interval: every ${intervalBlocks} blocks`);
+console.log(`   Rebalance schedule: ${scheduleLabel}`);
 console.log();
 
 // ---------------------------------------------------------------------------
@@ -120,6 +242,7 @@ interface Position {
 let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
+let totalFeesPaid = 0n;
 
 function getHeldNetuids(): Set<number> {
 	const held = new Set<number>();
@@ -148,19 +271,39 @@ function buildPriceMap(
 // Trade execution helpers
 // ---------------------------------------------------------------------------
 
+function formatTime(timestampMs: number): string {
+	return new Date(timestampMs).toISOString().replace("T", " ").slice(0, 19);
+}
+
+function logTrade(
+	side: "BUY " | "SELL",
+	netuid: number,
+	subnetName: string,
+	taoAmount: bigint,
+	blockNumber: number,
+	timestamp: number,
+) {
+	console.log(
+		`  ${side}  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoAmount).padStart(12)} τ  @ ${formatTime(timestamp)}  #${blockNumber}`,
+	);
+}
+
 function sellAll(
 	netuid: number,
 	spotPrice: bigint,
 	blockNumber: number,
+	timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
 	if (!pos || pos.alpha <= 0n) return;
-	const taoReceived = alphaToTao(pos.alpha, spotPrice);
+	const grossTao = alphaToTao(pos.alpha, spotPrice);
+	const poolFee = (grossTao * POOL_FEE_BPS) / POOL_FEE_DENOM;
+	const taoReceived = grossTao - poolFee - TX_FEE_RAO;
+	if (taoReceived <= 0n) return;
 	free += taoReceived;
-	console.log(
-		`  SELL  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoReceived).padStart(12)} τ  @ block ${blockNumber}`,
-	);
+	totalFeesPaid += poolFee + TX_FEE_RAO;
+	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
 	positions.delete(netuid);
 	totalTrades++;
 }
@@ -170,19 +313,22 @@ function sellPartial(
 	taoAmount: bigint,
 	spotPrice: bigint,
 	blockNumber: number,
+	timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
 	if (!pos || pos.alpha <= 0n || spotPrice <= 0n) return;
 	const alphaToSell = taoToAlpha(taoAmount, spotPrice);
 	const actualAlpha = alphaToSell > pos.alpha ? pos.alpha : alphaToSell;
-	const taoReceived = alphaToTao(actualAlpha, spotPrice);
+	const grossTao = alphaToTao(actualAlpha, spotPrice);
+	const poolFee = (grossTao * POOL_FEE_BPS) / POOL_FEE_DENOM;
+	const taoReceived = grossTao - poolFee - TX_FEE_RAO;
+	if (taoReceived <= 0n) return;
 	pos.alpha -= actualAlpha;
 	free += taoReceived;
+	totalFeesPaid += poolFee + TX_FEE_RAO;
 	if (pos.alpha <= 0n) positions.delete(netuid);
-	console.log(
-		`  SELL  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoReceived).padStart(12)} τ  @ block ${blockNumber}`,
-	);
+	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
 	totalTrades++;
 }
 
@@ -191,20 +337,67 @@ function buy(
 	taoAmount: bigint,
 	spotPrice: bigint,
 	blockNumber: number,
+	timestamp: number,
 	subnetName: string,
 ) {
 	if (taoAmount <= 0n || spotPrice <= 0n) return;
 	const actual = taoAmount > free ? free : taoAmount;
 	if (actual <= 0n) return;
-	const alphaReceived = taoToAlpha(actual, spotPrice);
+	const poolFee = (actual * POOL_FEE_BPS) / POOL_FEE_DENOM;
+	const netTao = actual - poolFee - TX_FEE_RAO;
+	if (netTao <= 0n) return;
+	const alphaReceived = taoToAlpha(netTao, spotPrice);
 	free -= actual;
+	totalFeesPaid += poolFee + TX_FEE_RAO;
 	const pos = positions.get(netuid) ?? { alpha: 0n };
 	pos.alpha += alphaReceived;
 	positions.set(netuid, pos);
-	console.log(
-		`  BUY   SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(actual).padStart(12)} τ  @ block ${blockNumber}`,
-	);
+	logTrade("BUY ", netuid, subnetName, actual, blockNumber, timestamp);
 	totalTrades++;
+}
+
+// ---------------------------------------------------------------------------
+// Rebalance trigger helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a trigger function that decides whether to rebalance at a given block.
+ *
+ * For block-interval: pure modulo check (blockNumber % intervalBlocks === 0).
+ * For cron: persistent nextScheduledAt — trigger on first snapshot at-or-after
+ * the scheduled time, then advance to the next cron tick.
+ */
+function buildTrigger(
+	sched: BacktestSchedule,
+	firstTimestamp: number,
+): (blockNumber: number, timestamp: number) => boolean {
+	if (sched.type === "block-interval") {
+		const interval = sched.intervalBlocks;
+		return (blockNumber) => blockNumber % interval === 0;
+	}
+
+	// Cron-based: maintain persistent nextScheduledAt
+	const cron = new Cron(sched.cronSchedule, { timezone: "UTC" });
+	// Initialize: find the first cron tick at-or-after the first snapshot
+	let nextScheduledAt = cron.nextRun(new Date(firstTimestamp - 1));
+	if (!nextScheduledAt) {
+		console.error(
+			`Cron expression "${sched.cronSchedule}" has no future ticks from ${new Date(firstTimestamp).toISOString()}`,
+		);
+		process.exit(1);
+	}
+
+	return (_blockNumber, timestamp) => {
+		if (!nextScheduledAt) return false;
+		if (timestamp < nextScheduledAt.getTime()) return false;
+
+		// Fire! Advance to next cron tick.
+		// Use nextScheduledAt (not current timestamp) as reference to avoid
+		// skipping ticks that pile up during DB gaps.
+		const next = cron.nextRun(nextScheduledAt);
+		nextScheduledAt = next;
+		return true;
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +405,7 @@ function buy(
 // ---------------------------------------------------------------------------
 
 const initialValue = free;
-let nextRebalanceBlock = firstBlock.blockNumber;
+const shouldRebalance = buildTrigger(schedule, firstBlock.timestamp);
 let rebalanceCount = 0;
 
 for (const meta of blockMetas) {
@@ -221,8 +414,7 @@ for (const meta of blockMetas) {
 
 	const heldNetuids = getHeldNetuids();
 
-	// Observe at every snapshot (updates SMA, stop-losses, etc.)
-	if (meta.blockNumber < nextRebalanceBlock) {
+	if (!shouldRebalance(meta.blockNumber, meta.timestamp)) {
 		strategy.observe(snapshots, meta.blockNumber, meta.timestamp, heldNetuids);
 		continue;
 	}
@@ -246,7 +438,13 @@ for (const meta of blockMetas) {
 	for (const [netuid] of positions) {
 		if (!targetSet.has(netuid)) {
 			const price = priceMap.get(netuid) ?? 0n;
-			sellAll(netuid, price, meta.blockNumber, nameMap.get(netuid) ?? "?");
+			sellAll(
+				netuid,
+				price,
+				meta.blockNumber,
+				meta.timestamp,
+				nameMap.get(netuid) ?? "?",
+			);
 		}
 	}
 
@@ -264,14 +462,20 @@ for (const meta of blockMetas) {
 		// Skip tiny adjustments (< 0.01 τ)
 		const MIN_TRADE = TAO / 100n;
 		if (diff > MIN_TRADE) {
-			buy(target.netuid, diff, price, meta.blockNumber, name);
+			buy(target.netuid, diff, price, meta.blockNumber, meta.timestamp, name);
 		} else if (diff < -MIN_TRADE) {
-			sellPartial(target.netuid, -diff, price, meta.blockNumber, name);
+			sellPartial(
+				target.netuid,
+				-diff,
+				price,
+				meta.blockNumber,
+				meta.timestamp,
+				name,
+			);
 		}
 	}
 
 	rebalanceCount++;
-	nextRebalanceBlock = meta.blockNumber + intervalBlocks;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,9 +501,11 @@ console.log(`\n${"═".repeat(60)}`);
 console.log("  BACKTEST SUMMARY (price-only, no emission accrual)");
 console.log("═".repeat(60));
 console.log(`  Strategy:         ${strategyName}`);
+console.log(`  Schedule:         ${scheduleLabel}`);
 console.log(`  Period:           ${durationDays.toFixed(1)} days`);
 console.log(`  Rebalances:       ${rebalanceCount}`);
 console.log(`  Total trades:     ${totalTrades}`);
+console.log(`  Total fees paid:  ${formatTao(totalFeesPaid)} τ`);
 console.log(`  Initial value:    ${formatTao(initialValue)} τ`);
 console.log(`  Final value:      ${formatTao(finalValue)} τ`);
 console.log(

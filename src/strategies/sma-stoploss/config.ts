@@ -3,14 +3,14 @@ import { parse } from "yaml";
 import { ConfigError } from "../../errors.ts";
 import { parseTao } from "../../rebalance/tao.ts";
 import type { RebalanceConfig } from "../../rebalance/types.ts";
-import type { CronScheduleConfig } from "../../scheduling/types.ts";
+import type { BlockIntervalConfig } from "../../scheduling/types.ts";
 import type {
 	RawSmaStoplossConfig,
 	SmaStoplossStrategyConfig,
 } from "./types.ts";
 
 export interface SmaStoplossAppConfig {
-	schedule: CronScheduleConfig;
+	schedule: BlockIntervalConfig;
 	rebalance: RebalanceConfig;
 	strategy: SmaStoplossStrategyConfig;
 }
@@ -44,8 +44,11 @@ function validateRawConfig(raw: unknown): RawSmaStoplossConfig {
 
 	const obj = raw as Record<string, unknown>;
 
-	const cronSchedule = requireNonEmptyString(obj, "cronSchedule");
-	const staleTimeoutMinutes = requirePositiveInt(obj, "staleTimeoutMinutes");
+	const rebalanceIntervalBlocks = requirePositiveInt(
+		obj,
+		"rebalanceIntervalBlocks",
+	);
+	const staleTimeoutBlocks = requirePositiveInt(obj, "staleTimeoutBlocks");
 
 	const rebalance = requireSection(obj, "rebalance");
 	const strategy = requireSection(obj, "strategy");
@@ -78,8 +81,8 @@ function validateRawConfig(raw: unknown): RawSmaStoplossConfig {
 
 	return {
 		schedule: {
-			cronSchedule,
-			staleTimeoutMinutes,
+			rebalanceIntervalBlocks,
+			staleTimeoutBlocks,
 		},
 		rebalance: {
 			minPositionTao: requireNonNegativeNumber(rebalance, "minPositionTao"),
@@ -140,19 +143,6 @@ function resolveConfig(raw: RawSmaStoplossConfig): SmaStoplossAppConfig {
 }
 
 // --- Validation helpers ---
-
-function requireNonEmptyString(
-	section: Record<string, unknown>,
-	key: string,
-): string {
-	const value = section[key];
-	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new ConfigError(
-			`Config "${key}" must be a non-empty string, got: ${JSON.stringify(value)}`,
-		);
-	}
-	return value;
-}
 
 function requireSection(
 	obj: Record<string, unknown>,

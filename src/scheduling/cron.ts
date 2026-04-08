@@ -13,7 +13,7 @@ export interface CronRunnerOptions {
 
 /**
  * Create a cron-based strategy runner with overlap protection and stale timeout.
- * Extracted from the former top-level scheduler.ts.
+ * All schedules are evaluated in UTC to avoid DST / locale drift.
  */
 export function createCronRunner({
 	schedule,
@@ -61,9 +61,11 @@ export function createCronRunner({
 
 	return {
 		async start() {
-			job = new Cron(schedule.cronSchedule, tick);
+			job = new Cron(schedule.cronSchedule, { timezone: "UTC" }, tick);
 			const nextRun = job.nextRun();
-			console.log(`[${label}] Started — schedule: ${schedule.cronSchedule}`);
+			console.log(
+				`[${label}] Started — schedule: ${schedule.cronSchedule} (UTC)`,
+			);
 			console.log(
 				`[${label}] Next run: ${nextRun ? nextRun.toISOString() : "unknown"}`,
 			);

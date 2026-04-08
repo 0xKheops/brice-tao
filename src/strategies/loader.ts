@@ -3,15 +3,17 @@ import { dirname, join } from "node:path";
 import { getStrategyTargets as copyTrade } from "./copy-trade/index.ts";
 import { createRunner as copyTradeRunner } from "./copy-trade/runner.ts";
 import { createBacktest as rootEmissionBacktest } from "./root-emission/backtest.ts";
+import { loadRootEmissionConfig } from "./root-emission/config.ts";
 import { getStrategyTargets as rootEmission } from "./root-emission/index.ts";
 import { createRunner as rootEmissionRunner } from "./root-emission/runner.ts";
 import { createBacktest as smaStoplossBacktest } from "./sma-stoploss/backtest.ts";
+import { loadSmaStoplossConfig } from "./sma-stoploss/config.ts";
 import {
 	getStrategyTargets as smaStoploss,
 	preparePreview as smaStoplossPreview,
 } from "./sma-stoploss/index.ts";
 import { createRunner as smaStoplossRunner } from "./sma-stoploss/runner.ts";
-import type { StrategyModule } from "./types.ts";
+import type { BacktestSchedule, StrategyModule } from "./types.ts";
 
 // In compiled binaries, import.meta.url points to /$bunfs/root/ (virtual FS).
 // Fall back to process.execPath to find the real strategies directory on disk.
@@ -19,6 +21,29 @@ const metaDir = new URL(".", import.meta.url).pathname;
 const STRATEGIES_DIR = metaDir.startsWith("/$bunfs")
 	? join(dirname(process.execPath), "src", "strategies")
 	: metaDir;
+
+// Config paths for getBacktestSchedule (backtest runs from source, not compiled binary)
+const rootEmissionConfigPath = new URL(
+	"./root-emission/config.yaml",
+	import.meta.url,
+).pathname;
+const smaStoplossConfigPath = new URL(
+	"./sma-stoploss/config.yaml",
+	import.meta.url,
+).pathname;
+
+function getRootEmissionBacktestSchedule(): BacktestSchedule {
+	const config = loadRootEmissionConfig(rootEmissionConfigPath);
+	return { type: "cron", cronSchedule: config.schedule.cronSchedule };
+}
+
+function getSmaStoplossBacktestSchedule(): BacktestSchedule {
+	const config = loadSmaStoplossConfig(smaStoplossConfigPath);
+	return {
+		type: "block-interval",
+		intervalBlocks: config.schedule.rebalanceIntervalBlocks,
+	};
+}
 
 // Static registry so Bun can bundle strategy code into the compiled binary.
 // Dynamic import() resolves against /$bunfs/ in compiled mode and fails.
@@ -31,12 +56,14 @@ const strategyRegistry: Record<string, StrategyModule> = {
 		getStrategyTargets: rootEmission,
 		createRunner: rootEmissionRunner,
 		createBacktest: rootEmissionBacktest,
+		getBacktestSchedule: getRootEmissionBacktestSchedule,
 	},
 	"sma-stoploss": {
 		getStrategyTargets: smaStoploss,
 		createRunner: smaStoplossRunner,
 		preparePreview: smaStoplossPreview,
 		createBacktest: smaStoplossBacktest,
+		getBacktestSchedule: getSmaStoplossBacktestSchedule,
 	},
 };
 

@@ -91,15 +91,15 @@ If all non-root subnets fail the gates, the strategy allocates **100% to root**.
 
 #### `cronSchedule: "0 */12 * * *"`
 
-How often the rebalancer runs.
+Cron expression (evaluated in **UTC**) that controls how often the rebalancer runs.
 
-- **Current value**: every 12 hours
+- **Current value**: every 12 hours (midnight and noon UTC)
 - **Rationale**: emission yields change slowly (they're based on on-chain emission rates and market caps). Checking twice daily is sufficient to capture meaningful shifts.
 - **Assessment**: ✅ well-calibrated
 
 #### `staleTimeoutMinutes: 5`
 
-Maximum execution time before timeout.
+Maximum execution time (in minutes) before stale warning.
 
 - **Current value**: 5 minutes
 - **Assessment**: ✅ reasonable
@@ -225,7 +225,7 @@ Additive yield bonus for held subnets.
 | **Data source** | On-chain only | On-chain only | On-chain (leader) |
 | **Selection signal** | Emission yield | SMA crossover momentum + emission yield | Leader portfolio |
 | **Allocation** | Fixed split (65/35) | Equal-weight | Leader shares |
-| **Frequency** | Every 12h | Every 4h | Event-driven |
+| **Frequency** | Cron (every 12h UTC) | Every 1200 blocks (~4h) | Event-driven |
 | **Risk profile** | Conservative | Moderate | Mirrors leader |
 | **Root exposure** | Always 65%+ | Only if no momentum | If leader holds root |
 | **Best for** | Capital preservation | Trend-following | Passive mirroring |
