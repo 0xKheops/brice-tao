@@ -413,8 +413,14 @@ for (const meta of blockMetas) {
 	const heldNetuids = getHeldNetuids();
 
 	if (!shouldRebalance(meta.blockNumber, meta.timestamp)) {
-		strategy.observe(snapshots, meta.blockNumber, meta.timestamp, heldNetuids);
-		continue;
+		const result = strategy.observe(
+			snapshots,
+			meta.blockNumber,
+			meta.timestamp,
+			heldNetuids,
+		);
+		if (!result.needsRebalance) continue;
+		// Stop-loss (or similar) triggered — fall through to immediate rebalance
 	}
 
 	// Rebalance tick
@@ -446,32 +452,45 @@ for (const meta of blockMetas) {
 		}
 	}
 
-	// 2. Rebalance: compute target TAO values and adjust
+	// 2. Compute diffs, execute all sells first, then buys
+	const diffs: Array<{
+		netuid: number;
+		diff: bigint;
+		price: bigint;
+		name: string;
+	}> = [];
 	for (const target of targets) {
 		const price = priceMap.get(target.netuid) ?? 0n;
 		const targetTao =
 			(totalValue * BigInt(Math.round(target.share * 1e9))) / 1_000_000_000n;
 		const currentPos = positions.get(target.netuid);
 		const currentTao = currentPos ? alphaToTao(currentPos.alpha, price) : 0n;
+		diffs.push({
+			netuid: target.netuid,
+			diff: targetTao - currentTao,
+			price,
+			name: nameMap.get(target.netuid) ?? "?",
+		});
+	}
 
-		const diff = targetTao - currentTao;
-		const name = nameMap.get(target.netuid) ?? "?";
+	const MIN_TRADE = TAO / 100n;
 
-		// Skip tiny adjustments (< 0.01 τ)
-		const MIN_TRADE = TAO / 100n;
-		if (diff > MIN_TRADE) {
-			buy(target.netuid, diff, price, meta.blockNumber, meta.timestamp, name);
-		} else if (diff < -MIN_TRADE) {
-			sellPartial(
-				target.netuid,
-				-diff,
-				price,
-				meta.blockNumber,
-				meta.timestamp,
-				name,
-			);
+	// Sells first — free up capital
+	for (const { netuid, diff, price, name } of diffs) {
+		if (diff < -MIN_TRADE) {
+			sellPartial(netuid, -diff, price, meta.blockNumber, meta.timestamp, name);
 		}
 	}
+
+	// Then buys — use freed capital
+	for (const { netuid, diff, price, name } of diffs) {
+		if (diff > MIN_TRADE) {
+			buy(netuid, diff, price, meta.blockNumber, meta.timestamp, name);
+		}
+	}
+
+	// Post-trade hook: let strategy update state for newly opened positions
+	strategy.afterRebalance?.(snapshots, meta.blockNumber, getHeldNetuids());
 
 	rebalanceCount++;
 }

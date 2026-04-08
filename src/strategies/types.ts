@@ -36,6 +36,11 @@ export interface BacktestStep {
 	targets: StrategyTarget[];
 }
 
+/** Result of an observe() call — signals whether an immediate rebalance is needed */
+export interface ObserveResult {
+	needsRebalance: boolean;
+}
+
 /**
  * Stateful backtest strategy that can be stepped through historical snapshots.
  * Created by a strategy's `createBacktest()` factory.
@@ -48,14 +53,18 @@ export interface BacktestStrategy {
 	/**
 	 * Update internal state (price samples, stop-losses) without generating
 	 * targets. Called at every DB snapshot between rebalance ticks.
-	 * Stateless strategies can implement this as a no-op.
+	 * Stateless strategies can return `{ needsRebalance: false }`.
+	 *
+	 * Return `{ needsRebalance: true }` when an immediate rebalance is needed
+	 * (e.g. a stop-loss triggered). The backtest loop will call `step()` on
+	 * the same snapshot to execute the rebalance.
 	 */
 	observe(
 		snapshots: SubnetSnapshot[],
 		blockNumber: number,
 		timestamp: number,
 		heldNetuids: Set<number>,
-	): void;
+	): ObserveResult;
 
 	/**
 	 * Observe the current snapshot and generate rebalance targets.
@@ -68,6 +77,18 @@ export interface BacktestStrategy {
 		timestamp: number,
 		heldNetuids: Set<number>,
 	): BacktestStep;
+
+	/**
+	 * Optional hook called after the backtest loop executes trades for a
+	 * rebalance step. Use this to initialize state for newly opened
+	 * positions (e.g. seed stop-losses at entry price).
+	 * Stateless strategies can omit this.
+	 */
+	afterRebalance?(
+		snapshots: SubnetSnapshot[],
+		blockNumber: number,
+		newHeldNetuids: Set<number>,
+	): void;
 }
 
 // ---------------------------------------------------------------------------

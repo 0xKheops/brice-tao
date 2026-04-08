@@ -1,6 +1,10 @@
 import type { SubnetSnapshot } from "../../history/types.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
-import type { BacktestStep, BacktestStrategy } from "../types.ts";
+import type {
+	BacktestStep,
+	BacktestStrategy,
+	ObserveResult,
+} from "../types.ts";
 import { loadSmaStoplossConfig } from "./config.ts";
 import type { SubnetOnChainData } from "./fetchSubnetData.ts";
 import { scoreSubnets } from "./scoreSubnets.ts";
@@ -84,7 +88,8 @@ export function createBacktest(): BacktestStrategy {
 		snapshots: SubnetSnapshot[],
 		blockNumber: number,
 		heldNetuids: Set<number>,
-	) {
+	): boolean {
+		let anyTriggered = false;
 		const priceMap = new Map(
 			snapshots
 				.filter((s) => s.spotPrice > 0n)
@@ -128,18 +133,28 @@ export function createBacktest(): BacktestStrategy {
 					exitPrice: currentPrice,
 				});
 				stopLosses.delete(netuid);
+				anyTriggered = true;
 			}
 		}
+
+		return anyTriggered;
 	}
+
+	// Track last observed block to prevent double-processing when
+	// step() is called immediately after observe() on the same snapshot.
+	let lastObservedBlock = -1;
 
 	function doObserve(
 		snapshots: SubnetSnapshot[],
 		blockNumber: number,
 		heldNetuids: Set<number>,
-	) {
+	): boolean {
+		if (blockNumber === lastObservedBlock) return false;
+		lastObservedBlock = blockNumber;
+
 		samplePrices(snapshots, blockNumber);
 		expireCooldowns(blockNumber);
-		updateStopLosses(snapshots, blockNumber, heldNetuids);
+		return updateStopLosses(snapshots, blockNumber, heldNetuids);
 	}
 
 	return {
@@ -148,8 +163,9 @@ export function createBacktest(): BacktestStrategy {
 			blockNumber: number,
 			_timestamp: number,
 			heldNetuids: Set<number>,
-		): void {
-			doObserve(snapshots, blockNumber, heldNetuids);
+		): ObserveResult {
+			const stopTriggered = doObserve(snapshots, blockNumber, heldNetuids);
+			return { needsRebalance: stopTriggered };
 		},
 
 		step(
@@ -195,6 +211,35 @@ export function createBacktest(): BacktestStrategy {
 			}
 
 			return { targets };
+		},
+
+		afterRebalance(
+			snapshots: SubnetSnapshot[],
+			_blockNumber: number,
+			newHeldNetuids: Set<number>,
+		): void {
+			const priceMap = new Map(
+				snapshots
+					.filter((s) => s.spotPrice > 0n)
+					.map((s) => [s.netuid, s.spotPrice]),
+			);
+
+			// Remove stop-losses for subnets no longer held
+			for (const netuid of stopLosses.keys()) {
+				if (!newHeldNetuids.has(netuid)) {
+					stopLosses.delete(netuid);
+				}
+			}
+
+			// Seed stop-losses for newly opened positions
+			for (const netuid of newHeldNetuids) {
+				if (netuid === 0 || stopLosses.has(netuid)) continue;
+				const currentPrice = priceMap.get(netuid);
+				if (!currentPrice || currentPrice <= 0n) continue;
+				const stopPrice =
+					(currentPrice * BigInt(100 - config.strategy.stopLossPercent)) / 100n;
+				stopLosses.set(netuid, { highWaterMark: currentPrice, stopPrice });
+			}
 		},
 	};
 }

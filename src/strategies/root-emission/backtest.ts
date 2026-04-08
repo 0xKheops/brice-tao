@@ -39,6 +39,7 @@ export function createBacktest(): BacktestStrategy {
 	return {
 		observe() {
 			// Stateless strategy — nothing to update between rebalances
+			return { needsRebalance: false };
 		},
 
 		step(
