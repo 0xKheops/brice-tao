@@ -4,6 +4,7 @@ import { createBittensorClient } from "../src/api/createClient.ts";
 import { getBlockHash, isZeroHash } from "../src/api/rpcThrottle.ts";
 import {
 	BLOCK_INTERVAL,
+	OLDEST_BACKFILL_BLOCK,
 	openHistoryDatabase,
 	snapToGrid,
 } from "../src/history/index.ts";
@@ -103,10 +104,18 @@ regularClient.destroy();
 // ---------------------------------------------------------------------------
 // Compute block range
 // ---------------------------------------------------------------------------
-const rangeStart = snapToGrid(
+const rawStart = snapToGrid(
 	fromBlock ?? Math.max(0, currentBlock - (days ?? 0) * BLOCKS_PER_DAY),
 );
+const rangeStart = Math.max(rawStart, snapToGrid(OLDEST_BACKFILL_BLOCK));
 const rangeEnd = snapToGrid(currentBlock);
+
+if (rawStart < rangeStart) {
+	console.warn(
+		`⚠ Requested start block ${rawStart} is before the oldest backfillable block ${OLDEST_BACKFILL_BLOCK} ` +
+			`(runtime APIs did not exist before this). Clamping to ${rangeStart}.`,
+	);
+}
 
 const allGridBlocks: number[] = [];
 for (let b = rangeStart; b <= rangeEnd; b += BLOCK_INTERVAL) {

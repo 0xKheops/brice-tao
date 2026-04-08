@@ -1,6 +1,7 @@
 export {
 	DB_HISTORY_BLOCK_INTERVAL as BLOCK_INTERVAL,
 	isDbHistoryBlock as isGridBlock,
+	OLDEST_BACKFILL_BLOCK,
 	snapToDbHistory as snapToGrid,
 } from "./constants.ts";
 export type { HistoryDatabase } from "./db.ts";
