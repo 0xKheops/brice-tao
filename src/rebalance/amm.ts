@@ -45,12 +45,16 @@ export interface SwapResult {
  *   poolFee = taoAmount × FEE_NUM / FEE_DENOM
  *   netTao  = taoAmount − poolFee
  *   alphaOut = alphaReserve × netTao / (taoReserve + netTao)
+ *
+ * When `skipFee` is true, the pool fee is not deducted (models the destination
+ * leg of an on-chain `swap_stake` where `drop_fee_destination = true`).
  */
 export function swapTaoForAlpha(
 	taoAmount: bigint,
 	taoReserve: bigint,
 	alphaReserve: bigint,
 	netuid: number,
+	skipFee = false,
 ): SwapResult {
 	if (taoAmount <= 0n || taoReserve <= 0n || alphaReserve <= 0n) {
 		return { amountOut: 0n, poolFee: 0n };
@@ -60,7 +64,9 @@ export function swapTaoForAlpha(
 		return { amountOut: taoAmount, poolFee: 0n };
 	}
 
-	const poolFee = (taoAmount * POOL_FEE_NUMERATOR) / POOL_FEE_DENOMINATOR;
+	const poolFee = skipFee
+		? 0n
+		: (taoAmount * POOL_FEE_NUMERATOR) / POOL_FEE_DENOMINATOR;
 	const netTao = taoAmount - poolFee;
 	if (netTao <= 0n) {
 		return { amountOut: 0n, poolFee };

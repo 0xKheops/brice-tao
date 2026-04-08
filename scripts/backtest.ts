@@ -15,6 +15,9 @@
  * Fee model:
  * - Pool fee: 33/65535 ≈ 0.05% on input (matches on-chain default FeeRate)
  * - Fixed transaction fee per trade (TX_FEE_RAO), skipped for SN0
+ * - Sell → buy rotations pay ONE pool fee (on the sell leg), matching on-chain
+ *   `swap_stake` which drops the fee on the destination leg. Buys from pre-
+ *   existing free balance pay the fee normally (`add_stake` model).
  *
  * Schedule detection:
  * - Reads the strategy's native schedule via `getBacktestSchedule()`.
@@ -214,7 +217,7 @@ console.log(
 	`\n📊 Backtest: ${strategyName} (AMM-simulated, no emission accrual)`,
 );
 console.log(
-	`   Fee model: constant-product AMM (33/65535 pool fee) + ${formatTao(TX_FEE_RAO)} τ tx fee per trade`,
+	`   Fee model: constant-product AMM (33/65535 pool fee, one per swap) + ${formatTao(TX_FEE_RAO)} τ tx fee`,
 );
 console.log(`   SN0: 1:1 conversion, zero fees (stable mechanism)`);
 console.log(`   Initial capital: ${initialTao} τ`);
@@ -240,6 +243,7 @@ function alphaToTao(alpha: bigint, spotPrice: bigint): bigint {
 
 interface Position {
 	alpha: bigint;
+	costBasis: bigint;
 }
 
 interface PoolReserves {
@@ -251,6 +255,17 @@ let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
 let totalFeesPaid = 0n;
+
+/**
+ * Fee-free budget — tracks TAO received from non-SN0 sells within the current
+ * rebalance tick. On-chain `swap_stake` charges pool fee on the origin leg only,
+ * so buy legs funded by sell proceeds skip the fee. SN0 sells do NOT contribute
+ * because root→SN swaps charge fee on the destination (buy) leg instead.
+ *
+ * Reset to 0 at the start of each rebalance tick.
+ * SN0 buys never consume from this budget (they are always fee-free).
+ */
+let feeFreeBudget = 0n;
 
 /**
  * Virtual pool reserves — tracks AMM state within a rebalance tick.
@@ -301,24 +316,68 @@ function formatTime(timestampMs: number): string {
 	return new Date(timestampMs).toISOString().replace("T", " ").slice(0, 19);
 }
 
-function logTrade(
-	side: "BUY " | "SELL",
+const ANSI_GREEN = "\x1b[32m";
+const ANSI_RED = "\x1b[31m";
+const ANSI_DIM = "\x1b[2m";
+const ANSI_RESET = "\x1b[0m";
+
+interface TradeLog {
+	side: "sell" | "buy";
+	line: string;
+}
+
+const tickTrades: TradeLog[] = [];
+
+function formatPnl(pnlPct: number | null): string {
+	if (pnlPct === null) return "";
+	const sign = pnlPct >= 0 ? "+" : "";
+	const color = pnlPct >= 0 ? ANSI_GREEN : ANSI_RED;
+	return `  ${color}PnL: ${sign}${pnlPct.toFixed(2)}%${ANSI_RESET}`;
+}
+
+function logSell(
 	netuid: number,
 	subnetName: string,
-	taoAmount: bigint,
-	blockNumber: number,
-	timestamp: number,
+	taoReceived: bigint,
+	pnlPct: number | null,
 ) {
+	tickTrades.push({
+		side: "sell",
+		line: `  SELL  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoReceived).padStart(10)} τ${formatPnl(pnlPct)}`,
+	});
+}
+
+function logBuy(netuid: number, subnetName: string, taoSpent: bigint) {
+	tickTrades.push({
+		side: "buy",
+		line: `  BUY   SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoSpent).padStart(10)} τ`,
+	});
+}
+
+function flushTrades(blockNumber: number, timestamp: number) {
+	if (tickTrades.length === 0) return;
+
+	const sells = tickTrades.filter((t) => t.side === "sell");
+	const buys = tickTrades.filter((t) => t.side === "buy");
+
 	console.log(
-		`  ${side}  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoAmount).padStart(12)} τ  @ ${formatTime(timestamp)}  #${blockNumber}`,
+		`${ANSI_DIM}── Rebalance  ${formatTime(timestamp)}  #${blockNumber} ──${ANSI_RESET}`,
 	);
+	for (const s of sells) console.log(s.line);
+	if (sells.length > 0 && buys.length > 0) {
+		console.log(`  ${ANSI_DIM}  ──→${ANSI_RESET}`);
+	}
+	for (const b of buys) console.log(b.line);
+	console.log();
+
+	tickTrades.length = 0;
 }
 
 function sellAll(
 	netuid: number,
 	_spotPrice: bigint,
-	blockNumber: number,
-	timestamp: number,
+	_blockNumber: number,
+	_timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
@@ -346,9 +405,16 @@ function sellAll(
 		reserves.taoIn -= swap.amountOut;
 	}
 
+	const pnlPct =
+		pos.costBasis > 0n
+			? Number(((taoReceived - pos.costBasis) * 10000n) / pos.costBasis) / 100
+			: null;
+
 	free += taoReceived;
 	totalFeesPaid += feeInTao + txFee;
-	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
+	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
+	if (!isSN0) feeFreeBudget += taoReceived;
+	logSell(netuid, subnetName, taoReceived, pnlPct);
 	positions.delete(netuid);
 	totalTrades++;
 }
@@ -357,8 +423,8 @@ function sellPartial(
 	netuid: number,
 	taoAmount: bigint,
 	_spotPrice: bigint,
-	blockNumber: number,
-	timestamp: number,
+	_blockNumber: number,
+	_timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
@@ -404,11 +470,25 @@ function sellPartial(
 		reserves.taoIn -= swap.amountOut;
 	}
 
+	// Compute proportional cost basis and PnL before modifying position
+	const proportionalCostBasis =
+		pos.alpha > 0n ? (pos.costBasis * alphaToSell) / pos.alpha : 0n;
+	const pnlPct =
+		proportionalCostBasis > 0n
+			? Number(
+					((taoReceived - proportionalCostBasis) * 10000n) /
+						proportionalCostBasis,
+				) / 100
+			: null;
+
 	pos.alpha -= alphaToSell;
+	pos.costBasis -= proportionalCostBasis;
 	free += taoReceived;
 	totalFeesPaid += feeInTao + txFee;
+	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
+	if (!isSN0) feeFreeBudget += taoReceived;
 	if (pos.alpha <= 0n) positions.delete(netuid);
-	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
+	logSell(netuid, subnetName, taoReceived, pnlPct);
 	totalTrades++;
 }
 
@@ -416,8 +496,8 @@ function buy(
 	netuid: number,
 	taoAmount: bigint,
 	_spotPrice: bigint,
-	blockNumber: number,
-	timestamp: number,
+	_blockNumber: number,
+	_timestamp: number,
 	subnetName: string,
 ) {
 	if (taoAmount <= 0n) return;
@@ -425,32 +505,72 @@ function buy(
 	if (actual <= 0n) return;
 
 	const isSN0 = netuid === 0;
-	const txFee = isSN0 ? 0n : TX_FEE_RAO;
-	const netTao = actual - txFee;
-	if (netTao <= 0n) return;
-
 	const reserves = getReserves(netuid);
-	const swap = swapTaoForAlpha(
-		netTao,
-		reserves.taoIn,
-		reserves.alphaIn,
-		netuid,
-	);
-	if (swap.amountOut <= 0n) return;
 
-	// Update virtual reserves
-	if (!isSN0) {
-		const netTaoIn = netTao - swap.poolFee;
-		reserves.taoIn += netTaoIn;
+	// SN0: always fee-free, never consumes fee-free budget
+	if (isSN0) {
+		const swap = swapTaoForAlpha(actual, reserves.taoIn, reserves.alphaIn, 0);
+		if (swap.amountOut <= 0n) return;
+		free -= actual;
+		const pos = positions.get(0) ?? { alpha: 0n, costBasis: 0n };
+		pos.alpha += swap.amountOut;
+		pos.costBasis += actual;
+		positions.set(0, pos);
+		logBuy(0, subnetName, actual);
+		totalTrades++;
+		return;
+	}
+
+	// Determine fee-free portion from sell proceeds (swap_stake destination leg).
+	// On-chain swap_stake charges pool fee + tx fee on the origin leg only;
+	// the destination leg swaps fee-free.
+	const feeFreeAmount = actual < feeFreeBudget ? actual : feeFreeBudget;
+	const feeChargedAmount = actual - feeFreeAmount;
+	feeFreeBudget -= feeFreeAmount;
+
+	let totalAlphaOut = 0n;
+
+	// Fee-free portion: no pool fee, no tx fee (swap_stake destination leg)
+	if (feeFreeAmount > 0n) {
+		const swap = swapTaoForAlpha(
+			feeFreeAmount,
+			reserves.taoIn,
+			reserves.alphaIn,
+			netuid,
+			true,
+		);
+		totalAlphaOut += swap.amountOut;
+		// Full amount enters pool (no fee deducted)
+		reserves.taoIn += feeFreeAmount;
 		reserves.alphaIn -= swap.amountOut;
 	}
 
+	// Fee-charged portion: pool fee + tx fee (add_stake from free balance)
+	if (feeChargedAmount > 0n) {
+		const txFee = TX_FEE_RAO;
+		const netTao = feeChargedAmount - txFee;
+		if (netTao > 0n) {
+			const swap = swapTaoForAlpha(
+				netTao,
+				reserves.taoIn,
+				reserves.alphaIn,
+				netuid,
+			);
+			totalAlphaOut += swap.amountOut;
+			reserves.taoIn += netTao - swap.poolFee;
+			reserves.alphaIn -= swap.amountOut;
+			totalFeesPaid += swap.poolFee + txFee;
+		}
+	}
+
+	if (totalAlphaOut <= 0n) return;
+
 	free -= actual;
-	totalFeesPaid += swap.poolFee + txFee;
-	const pos = positions.get(netuid) ?? { alpha: 0n };
-	pos.alpha += swap.amountOut;
+	const pos = positions.get(netuid) ?? { alpha: 0n, costBasis: 0n };
+	pos.alpha += totalAlphaOut;
+	pos.costBasis += actual;
 	positions.set(netuid, pos);
-	logTrade("BUY ", netuid, subnetName, actual, blockNumber, timestamp);
+	logBuy(netuid, subnetName, actual);
 	totalTrades++;
 }
 
@@ -538,6 +658,8 @@ for (const meta of blockMetas) {
 	// Initialize virtual reserves from this block's on-chain snapshot.
 	// Reserves are updated after each trade within this rebalance tick.
 	initVirtualReserves(snapshots);
+	// Reset fee-free budget for this tick (accumulates from sells)
+	feeFreeBudget = 0n;
 
 	// Build target set
 	const targetSet = new Map(targets.map((t) => [t.netuid, t.share]));
@@ -596,6 +718,7 @@ for (const meta of blockMetas) {
 	// Post-trade hook: let strategy update state for newly opened positions
 	strategy.afterRebalance?.(snapshots, meta.blockNumber, getHeldNetuids());
 
+	flushTrades(meta.blockNumber, meta.timestamp);
 	rebalanceCount++;
 }
 

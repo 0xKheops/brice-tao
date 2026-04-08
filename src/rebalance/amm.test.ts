@@ -73,6 +73,19 @@ describe("swapTaoForAlpha", () => {
 		const expectedFee = (amount * POOL_FEE_NUMERATOR) / POOL_FEE_DENOMINATOR;
 		expect(poolFee).toBe(expectedFee);
 	});
+
+	test("skipFee: no fee deducted, more alpha out", () => {
+		const tao = 100n * TAO;
+		const taoR = 10_000n * TAO;
+		const alphaR = 500_000n * TAO;
+		const withFee = swapTaoForAlpha(tao, taoR, alphaR, 1);
+		const noFee = swapTaoForAlpha(tao, taoR, alphaR, 1, true);
+		expect(noFee.poolFee).toBe(0n);
+		expect(noFee.amountOut).toBeGreaterThan(withFee.amountOut);
+		// Full tao enters pool → alphaOut = alphaR * tao / (taoR + tao)
+		const expected = (alphaR * tao) / (taoR + tao);
+		expect(noFee.amountOut).toBe(expected);
+	});
 });
 
 describe("swapAlphaForTao", () => {
