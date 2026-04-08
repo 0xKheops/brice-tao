@@ -27,7 +27,7 @@
  *   specific schedule regardless of strategy config.
  *
  * Usage:
- *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--backfill]
+ *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--observe-gap <blocks>] [--backfill]
  */
 
 import { join } from "node:path";
@@ -94,6 +94,9 @@ const cliIntervalBlocks = process.argv.includes("--interval-blocks")
 	? parseIntArg("--interval-blocks", 0)
 	: undefined;
 const cliCron = parseStringArg("--cron");
+const cliObserveGap = process.argv.includes("--observe-gap")
+	? parseIntArg("--observe-gap", 0)
+	: undefined;
 
 if (cliIntervalBlocks !== undefined && cliCron !== undefined) {
 	console.error("Cannot specify both --interval-blocks and --cron");
@@ -718,6 +721,14 @@ const initialValue = free;
 const shouldRebalance = buildTrigger(schedule, firstBlock.timestamp);
 let rebalanceCount = 0;
 
+// Model realistic execution latency: after any rebalance, block observe-triggered
+// rebalances for a minimum gap. Matches the live runner's inflightRun guard which
+// prevents concurrent rebalance cycles. Pending observe triggers are deferred and
+// execute as soon as the gap expires.
+const observeGap = cliObserveGap ?? schedule.minObserveRebalanceGapBlocks ?? 0;
+let lastRebalanceBlock = 0;
+let pendingObserveRebalance = false;
+
 for (const meta of blockMetas) {
 	const snapshots = db.getSnapshotsAtBlock(meta.blockNumber);
 	if (snapshots.length === 0) continue;
@@ -726,16 +737,24 @@ for (const meta of blockMetas) {
 	updateLastKnownPrices(snapshots);
 
 	const heldNetuids = getHeldNetuids();
+	const isScheduled = shouldRebalance(meta.blockNumber, meta.timestamp);
+	const gapExpired =
+		observeGap <= 0 || meta.blockNumber - lastRebalanceBlock >= observeGap;
 
-	if (!shouldRebalance(meta.blockNumber, meta.timestamp)) {
+	if (!isScheduled) {
 		const result = strategy.observe(
 			snapshots,
 			meta.blockNumber,
 			meta.timestamp,
 			heldNetuids,
 		);
-		if (!result.needsRebalance) continue;
-		// Stop-loss (or similar) triggered — fall through to immediate rebalance
+		if (result.needsRebalance) {
+			pendingObserveRebalance = true;
+		}
+		// Execute pending observe-triggered rebalance only after gap expires
+		if (!pendingObserveRebalance || !gapExpired) continue;
+		pendingObserveRebalance = false;
+		// Fall through to immediate rebalance
 	}
 
 	// Rebalance tick
@@ -862,6 +881,8 @@ for (const meta of blockMetas) {
 
 	flushTrades(meta.blockNumber, meta.timestamp);
 	rebalanceCount++;
+	lastRebalanceBlock = meta.blockNumber;
+	pendingObserveRebalance = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -888,6 +909,9 @@ console.log("  BACKTEST SUMMARY (AMM-simulated, no emission accrual)");
 console.log("═".repeat(60));
 console.log(`  Strategy:         ${strategyName}`);
 console.log(`  Schedule:         ${scheduleLabel}`);
+if (observeGap > 0) {
+	console.log(`  Observe gap:      ${observeGap} blocks`);
+}
 console.log(`  Period:           ${durationDays.toFixed(1)} days`);
 console.log(`  Rebalances:       ${rebalanceCount}`);
 console.log(`  Total trades:     ${totalTrades}`);

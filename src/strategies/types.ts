@@ -114,12 +114,24 @@ export interface AfterRebalanceContext {
 export interface CronBacktestSchedule {
 	type: "cron";
 	cronSchedule: string;
+	/**
+	 * Minimum blocks between observe-triggered (non-scheduled) rebalances.
+	 * Models realistic execution time that prevents instant cascade effects
+	 * in the backtest. Scheduled rebalances are not affected.
+	 */
+	minObserveRebalanceGapBlocks?: number;
 }
 
 /** Block-modulo schedule for backtesting */
 export interface BlockIntervalBacktestSchedule {
 	type: "block-interval";
 	intervalBlocks: number;
+	/**
+	 * Minimum blocks between observe-triggered (non-scheduled) rebalances.
+	 * Models realistic execution time that prevents instant cascade effects
+	 * in the backtest. Scheduled rebalances are not affected.
+	 */
+	minObserveRebalanceGapBlocks?: number;
 }
 
 export type BacktestSchedule =
