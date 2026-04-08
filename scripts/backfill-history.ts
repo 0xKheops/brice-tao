@@ -43,14 +43,39 @@ async function withTimeout<T>(
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 const daysIdx = process.argv.indexOf("--days");
-if (daysIdx === -1 || !process.argv[daysIdx + 1]) {
-	console.error("Usage: bun backfill -- --days <number>");
+const fromIdx = process.argv.indexOf("--from");
+
+if (daysIdx === -1 && fromIdx === -1) {
+	console.error(
+		"Usage: bun backfill -- --days <number> [--from <block_number>]",
+	);
 	process.exit(1);
 }
-const days = Number.parseInt(process.argv[daysIdx + 1] as string, 10);
-if (Number.isNaN(days) || days <= 0) {
-	console.error("Error: --days must be a positive integer");
-	process.exit(1);
+
+let days: number | undefined;
+if (daysIdx !== -1) {
+	if (!process.argv[daysIdx + 1]) {
+		console.error("Error: --days requires a value");
+		process.exit(1);
+	}
+	days = Number.parseInt(process.argv[daysIdx + 1] as string, 10);
+	if (Number.isNaN(days) || days <= 0) {
+		console.error("Error: --days must be a positive integer");
+		process.exit(1);
+	}
+}
+
+let fromBlock: number | undefined;
+if (fromIdx !== -1) {
+	if (!process.argv[fromIdx + 1]) {
+		console.error("Error: --from requires a block number");
+		process.exit(1);
+	}
+	fromBlock = Number.parseInt(process.argv[fromIdx + 1] as string, 10);
+	if (Number.isNaN(fromBlock) || fromBlock < 0) {
+		console.error("Error: --from must be a non-negative integer");
+		process.exit(1);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +104,7 @@ regularClient.destroy();
 // Compute block range
 // ---------------------------------------------------------------------------
 const rangeStart = snapToGrid(
-	Math.max(0, currentBlock - days * BLOCKS_PER_DAY),
+	fromBlock ?? Math.max(0, currentBlock - (days ?? 0) * BLOCKS_PER_DAY),
 );
 const rangeEnd = snapToGrid(currentBlock);
 
@@ -109,8 +134,10 @@ try {
 
 const missingBlocks = allGridBlocks.filter((b) => !existingSet.has(b));
 
+const rangeLabel =
+	fromBlock !== undefined ? `from block ${fromBlock}` : `${days} days`;
 console.log(
-	`Range: block ${rangeStart} → ${rangeEnd} (${days} days, ${allGridBlocks.length} grid blocks)`,
+	`Range: block ${rangeStart} → ${rangeEnd} (${rangeLabel}, ${allGridBlocks.length} grid blocks)`,
 );
 console.log(
 	`Already in DB: ${existingSet.size} | Missing: ${missingBlocks.length}`,
