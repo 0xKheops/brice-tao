@@ -41,6 +41,7 @@ import {
 	swapTaoForAlpha,
 } from "../src/rebalance/amm.ts";
 import { formatTao, TAO } from "../src/rebalance/tao.ts";
+import type { StrategyTarget } from "../src/rebalance/types.ts";
 import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
 import type { BacktestSchedule } from "../src/strategies/types.ts";
 
@@ -238,6 +239,58 @@ function alphaToTao(alpha: bigint, spotPrice: bigint): bigint {
 }
 
 // ---------------------------------------------------------------------------
+// Target validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate and sanitize strategy targets. Warns on violations and normalizes
+ * to prevent silent over-allocation from buggy strategies.
+ */
+function validateTargets(
+	targets: StrategyTarget[],
+	blockNumber: number,
+): StrategyTarget[] {
+	if (targets.length === 0) return targets;
+
+	// Check for duplicate netuids
+	const seen = new Set<number>();
+	const deduped: StrategyTarget[] = [];
+	for (const t of targets) {
+		if (seen.has(t.netuid)) {
+			console.warn(
+				`  ⚠ Duplicate target SN${t.netuid} at #${blockNumber} — keeping first occurrence`,
+			);
+			continue;
+		}
+		seen.add(t.netuid);
+		deduped.push(t);
+	}
+
+	// Check for invalid shares
+	const valid: StrategyTarget[] = [];
+	for (const t of deduped) {
+		if (!Number.isFinite(t.share) || t.share < 0) {
+			console.warn(
+				`  ⚠ Invalid share ${t.share} for SN${t.netuid} at #${blockNumber} — skipping`,
+			);
+			continue;
+		}
+		valid.push(t);
+	}
+
+	// Check total share
+	const totalShare = valid.reduce((sum, t) => sum + t.share, 0);
+	if (totalShare > 1.001) {
+		console.warn(
+			`  ⚠ Target shares sum to ${totalShare.toFixed(4)} at #${blockNumber} — normalizing to 1.0`,
+		);
+		return valid.map((t) => ({ ...t, share: t.share / totalShare }));
+	}
+
+	return valid;
+}
+
+// ---------------------------------------------------------------------------
 // Virtual portfolio
 // ---------------------------------------------------------------------------
 
@@ -255,6 +308,13 @@ let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
 let totalFeesPaid = 0n;
+
+/**
+ * Last-known prices for each subnet — updated every snapshot.
+ * Used to value positions in subnets that disappear from later snapshots
+ * (delisted, data gaps). Prevents phantom zero-value zombie positions.
+ */
+const lastKnownPrices: Map<number, bigint> = new Map();
 
 /**
  * Fee-free budget — tracks TAO received from non-SN0 sells within the current
@@ -305,7 +365,30 @@ function portfolioValue(priceMap: Map<number, bigint>): bigint {
 function buildPriceMap(
 	snapshots: Array<{ netuid: number; spotPrice: bigint }>,
 ): Map<number, bigint> {
-	return new Map(snapshots.map((s) => [s.netuid, s.spotPrice]));
+	const map = new Map(snapshots.map((s) => [s.netuid, s.spotPrice]));
+
+	// Carry forward last-known prices for held subnets missing from this snapshot
+	for (const [netuid] of positions) {
+		if (!map.has(netuid)) {
+			const lastPrice = lastKnownPrices.get(netuid);
+			if (lastPrice && lastPrice > 0n) {
+				map.set(netuid, lastPrice);
+			}
+		}
+	}
+
+	return map;
+}
+
+/** Update last-known prices from current snapshot */
+function updateLastKnownPrices(
+	snapshots: Array<{ netuid: number; spotPrice: bigint }>,
+): void {
+	for (const s of snapshots) {
+		if (s.spotPrice > 0n) {
+			lastKnownPrices.set(s.netuid, s.spotPrice);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +474,10 @@ function sellAll(
 		reserves.alphaIn,
 		netuid,
 	);
+	// Fee accounting: on sells, the pool fee is denominated in alpha (the input).
+	// We use the output-delta method (taoOut_noFee − taoOut_withFee) to express it
+	// in TAO, which is more accurate than converting alpha fees via spot price.
+	// The buy side tracks swap.poolFee directly (already in TAO for the input token).
 	const feeInTao = isSN0
 		? 0n
 		: alphaFeeInTao(pos.alpha, reserves.taoIn, reserves.alphaIn, netuid);
@@ -456,6 +543,7 @@ function sellPartial(
 		reserves.alphaIn,
 		netuid,
 	);
+	// Fee accounting: output-delta method for alpha→TAO fee (see sellAll comment)
 	const feeInTao = isSN0
 		? 0n
 		: alphaFeeInTao(alphaToSell, reserves.taoIn, reserves.alphaIn, netuid);
@@ -609,10 +697,14 @@ function buildTrigger(
 		if (!nextScheduledAt) return false;
 		if (timestamp < nextScheduledAt.getTime()) return false;
 
-		// Fire! Advance to next cron tick.
-		// Use nextScheduledAt (not current timestamp) as reference to avoid
-		// skipping ticks that pile up during DB gaps.
-		const next = cron.nextRun(nextScheduledAt);
+		// Fire! Advance nextScheduledAt past the current timestamp to coalesce
+		// missed ticks after DB gaps into a single rebalance. Without this,
+		// a multi-day gap would produce rapid-fire rebalances (one per snapshot)
+		// burning unrealistic fees.
+		let next = cron.nextRun(nextScheduledAt);
+		while (next && next.getTime() <= timestamp) {
+			next = cron.nextRun(next);
+		}
 		nextScheduledAt = next;
 		return true;
 	};
@@ -630,6 +722,9 @@ for (const meta of blockMetas) {
 	const snapshots = db.getSnapshotsAtBlock(meta.blockNumber);
 	if (snapshots.length === 0) continue;
 
+	// Track prices for all observed subnets (carry-forward for missing data)
+	updateLastKnownPrices(snapshots);
+
 	const heldNetuids = getHeldNetuids();
 
 	if (!shouldRebalance(meta.blockNumber, meta.timestamp)) {
@@ -644,15 +739,31 @@ for (const meta of blockMetas) {
 	}
 
 	// Rebalance tick
-	const { targets } = strategy.step(
+	const { targets: rawTargets } = strategy.step(
 		snapshots,
 		meta.blockNumber,
 		meta.timestamp,
 		heldNetuids,
 	);
+	const targets = validateTargets(rawTargets, meta.blockNumber);
 
 	const priceMap = buildPriceMap(snapshots);
 	const nameMap = new Map(snapshots.map((s) => [s.netuid, s.name]));
+	const snapshotNetuids = new Set(snapshots.map((s) => s.netuid));
+
+	// Warn about held positions missing from this snapshot (delisted/data gap).
+	// These positions are valued using last-known prices (via buildPriceMap)
+	// but cannot be traded since we have no pool reserves for them.
+	for (const netuid of heldNetuids) {
+		if (!snapshotNetuids.has(netuid)) {
+			const lastPrice = lastKnownPrices.get(netuid);
+			console.warn(
+				`  ⚠ SN${netuid} missing from snapshot at #${meta.blockNumber}` +
+					` — position frozen (last price: ${lastPrice ? formatTao(alphaToTao(1n * TAO, lastPrice)) : "unknown"} τ/α)`,
+			);
+		}
+	}
+
 	const totalValue = portfolioValue(priceMap);
 
 	// Initialize virtual reserves from this block's on-chain snapshot.
@@ -709,14 +820,45 @@ for (const meta of blockMetas) {
 	}
 
 	// Then buys — use freed capital
+	// Snapshot pre-buy state to compute effective fill prices after execution
+	const preBuyAlpha = new Map<number, bigint>();
+	for (const { netuid, diff } of diffs) {
+		if (diff > MIN_TRADE) {
+			preBuyAlpha.set(netuid, positions.get(netuid)?.alpha ?? 0n);
+		}
+	}
+
 	for (const { netuid, diff, price, name } of diffs) {
 		if (diff > MIN_TRADE) {
 			buy(netuid, diff, price, meta.blockNumber, meta.timestamp, name);
 		}
 	}
 
+	// Compute effective fill prices for buys this tick (I96F32 scale).
+	// fillPrice = costBasis × 2^32 / alpha — accounts for AMM slippage.
+	const fillPrices = new Map<number, bigint>();
+	for (const [netuid, prevAlpha] of preBuyAlpha) {
+		const pos = positions.get(netuid);
+		if (!pos || pos.alpha <= prevAlpha) continue;
+		const boughtAlpha = pos.alpha - prevAlpha;
+		if (boughtAlpha > 0n) {
+			// Proportional cost basis for just the new alpha
+			const totalCost = pos.costBasis;
+			const prevCostBasis =
+				prevAlpha > 0n && pos.alpha > 0n
+					? (totalCost * prevAlpha) / pos.alpha
+					: 0n;
+			const buyCost = totalCost - prevCostBasis;
+			if (buyCost > 0n) {
+				fillPrices.set(netuid, (buyCost * F32) / boughtAlpha);
+			}
+		}
+	}
+
 	// Post-trade hook: let strategy update state for newly opened positions
-	strategy.afterRebalance?.(snapshots, meta.blockNumber, getHeldNetuids());
+	strategy.afterRebalance?.(snapshots, meta.blockNumber, getHeldNetuids(), {
+		fillPrices,
+	});
 
 	flushTrades(meta.blockNumber, meta.timestamp);
 	rebalanceCount++;

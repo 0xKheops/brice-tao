@@ -83,12 +83,27 @@ export interface BacktestStrategy {
 	 * rebalance step. Use this to initialize state for newly opened
 	 * positions (e.g. seed stop-losses at entry price).
 	 * Stateless strategies can omit this.
+	 *
+	 * @param context.fillPrices — effective entry prices (I96F32) for positions
+	 *   that were bought this tick, computed as `costBasis × 2^32 / alpha`.
+	 *   More accurate than spot prices when AMM slippage is significant.
 	 */
 	afterRebalance?(
 		snapshots: SubnetSnapshot[],
 		blockNumber: number,
 		newHeldNetuids: Set<number>,
+		context?: AfterRebalanceContext,
 	): void;
+}
+
+/** Context passed to afterRebalance with post-trade information */
+export interface AfterRebalanceContext {
+	/**
+	 * Effective entry prices (I96F32 scale) for positions bought this tick.
+	 * Derived from `costBasis × 2^32 / alpha` — accounts for AMM slippage.
+	 * Only contains entries for subnets where a buy was executed.
+	 */
+	fillPrices: Map<number, bigint>;
 }
 
 // ---------------------------------------------------------------------------

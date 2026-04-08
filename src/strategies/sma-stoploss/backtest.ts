@@ -1,6 +1,7 @@
 import type { SubnetSnapshot } from "../../history/types.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
 import type {
+	AfterRebalanceContext,
 	BacktestStep,
 	BacktestStrategy,
 	ObserveResult,
@@ -217,6 +218,7 @@ export function createBacktest(): BacktestStrategy {
 			snapshots: SubnetSnapshot[],
 			_blockNumber: number,
 			newHeldNetuids: Set<number>,
+			context?: AfterRebalanceContext,
 		): void {
 			const priceMap = new Map(
 				snapshots
@@ -231,14 +233,17 @@ export function createBacktest(): BacktestStrategy {
 				}
 			}
 
-			// Seed stop-losses for newly opened positions
+			// Seed stop-losses for newly opened positions.
+			// Prefer fill prices (actual entry with AMM slippage) over spot prices
+			// to avoid seeding overly tight stops on large trades in shallow pools.
 			for (const netuid of newHeldNetuids) {
 				if (netuid === 0 || stopLosses.has(netuid)) continue;
-				const currentPrice = priceMap.get(netuid);
-				if (!currentPrice || currentPrice <= 0n) continue;
+				const entryPrice =
+					context?.fillPrices.get(netuid) ?? priceMap.get(netuid);
+				if (!entryPrice || entryPrice <= 0n) continue;
 				const stopPrice =
-					(currentPrice * BigInt(100 - config.strategy.stopLossPercent)) / 100n;
-				stopLosses.set(netuid, { highWaterMark: currentPrice, stopPrice });
+					(entryPrice * BigInt(100 - config.strategy.stopLossPercent)) / 100n;
+				stopLosses.set(netuid, { highWaterMark: entryPrice, stopPrice });
 			}
 		},
 	};
