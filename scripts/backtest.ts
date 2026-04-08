@@ -1,14 +1,20 @@
 /**
  * Backtest script — replays historical DB snapshots through a strategy
- * and simulates portfolio changes at spot prices.
+ * and simulates portfolio changes using AMM-aware trade execution.
  *
- * This is a **price-only** backtest: it tracks portfolio value from spot
- * price changes and rebalance trades. It does NOT model emission rewards,
- * staking fees, or AMM slippage. Results represent an idealised upper bound.
+ * Trade model:
+ * - Uses constant-product AMM (x·y=k) with pool reserves from the history DB.
+ *   Trade outputs account for price impact from pool liquidity depth.
+ * - Accurate for V2 pools (direct constant product) and V3 pools with only
+ *   the protocol's full-range position (mathematically equivalent).
+ * - SN0 (root network / Stable mechanism): 1:1 TAO↔Alpha, zero fees.
+ *
+ * This backtest does NOT model emission rewards, staking fees, or concentrated
+ * liquidity (V3 with user LP positions).
  *
  * Fee model:
- * - 0.05% pool fee per trade (approximates AMM swap fee)
- * - Fixed transaction fee per trade (TX_FEE_RAO)
+ * - Pool fee: 33/65535 ≈ 0.05% on input (matches on-chain default FeeRate)
+ * - Fixed transaction fee per trade (TX_FEE_RAO), skipped for SN0
  *
  * Schedule detection:
  * - Reads the strategy's native schedule via `getBacktestSchedule()`.
@@ -25,6 +31,12 @@ import { join } from "node:path";
 import { Cron } from "croner";
 import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
 import { openHistoryDatabase } from "../src/history/index.ts";
+import {
+	alphaFeeInTao,
+	alphaNeededForTao,
+	swapAlphaForTao,
+	swapTaoForAlpha,
+} from "../src/rebalance/amm.ts";
 import { formatTao, TAO } from "../src/rebalance/tao.ts";
 import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
 import type { BacktestSchedule } from "../src/strategies/types.ts";
@@ -35,15 +47,11 @@ import type { BacktestSchedule } from "../src/strategies/types.ts";
 
 const F32 = 1n << 32n;
 
-/** Pool fee applied per trade (0.05% = 5 basis points) */
-const POOL_FEE_BPS = 5n;
-const POOL_FEE_DENOM = 10_000n;
-
-/** Fixed transaction fee per trade (~0.0001 TAO) */
+/** Fixed transaction fee per trade (~0.0001 TAO). Skipped for SN0. */
 const TX_FEE_RAO = TAO / 10_000n;
 
 const DB_PATH = join("data", "history.sqlite");
-const DEFAULT_INITIAL_TAO = 100;
+const DEFAULT_INITIAL_TAO = 10;
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -202,10 +210,13 @@ const scheduleLabel =
 		? `cron "${schedule.cronSchedule}" (UTC)`
 		: `every ${schedule.intervalBlocks} blocks`;
 
-console.log(`\n📊 Backtest: ${strategyName} (price-only, no emission accrual)`);
 console.log(
-	`   Fee model: 0.05% pool fee + ${formatTao(TX_FEE_RAO)} τ tx fee per trade`,
+	`\n📊 Backtest: ${strategyName} (AMM-simulated, no emission accrual)`,
 );
+console.log(
+	`   Fee model: constant-product AMM (33/65535 pool fee) + ${formatTao(TX_FEE_RAO)} τ tx fee per trade`,
+);
+console.log(`   SN0: 1:1 conversion, zero fees (stable mechanism)`);
 console.log(`   Initial capital: ${initialTao} τ`);
 console.log(
 	`   Period: block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots)`,
@@ -217,16 +228,10 @@ console.log();
 // Price helpers
 // ---------------------------------------------------------------------------
 
-/** Convert alpha amount → TAO (RAO) using I96F32 spot price */
+/** Convert alpha amount → TAO (RAO) using I96F32 spot price (for valuation only) */
 function alphaToTao(alpha: bigint, spotPrice: bigint): bigint {
 	if (spotPrice <= 0n) return 0n;
 	return (alpha * spotPrice) / F32;
-}
-
-/** Convert TAO (RAO) → alpha amount using I96F32 spot price */
-function taoToAlpha(tao: bigint, spotPrice: bigint): bigint {
-	if (spotPrice <= 0n) return 0n;
-	return (tao * F32) / spotPrice;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,10 +242,33 @@ interface Position {
 	alpha: bigint;
 }
 
+interface PoolReserves {
+	taoIn: bigint;
+	alphaIn: bigint;
+}
+
 let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
 let totalFeesPaid = 0n;
+
+/**
+ * Virtual pool reserves — tracks AMM state within a rebalance tick.
+ * Reset from on-chain snapshot at each new block, updated after each trade.
+ */
+let virtualReserves: Map<number, PoolReserves> = new Map();
+
+function initVirtualReserves(
+	snapshots: Array<{ netuid: number; taoIn: bigint; alphaIn: bigint }>,
+): void {
+	virtualReserves = new Map(
+		snapshots.map((s) => [s.netuid, { taoIn: s.taoIn, alphaIn: s.alphaIn }]),
+	);
+}
+
+function getReserves(netuid: number): PoolReserves {
+	return virtualReserves.get(netuid) ?? { taoIn: 0n, alphaIn: 0n };
+}
 
 function getHeldNetuids(): Set<number> {
 	const held = new Set<number>();
@@ -288,19 +316,38 @@ function logTrade(
 
 function sellAll(
 	netuid: number,
-	spotPrice: bigint,
+	_spotPrice: bigint,
 	blockNumber: number,
 	timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
 	if (!pos || pos.alpha <= 0n) return;
-	const grossTao = alphaToTao(pos.alpha, spotPrice);
-	const poolFee = (grossTao * POOL_FEE_BPS) / POOL_FEE_DENOM;
-	const taoReceived = grossTao - poolFee - TX_FEE_RAO;
+
+	const isSN0 = netuid === 0;
+	const reserves = getReserves(netuid);
+	const swap = swapAlphaForTao(
+		pos.alpha,
+		reserves.taoIn,
+		reserves.alphaIn,
+		netuid,
+	);
+	const feeInTao = isSN0
+		? 0n
+		: alphaFeeInTao(pos.alpha, reserves.taoIn, reserves.alphaIn, netuid);
+	const txFee = isSN0 ? 0n : TX_FEE_RAO;
+	const taoReceived = swap.amountOut - txFee;
 	if (taoReceived <= 0n) return;
+
+	// Update virtual reserves (fee not added — goes to block author)
+	if (!isSN0) {
+		const netAlpha = pos.alpha - swap.poolFee;
+		reserves.alphaIn += netAlpha;
+		reserves.taoIn -= swap.amountOut;
+	}
+
 	free += taoReceived;
-	totalFeesPaid += poolFee + TX_FEE_RAO;
+	totalFeesPaid += feeInTao + txFee;
 	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
 	positions.delete(netuid);
 	totalTrades++;
@@ -309,22 +356,57 @@ function sellAll(
 function sellPartial(
 	netuid: number,
 	taoAmount: bigint,
-	spotPrice: bigint,
+	_spotPrice: bigint,
 	blockNumber: number,
 	timestamp: number,
 	subnetName: string,
 ) {
 	const pos = positions.get(netuid);
-	if (!pos || pos.alpha <= 0n || spotPrice <= 0n) return;
-	const alphaToSell = taoToAlpha(taoAmount, spotPrice);
-	const actualAlpha = alphaToSell > pos.alpha ? pos.alpha : alphaToSell;
-	const grossTao = alphaToTao(actualAlpha, spotPrice);
-	const poolFee = (grossTao * POOL_FEE_BPS) / POOL_FEE_DENOM;
-	const taoReceived = grossTao - poolFee - TX_FEE_RAO;
+	if (!pos || pos.alpha <= 0n) return;
+
+	const isSN0 = netuid === 0;
+	const reserves = getReserves(netuid);
+
+	// Use inverse formula to find exact alpha needed for target TAO output
+	let alphaToSell: bigint;
+	const needed = alphaNeededForTao(
+		taoAmount,
+		reserves.taoIn,
+		reserves.alphaIn,
+		netuid,
+	);
+	if (needed === null) {
+		// Target exceeds pool reserves — sell everything
+		alphaToSell = pos.alpha;
+	} else {
+		alphaToSell = needed > pos.alpha ? pos.alpha : needed;
+	}
+
+	if (alphaToSell <= 0n) return;
+
+	const swap = swapAlphaForTao(
+		alphaToSell,
+		reserves.taoIn,
+		reserves.alphaIn,
+		netuid,
+	);
+	const feeInTao = isSN0
+		? 0n
+		: alphaFeeInTao(alphaToSell, reserves.taoIn, reserves.alphaIn, netuid);
+	const txFee = isSN0 ? 0n : TX_FEE_RAO;
+	const taoReceived = swap.amountOut - txFee;
 	if (taoReceived <= 0n) return;
-	pos.alpha -= actualAlpha;
+
+	// Update virtual reserves
+	if (!isSN0) {
+		const netAlpha = alphaToSell - swap.poolFee;
+		reserves.alphaIn += netAlpha;
+		reserves.taoIn -= swap.amountOut;
+	}
+
+	pos.alpha -= alphaToSell;
 	free += taoReceived;
-	totalFeesPaid += poolFee + TX_FEE_RAO;
+	totalFeesPaid += feeInTao + txFee;
 	if (pos.alpha <= 0n) positions.delete(netuid);
 	logTrade("SELL", netuid, subnetName, taoReceived, blockNumber, timestamp);
 	totalTrades++;
@@ -333,22 +415,40 @@ function sellPartial(
 function buy(
 	netuid: number,
 	taoAmount: bigint,
-	spotPrice: bigint,
+	_spotPrice: bigint,
 	blockNumber: number,
 	timestamp: number,
 	subnetName: string,
 ) {
-	if (taoAmount <= 0n || spotPrice <= 0n) return;
+	if (taoAmount <= 0n) return;
 	const actual = taoAmount > free ? free : taoAmount;
 	if (actual <= 0n) return;
-	const poolFee = (actual * POOL_FEE_BPS) / POOL_FEE_DENOM;
-	const netTao = actual - poolFee - TX_FEE_RAO;
+
+	const isSN0 = netuid === 0;
+	const txFee = isSN0 ? 0n : TX_FEE_RAO;
+	const netTao = actual - txFee;
 	if (netTao <= 0n) return;
-	const alphaReceived = taoToAlpha(netTao, spotPrice);
+
+	const reserves = getReserves(netuid);
+	const swap = swapTaoForAlpha(
+		netTao,
+		reserves.taoIn,
+		reserves.alphaIn,
+		netuid,
+	);
+	if (swap.amountOut <= 0n) return;
+
+	// Update virtual reserves
+	if (!isSN0) {
+		const netTaoIn = netTao - swap.poolFee;
+		reserves.taoIn += netTaoIn;
+		reserves.alphaIn -= swap.amountOut;
+	}
+
 	free -= actual;
-	totalFeesPaid += poolFee + TX_FEE_RAO;
+	totalFeesPaid += swap.poolFee + txFee;
 	const pos = positions.get(netuid) ?? { alpha: 0n };
-	pos.alpha += alphaReceived;
+	pos.alpha += swap.amountOut;
 	positions.set(netuid, pos);
 	logTrade("BUY ", netuid, subnetName, actual, blockNumber, timestamp);
 	totalTrades++;
@@ -435,6 +535,10 @@ for (const meta of blockMetas) {
 	const nameMap = new Map(snapshots.map((s) => [s.netuid, s.name]));
 	const totalValue = portfolioValue(priceMap);
 
+	// Initialize virtual reserves from this block's on-chain snapshot.
+	// Reserves are updated after each trade within this rebalance tick.
+	initVirtualReserves(snapshots);
+
 	// Build target set
 	const targetSet = new Map(targets.map((t) => [t.netuid, t.share]));
 
@@ -515,7 +619,7 @@ const annualizedReturn =
 	durationDays > 0 ? (totalReturn ** (365.25 / durationDays) - 1) * 100 : 0;
 
 console.log(`\n${"═".repeat(60)}`);
-console.log("  BACKTEST SUMMARY (price-only, no emission accrual)");
+console.log("  BACKTEST SUMMARY (AMM-simulated, no emission accrual)");
 console.log("═".repeat(60));
 console.log(`  Strategy:         ${strategyName}`);
 console.log(`  Schedule:         ${scheduleLabel}`);
