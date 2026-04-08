@@ -18,7 +18,7 @@
  *   specific schedule regardless of strategy config.
  *
  * Usage:
- *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"]
+ *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--backfill]
  */
 
 import { join } from "node:path";
@@ -89,50 +89,48 @@ if (cliIntervalBlocks !== undefined && cliCron !== undefined) {
 }
 
 // ---------------------------------------------------------------------------
-// Backfill gap: bring history DB up to the current finalized block
+// Optional backfill: only when --backfill is passed
 // ---------------------------------------------------------------------------
 
-const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
-const archiveEndpoints = process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [];
+if (process.argv.includes("--backfill")) {
+	const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
+	const archiveEndpoints = process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [];
 
-if (!wsEndpoints.length || !archiveEndpoints.length) {
-	console.warn(
-		"⚠ WS_ENDPOINT or ARCHIVE_WS_ENDPOINT not set — skipping auto-backfill. History may be stale.",
-	);
-} else {
-	// Determine how many days to request: cover the entire DB range + gap to now.
-	// The backfill script auto-resumes and only fetches missing blocks, so
-	// requesting a generous window is cheap when most data already exists.
-	const db0 = openHistoryDatabase(DB_PATH);
-	const existingMetas = db0.getBlockMetas();
-	db0.close();
-
-	// Default to 30 days if DB is empty; otherwise cover from latest block to now
-	const backfillDays =
-		existingMetas.length > 0
-			? Math.ceil(
-					(Date.now() -
-						(existingMetas[existingMetas.length - 1]?.timestamp ?? 0)) /
-						86_400_000,
-				) + 1
-			: 30;
-
-	if (backfillDays > 0) {
-		console.log(`\n🔄 Backfilling history (${backfillDays} day window)...`);
-		const result = Bun.spawnSync(
-			[
-				"bun",
-				"run",
-				"scripts/backfill-history.ts",
-				"--days",
-				String(backfillDays),
-			],
-			{ cwd: process.cwd(), stdout: "inherit", stderr: "inherit" },
+	if (!wsEndpoints.length || !archiveEndpoints.length) {
+		console.warn(
+			"⚠ WS_ENDPOINT or ARCHIVE_WS_ENDPOINT not set — skipping backfill.",
 		);
-		if (result.exitCode !== 0) {
-			console.warn("⚠ Backfill failed — continuing with existing data.\n");
-		} else {
-			console.log();
+	} else {
+		const db0 = openHistoryDatabase(DB_PATH);
+		const existingMetas = db0.getBlockMetas();
+		db0.close();
+
+		const backfillDays =
+			existingMetas.length > 0
+				? Math.ceil(
+						(Date.now() -
+							(existingMetas[existingMetas.length - 1]?.timestamp ?? 0)) /
+							86_400_000,
+					) + 1
+				: 30;
+
+		if (backfillDays > 0) {
+			console.log(`\n🔄 Backfilling history (${backfillDays} day window)...`);
+			const result = Bun.spawnSync(
+				[
+					"bun",
+					"run",
+					"scripts/backfill-history.ts",
+					"--days",
+					String(backfillDays),
+				],
+				{ cwd: process.cwd(), stdout: "inherit", stderr: "inherit" },
+			);
+			if (result.exitCode !== 0) {
+				console.warn("⚠ Backfill failed — continuing with existing data.\n");
+			} else {
+				console.log();
+			}
 		}
 	}
 }

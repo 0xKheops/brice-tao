@@ -17,6 +17,28 @@ const BLOCKS_PER_DAY = 7200;
 const BATCH_SIZE = 5;
 const PROGRESS_EVERY = 50;
 
+/** Per-block fetch timeout — prevents hanging on unresponsive archive nodes */
+const BLOCK_FETCH_TIMEOUT_MS = 30_000;
+
+async function withTimeout<T>(
+	promise: Promise<T>,
+	ms: number,
+	label: string,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() => reject(new Error(`Timeout fetching ${label} (${ms}ms)`)),
+			ms,
+		);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
@@ -114,70 +136,88 @@ try {
 
 		const results = await Promise.all(
 			batch.map(async (blockNum) => {
-				const blockHash = await getBlockHash(archiveClient, blockNum);
-				if (!blockHash || isZeroHash(blockHash)) {
-					throw new Error(
-						`Archive node returned zero/empty hash for block ${blockNum}`,
+				try {
+					return await withTimeout(
+						(async () => {
+							const blockHash = await getBlockHash(archiveClient, blockNum);
+							if (!blockHash || isZeroHash(blockHash)) {
+								throw new Error(
+									`Archive node returned zero/empty hash for block ${blockNum}`,
+								);
+							}
+
+							const atOptions = { at: blockHash };
+
+							const [
+								dynamicInfos,
+								immunityPeriod,
+								subnetToPrune,
+								alphaPrices,
+								timestamp,
+							] = await Promise.all([
+								api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
+								api.query.SubtensorModule.NetworkImmunityPeriod.getValue(
+									atOptions,
+								),
+								api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
+								api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
+								api.query.Timestamp.Now.getValue(atOptions),
+							]);
+
+							const priceMap = new Map<number, bigint>();
+							for (const entry of alphaPrices) {
+								priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
+							}
+
+							const decoder = new TextDecoder();
+							const subnets: SubnetSnapshot[] = [];
+
+							for (const info of dynamicInfos) {
+								if (info === undefined) continue;
+								const name = decoder
+									.decode(new Uint8Array(info.subnet_name))
+									.trim();
+								subnets.push({
+									netuid: info.netuid,
+									name,
+									taoIn: info.tao_in,
+									alphaIn: info.alpha_in,
+									alphaOut: info.alpha_out,
+									taoInEmission: info.tao_in_emission,
+									spotPrice: priceMap.get(info.netuid) ?? 0n,
+									movingPrice: info.moving_price,
+									subnetVolume: info.subnet_volume,
+									tempo: info.tempo,
+									blocksSinceLastStep: info.blocks_since_last_step,
+									networkRegisteredAt: info.network_registered_at,
+									immunityPeriod: Number(immunityPeriod),
+									subnetToPrune: subnetToPrune ?? null,
+								});
+							}
+
+							return {
+								block: {
+									blockHash,
+									blockNumber: blockNum,
+									timestamp: Number(timestamp),
+								},
+								subnets,
+							} satisfies HistorySnapshot;
+						})(),
+						BLOCK_FETCH_TIMEOUT_MS,
+						`block ${blockNum}`,
 					);
+				} catch (err) {
+					console.warn(
+						`⚠ Skipping block ${blockNum}: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					return null;
 				}
-
-				const atOptions = { at: blockHash };
-
-				const [
-					dynamicInfos,
-					immunityPeriod,
-					subnetToPrune,
-					alphaPrices,
-					timestamp,
-				] = await Promise.all([
-					api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
-					api.query.SubtensorModule.NetworkImmunityPeriod.getValue(atOptions),
-					api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-					api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
-					api.query.Timestamp.Now.getValue(atOptions),
-				]);
-
-				const priceMap = new Map<number, bigint>();
-				for (const entry of alphaPrices) {
-					priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
-				}
-
-				const decoder = new TextDecoder();
-				const subnets: SubnetSnapshot[] = [];
-
-				for (const info of dynamicInfos) {
-					if (info === undefined) continue;
-					const name = decoder.decode(new Uint8Array(info.subnet_name)).trim();
-					subnets.push({
-						netuid: info.netuid,
-						name,
-						taoIn: info.tao_in,
-						alphaIn: info.alpha_in,
-						alphaOut: info.alpha_out,
-						taoInEmission: info.tao_in_emission,
-						spotPrice: priceMap.get(info.netuid) ?? 0n,
-						movingPrice: info.moving_price,
-						subnetVolume: info.subnet_volume,
-						tempo: info.tempo,
-						blocksSinceLastStep: info.blocks_since_last_step,
-						networkRegisteredAt: info.network_registered_at,
-						immunityPeriod: Number(immunityPeriod),
-						subnetToPrune: subnetToPrune ?? null,
-					});
-				}
-
-				return {
-					block: {
-						blockHash,
-						blockNumber: blockNum,
-						timestamp: Number(timestamp),
-					},
-					subnets,
-				} satisfies HistorySnapshot;
 			}),
 		);
 
 		for (const snapshot of results) {
+			if (!snapshot) continue;
 			historyDb.recordSnapshot(snapshot);
 			backfilled++;
 		}
