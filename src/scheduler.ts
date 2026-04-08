@@ -30,6 +30,17 @@ const context = buildRunnerContext(
 	historyDb,
 );
 
+// --- Initial rebalance on startup ---
+console.log("[scheduler] Running initial rebalance on startup...");
+const { exitCode } = await context.runRebalanceCycle();
+if (exitCode === 0) {
+	console.log("[scheduler] Initial rebalance completed successfully.");
+} else {
+	console.error(
+		`[scheduler] Initial rebalance finished with exit code ${exitCode} — continuing to scheduled runs.`,
+	);
+}
+
 // --- Start strategy runner ---
 const runner = createRunner(context);
 await runner.start();
