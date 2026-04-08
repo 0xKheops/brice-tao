@@ -1,7 +1,7 @@
 import type { BittensorClient } from "../api/createClient.ts";
 import type { Env } from "../config/env.ts";
 import type { HistoryDatabase } from "../history/db.ts";
-import type { CycleOptions } from "../rebalance/cycle.ts";
+import type { CycleCallerOptions } from "../rebalance/cycle.ts";
 import { executeRebalanceCycle } from "../rebalance/cycle.ts";
 import type { StrategyFn } from "../strategies/types.ts";
 import type { RunnerContext } from "./types.ts";
@@ -15,7 +15,7 @@ export function buildRunnerContext(
 	env: Env,
 	strategyName: string,
 	getStrategyTargets: StrategyFn,
-	cycleOptions: CycleOptions,
+	cycleOptions: CycleCallerOptions,
 	historyDb: HistoryDatabase,
 ): RunnerContext {
 	return {
@@ -24,11 +24,10 @@ export function buildRunnerContext(
 		strategyName,
 		historyDb,
 		runRebalanceCycle: () =>
-			executeRebalanceCycle(
-				bittensorClient,
-				env,
-				getStrategyTargets,
-				cycleOptions,
-			),
+			executeRebalanceCycle(bittensorClient, env, getStrategyTargets, {
+				...cycleOptions,
+				strategyName,
+				historyDb,
+			}),
 	};
 }

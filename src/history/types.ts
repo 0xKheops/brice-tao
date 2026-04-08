@@ -34,3 +34,45 @@ export interface HistorySnapshot {
 	block: BlockMeta;
 	subnets: SubnetSnapshot[];
 }
+
+// ---------------------------------------------------------------------------
+// Position tracking
+// ---------------------------------------------------------------------------
+
+/** Rebalance cycle summary — one row per executeRebalanceCycle() call */
+export interface CycleRecord {
+	id?: number;
+	strategy: string;
+	gitCommit: string;
+	blockNumber: number | null;
+	txHash: string | null;
+	/** Unix milliseconds */
+	timestamp: number;
+	status: "completed" | "partial_failure" | "timeout" | "no_ops" | "error";
+	totalBefore: bigint;
+	totalAfter: bigint;
+	feeInner: bigint;
+	feeWrapper: bigint;
+	opsTotal: number;
+	opsSucceeded: number;
+	dryRun: boolean;
+}
+
+/** Per-operation trade record within a cycle */
+export interface TradeRecord {
+	cycleId: number;
+	opIndex: number;
+	opKind: string;
+	netuid: number;
+	originNetuid: number | null;
+	hotkey: string;
+	success: boolean;
+	error: string | null;
+	estimatedTao: bigint;
+	alphaAmount: bigint | null;
+	taoBefore: bigint | null;
+	taoAfter: bigint | null;
+	alphaBefore: bigint | null;
+	alphaAfter: bigint | null;
+	spotPrice: bigint | null;
+}

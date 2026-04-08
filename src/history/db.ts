@@ -4,7 +4,12 @@ import { dirname } from "node:path";
 import { and, between, eq } from "drizzle-orm";
 import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "./schema.ts";
-import type { HistorySnapshot, SubnetSnapshot } from "./types.ts";
+import type {
+	CycleRecord,
+	HistorySnapshot,
+	SubnetSnapshot,
+	TradeRecord,
+} from "./types.ts";
 
 export interface HistoryDatabase {
 	/**
@@ -40,6 +45,21 @@ export interface HistoryDatabase {
 
 	/** Get all subnet snapshots for a given block number */
 	getSnapshotsAtBlock(blockNumber: number): SubnetSnapshot[];
+
+	/** Record a rebalance cycle. Returns the auto-increment cycle ID. */
+	recordCycle(cycle: CycleRecord): number;
+
+	/** Record trade rows for a cycle in a single transaction. */
+	recordTrades(trades: TradeRecord[]): void;
+
+	/** Query cycles, optionally filtering by strategy. Newest first. */
+	getCycles(opts?: {
+		strategy?: string;
+		limit?: number;
+	}): Array<CycleRecord & { id: number }>;
+
+	/** Get all trades for a given cycle ID. */
+	getTradesForCycle(cycleId: number): TradeRecord[];
 
 	close(): void;
 }
@@ -87,6 +107,58 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		"CREATE INDEX IF NOT EXISTS idx_snapshots_netuid_block ON subnet_snapshots(netuid, block_hash)",
 	);
 
+	// --- Position tracking tables ---
+	sqlite.exec(`
+		CREATE TABLE IF NOT EXISTS cycles (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			strategy        TEXT    NOT NULL,
+			git_commit      TEXT    NOT NULL,
+			block_number    INTEGER,
+			tx_hash         TEXT,
+			timestamp       INTEGER NOT NULL,
+			status          TEXT    NOT NULL,
+			total_before    TEXT    NOT NULL,
+			total_after     TEXT    NOT NULL,
+			fee_inner       TEXT    NOT NULL DEFAULT '0',
+			fee_wrapper     TEXT    NOT NULL DEFAULT '0',
+			ops_total       INTEGER NOT NULL DEFAULT 0,
+			ops_succeeded   INTEGER NOT NULL DEFAULT 0,
+			dry_run         INTEGER NOT NULL DEFAULT 0
+		)
+	`);
+	sqlite.exec(
+		"CREATE INDEX IF NOT EXISTS idx_cycles_strategy ON cycles(strategy)",
+	);
+	sqlite.exec(
+		"CREATE INDEX IF NOT EXISTS idx_cycles_timestamp ON cycles(timestamp DESC)",
+	);
+
+	sqlite.exec(`
+		CREATE TABLE IF NOT EXISTS trades (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			cycle_id        INTEGER NOT NULL REFERENCES cycles(id),
+			op_index        INTEGER NOT NULL,
+			op_kind         TEXT    NOT NULL,
+			netuid          INTEGER NOT NULL,
+			origin_netuid   INTEGER,
+			hotkey          TEXT    NOT NULL,
+			success         INTEGER NOT NULL,
+			error           TEXT,
+			estimated_tao   TEXT    NOT NULL,
+			alpha_amount    TEXT,
+			tao_before      TEXT,
+			tao_after       TEXT,
+			alpha_before    TEXT,
+			alpha_after     TEXT,
+			spot_price      TEXT,
+			UNIQUE(cycle_id, op_index)
+		)
+	`);
+	sqlite.exec(
+		"CREATE INDEX IF NOT EXISTS idx_trades_cycle ON trades(cycle_id)",
+	);
+	sqlite.exec("CREATE INDEX IF NOT EXISTS idx_trades_netuid ON trades(netuid)");
+
 	const db: BunSQLiteDatabase<typeof schema> = drizzle(sqlite, { schema });
 
 	// Pre-compiled statement for fast block existence check
@@ -105,6 +177,49 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		INNER JOIN blocks b ON s.block_hash = b.block_hash
 		WHERE b.block_number = ?
 	`);
+
+	// --- Position tracking statements ---
+	const insertCycleStmt = sqlite.prepare(`
+		INSERT INTO cycles (
+			strategy, git_commit, block_number, tx_hash, timestamp,
+			status, total_before, total_after, fee_inner, fee_wrapper,
+			ops_total, ops_succeeded, dry_run
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`);
+	const insertTradeStmt = sqlite.prepare(`
+		INSERT INTO trades (
+			cycle_id, op_index, op_kind, netuid, origin_netuid, hotkey,
+			success, error, estimated_tao, alpha_amount,
+			tao_before, tao_after, alpha_before, alpha_after, spot_price
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`);
+	const insertTradesTxn = sqlite.transaction((trades: TradeRecord[]) => {
+		for (const t of trades) {
+			insertTradeStmt.run(
+				t.cycleId,
+				t.opIndex,
+				t.opKind,
+				t.netuid,
+				t.originNetuid,
+				t.hotkey,
+				t.success ? 1 : 0,
+				t.error,
+				t.estimatedTao.toString(),
+				t.alphaAmount?.toString() ?? null,
+				t.taoBefore?.toString() ?? null,
+				t.taoAfter?.toString() ?? null,
+				t.alphaBefore?.toString() ?? null,
+				t.alphaAfter?.toString() ?? null,
+				t.spotPrice?.toString() ?? null,
+			);
+		}
+	});
+	const getCyclesStmt = sqlite.prepare(
+		"SELECT * FROM cycles WHERE (? IS NULL OR strategy = ?) ORDER BY timestamp DESC LIMIT ?",
+	);
+	const getTradesForCycleStmt = sqlite.prepare(
+		"SELECT * FROM trades WHERE cycle_id = ? ORDER BY op_index ASC",
+	);
 
 	// Transaction for atomic snapshot recording
 	const insertBlockStmt = sqlite.prepare(
@@ -255,6 +370,105 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 				networkRegisteredAt: BigInt(r.network_registered_at),
 				immunityPeriod: r.immunity_period,
 				subnetToPrune: r.subnet_to_prune,
+			}));
+		},
+
+		recordCycle(cycle) {
+			const result = insertCycleStmt.run(
+				cycle.strategy,
+				cycle.gitCommit,
+				cycle.blockNumber,
+				cycle.txHash,
+				cycle.timestamp,
+				cycle.status,
+				cycle.totalBefore.toString(),
+				cycle.totalAfter.toString(),
+				cycle.feeInner.toString(),
+				cycle.feeWrapper.toString(),
+				cycle.opsTotal,
+				cycle.opsSucceeded,
+				cycle.dryRun ? 1 : 0,
+			);
+			return Number(result.lastInsertRowid);
+		},
+
+		recordTrades(trades) {
+			if (trades.length === 0) return;
+			insertTradesTxn(trades);
+		},
+
+		getCycles(opts) {
+			const strategy = opts?.strategy ?? null;
+			const limit = opts?.limit ?? 100;
+			const rows = getCyclesStmt.all(strategy, strategy, limit) as Array<{
+				id: number;
+				strategy: string;
+				git_commit: string;
+				block_number: number | null;
+				tx_hash: string | null;
+				timestamp: number;
+				status: string;
+				total_before: string;
+				total_after: string;
+				fee_inner: string;
+				fee_wrapper: string;
+				ops_total: number;
+				ops_succeeded: number;
+				dry_run: number;
+			}>;
+			return rows.map((r) => ({
+				id: r.id,
+				strategy: r.strategy,
+				gitCommit: r.git_commit,
+				blockNumber: r.block_number,
+				txHash: r.tx_hash,
+				timestamp: r.timestamp,
+				status: r.status as CycleRecord["status"],
+				totalBefore: BigInt(r.total_before),
+				totalAfter: BigInt(r.total_after),
+				feeInner: BigInt(r.fee_inner),
+				feeWrapper: BigInt(r.fee_wrapper),
+				opsTotal: r.ops_total,
+				opsSucceeded: r.ops_succeeded,
+				dryRun: r.dry_run === 1,
+			}));
+		},
+
+		getTradesForCycle(cycleId) {
+			const rows = getTradesForCycleStmt.all(cycleId) as Array<{
+				id: number;
+				cycle_id: number;
+				op_index: number;
+				op_kind: string;
+				netuid: number;
+				origin_netuid: number | null;
+				hotkey: string;
+				success: number;
+				error: string | null;
+				estimated_tao: string;
+				alpha_amount: string | null;
+				tao_before: string | null;
+				tao_after: string | null;
+				alpha_before: string | null;
+				alpha_after: string | null;
+				spot_price: string | null;
+			}>;
+			return rows.map((r) => ({
+				cycleId: r.cycle_id,
+				opIndex: r.op_index,
+				opKind: r.op_kind,
+				netuid: r.netuid,
+				originNetuid: r.origin_netuid,
+				hotkey: r.hotkey,
+				success: r.success === 1,
+				error: r.error,
+				estimatedTao: BigInt(r.estimated_tao),
+				alphaAmount: r.alpha_amount !== null ? BigInt(r.alpha_amount) : null,
+				taoBefore: r.tao_before !== null ? BigInt(r.tao_before) : null,
+				taoAfter: r.tao_after !== null ? BigInt(r.tao_after) : null,
+				alphaBefore: r.alpha_before !== null ? BigInt(r.alpha_before) : null,
+				alphaAfter: r.alpha_after !== null ? BigInt(r.alpha_after) : null,
+				spotPrice: r.spot_price !== null ? BigInt(r.spot_price) : null,
 			}));
 		},
 	};
