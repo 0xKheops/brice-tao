@@ -24,12 +24,19 @@ export function buildTradeRecords(
 		const op = plan.operations[i]!;
 
 		// Resolve the primary netuid and hotkey for balance matching
-		const { netuid, hotkey, originNetuid, estimatedTao, alphaAmount } =
-			extractOpFields(op);
+		const {
+			netuid,
+			hotkey,
+			beforeHotkey,
+			originNetuid,
+			estimatedTao,
+			alphaAmount,
+		} = extractOpFields(op);
 
 		// Find matching position in before/after snapshots
+		// For moves, the pre-trade position is under originHotkey, not destinationHotkey
 		const posBefore = balancesBefore.stakes.find(
-			(s) => s.netuid === netuid && s.hotkey === hotkey,
+			(s) => s.netuid === netuid && s.hotkey === beforeHotkey,
 		);
 		const posAfter = balancesAfter.stakes.find(
 			(s) => s.netuid === netuid && s.hotkey === hotkey,
@@ -70,6 +77,8 @@ export function buildTradeRecords(
 function extractOpFields(op: RebalancePlan["operations"][number]): {
 	netuid: number;
 	hotkey: string;
+	/** Hotkey to use for the before-snapshot lookup (differs from hotkey for moves) */
+	beforeHotkey: string;
 	originNetuid: number | null;
 	estimatedTao: bigint;
 	alphaAmount: bigint | null;
@@ -79,6 +88,7 @@ function extractOpFields(op: RebalancePlan["operations"][number]): {
 			return {
 				netuid: op.destinationNetuid,
 				hotkey: op.hotkey,
+				beforeHotkey: op.hotkey,
 				originNetuid: op.originNetuid,
 				estimatedTao: op.estimatedTaoValue,
 				alphaAmount: op.alphaAmount,
@@ -87,6 +97,7 @@ function extractOpFields(op: RebalancePlan["operations"][number]): {
 			return {
 				netuid: op.netuid,
 				hotkey: op.hotkey,
+				beforeHotkey: op.hotkey,
 				originNetuid: null,
 				estimatedTao: op.estimatedTaoValue,
 				alphaAmount: op.alphaAmount,
@@ -95,6 +106,7 @@ function extractOpFields(op: RebalancePlan["operations"][number]): {
 			return {
 				netuid: op.netuid,
 				hotkey: op.hotkey,
+				beforeHotkey: op.hotkey,
 				originNetuid: null,
 				estimatedTao: op.estimatedTaoValue,
 				alphaAmount: op.alphaAmount,
@@ -103,6 +115,7 @@ function extractOpFields(op: RebalancePlan["operations"][number]): {
 			return {
 				netuid: op.netuid,
 				hotkey: op.hotkey,
+				beforeHotkey: op.hotkey,
 				originNetuid: null,
 				estimatedTao: op.taoAmount,
 				alphaAmount: null,
@@ -111,6 +124,7 @@ function extractOpFields(op: RebalancePlan["operations"][number]): {
 			return {
 				netuid: op.netuid,
 				hotkey: op.destinationHotkey,
+				beforeHotkey: op.originHotkey,
 				originNetuid: null,
 				estimatedTao: 0n,
 				alphaAmount: op.alphaAmount,

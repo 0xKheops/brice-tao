@@ -257,6 +257,68 @@ describe("buildTradeRecords", () => {
 		expect(records[1]?.originNetuid).toBe(0);
 	});
 
+	test("maps a move operation with correct before/after hotkey lookup", () => {
+		const plan: RebalancePlan = {
+			targets: [{ netuid: 7, hotkey: "5Dest...", share: 1 }],
+			operations: [
+				{
+					kind: "move",
+					netuid: 7,
+					originHotkey: "5Origin...",
+					destinationHotkey: "5Dest...",
+					alphaAmount: 800_000_000n,
+				},
+			],
+			skipped: [],
+		};
+
+		const before = makeBalances([
+			{
+				netuid: 7,
+				hotkey: "5Origin...",
+				stake: 800_000_000n,
+				alphaPrice: 2_000_000_000n,
+				taoValue: 1_600_000_000n,
+			},
+		]);
+
+		const after = makeBalances([
+			{
+				netuid: 7,
+				hotkey: "5Dest...",
+				stake: 800_000_000n,
+				alphaPrice: 2_000_000_000n,
+				taoValue: 1_600_000_000n,
+			},
+		]);
+
+		const batch: BatchResult = {
+			status: "completed",
+			blockNumber: 8000,
+			operationResults: [{ index: 0, success: true }],
+			wrapperFee: 0n,
+			innerBatchFee: 1_000_000n,
+			innerTxHash: "0xmove",
+		};
+
+		const records = buildTradeRecords(20, plan, before, after, batch);
+
+		expect(records).toHaveLength(1);
+		// biome-ignore lint/style/noNonNullAssertion: test assertion
+		const r = records[0]!;
+		expect(r.opKind).toBe("move");
+		expect(r.netuid).toBe(7);
+		expect(r.hotkey).toBe("5Dest...");
+		expect(r.success).toBe(true);
+		// Before snapshot looked up under originHotkey
+		expect(r.alphaBefore).toBe(800_000_000n);
+		expect(r.taoBefore).toBe(1_600_000_000n);
+		expect(r.spotPrice).toBe(2_000_000_000n);
+		// After snapshot looked up under destinationHotkey
+		expect(r.alphaAfter).toBe(800_000_000n);
+		expect(r.taoAfter).toBe(1_600_000_000n);
+	});
+
 	test("handles null batchResult", () => {
 		const plan: RebalancePlan = {
 			targets: [{ netuid: 1, hotkey: "5H...", share: 1 }],
