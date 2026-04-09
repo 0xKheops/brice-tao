@@ -50,12 +50,16 @@ const DB_PATH = join("data", "sma-stoploss.sqlite");
  */
 export async function preparePreview(): Promise<void> {
 	const db = openPriceDatabase(DB_PATH);
-	const priceHistories = db.getAllPriceHistories();
-	const stoppedOut = new Map(db.getAllStoppedOut().map((r) => [r.netuid, r]));
-	sharedState = { priceHistories, stoppedOut };
-	log.info(
-		`Preview: loaded ${priceHistories.size} subnet histories, ${stoppedOut.size} stopped-out from DB`,
-	);
+	try {
+		const priceHistories = db.getAllPriceHistories();
+		const stoppedOut = new Map(db.getAllStoppedOut().map((r) => [r.netuid, r]));
+		sharedState = { priceHistories, stoppedOut };
+		log.info(
+			`Preview: loaded ${priceHistories.size} subnet histories, ${stoppedOut.size} stopped-out from DB`,
+		);
+	} finally {
+		db.close();
+	}
 }
 
 /** Get the current config path (for runner to load config) */
@@ -94,7 +98,7 @@ export async function getStrategyTargets(
 	const stoppedOut: Map<number, StopOutRecord> =
 		sharedState?.stoppedOut ?? new Map();
 
-	const { winners, evaluations } = scoreSubnets(
+	const { winners, evaluations, coldStart } = scoreSubnets(
 		allSubnets,
 		config.strategy,
 		heldNetuids,
@@ -106,6 +110,26 @@ export async function getStrategyTargets(
 	log.info(
 		`Portfolio: ${formatTao(balances.totalTaoValue)} τ total, ${balances.stakes.length} positions, ${winners.length} SMA winners`,
 	);
+
+	if (coldStart) {
+		log.warn(
+			"Cold start: insufficient price history for SMA indicators — keeping current positions",
+		);
+		return {
+			targets: [],
+			skipped: [],
+			rebalanceConfig: config.rebalance,
+			skipReason:
+				"Cold start: insufficient price history for SMA indicators — keeping current positions",
+			audit: buildAuditSections(
+				evaluations,
+				winners,
+				config.strategy,
+				heldNetuids,
+				stoppedOut,
+			),
+		};
+	}
 
 	// Fixed slot allocation: winners fill slots, remainder → SN0
 	const maxSlots = config.strategy.maxSubnets;

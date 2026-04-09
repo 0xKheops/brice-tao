@@ -66,6 +66,7 @@ export async function executeRebalanceCycle(
 			skipped: strategySkips,
 			rebalanceConfig,
 			audit,
+			skipReason,
 		} = await getStrategyTargets(client, env, balances);
 
 		// Surface strategy audit in dry-run mode for richer operator feedback
@@ -73,6 +74,30 @@ export async function executeRebalanceCycle(
 			for (const line of audit.terminalLines) {
 				log.info(line);
 			}
+		}
+
+		// Cold-start guard: strategy signals it lacks sufficient data to make
+		// an informed allocation decision — skip the cycle to avoid destructive
+		// moves (e.g. parking everything in SN0 because indicators are empty).
+		if (skipReason) {
+			log.warn(`Skipping rebalance cycle: ${skipReason}`);
+			recordCycleToDb(historyDb, {
+				strategy: strategyName,
+				gitCommit: GIT_COMMIT,
+				blockNumber: null,
+				txHash: null,
+				timestamp: cycleTimestamp,
+				status: "no_ops",
+				totalBefore: balances.totalTaoValue,
+				totalAfter: balances.totalTaoValue,
+				feeInner: 0n,
+				feeWrapper: 0n,
+				opsTotal: 0,
+				opsSucceeded: 0,
+				dryRun,
+			});
+			log.info(`Log file: ${log.filePath()}`);
+			return { exitCode: 0 };
 		}
 
 		// 3. Determine MEV shield state (single query, threaded through entire flow)

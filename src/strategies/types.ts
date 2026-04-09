@@ -25,6 +25,12 @@ export interface StrategyResult {
 	skipped: Array<{ netuid: number; reason: string }>;
 	rebalanceConfig: RebalanceConfig;
 	audit?: AuditSections;
+	/**
+	 * When set, the rebalance cycle is skipped entirely (no trades).
+	 * Used by strategies to signal cold-start conditions where insufficient
+	 * data makes it unsafe to rebalance (e.g. missing price history).
+	 */
+	skipReason?: string;
 }
 
 // ---------------------------------------------------------------------------

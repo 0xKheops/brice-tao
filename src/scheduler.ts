@@ -14,7 +14,8 @@ suppressRpcNoise();
 // --- Resolve strategy ---
 const env = loadEnv();
 const strategyName = resolveStrategyName(env.strategy);
-const { getStrategyTargets, createRunner } = await loadStrategy(strategyName);
+const { getStrategyTargets, createRunner, preparePreview } =
+	await loadStrategy(strategyName);
 
 // --- Open shared history DB ---
 const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
@@ -29,6 +30,13 @@ const context = buildRunnerContext(
 	{ dryRun: false },
 	historyDb,
 );
+
+// Hydrate shared state from persistent DB before the initial rebalance so
+// data-dependent strategies (sma-stoploss, steady-tide) have indicator
+// histories available instead of seeing an empty cold-start state.
+if (preparePreview) {
+	await preparePreview();
+}
 
 // --- Initial rebalance on startup ---
 console.log("[scheduler] Running initial rebalance on startup...");

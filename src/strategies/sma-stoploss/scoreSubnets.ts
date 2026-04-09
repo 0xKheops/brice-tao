@@ -41,6 +41,13 @@ export interface SubnetEvaluation {
 export interface ScoreResult {
 	winners: Array<{ netuid: number; name: string; score: bigint }>;
 	evaluations: SubnetEvaluation[];
+	/**
+	 * True when zero winners were found AND at least some subnets that
+	 * passed basic gates (depth, age, health) were blocked by insufficient
+	 * SMA price history. Signals the caller to skip the rebalance rather
+	 * than parking in SN0.
+	 */
+	coldStart: boolean;
 }
 
 /**
@@ -181,7 +188,17 @@ export function scoreSubnets(
 	}
 
 	if (passing.length === 0) {
-		return { winners: [], evaluations };
+		const gatedSubnets = evaluations.filter(
+			(e) =>
+				e.passesDepthGate &&
+				e.passesAgeGate &&
+				e.passesHealthGate &&
+				!e.isCoolingDown,
+		);
+		const coldStart =
+			gatedSubnets.length > 0 &&
+			gatedSubnets.every((e) => !e.passesSmaDataGate);
+		return { winners: [], evaluations, coldStart };
 	}
 
 	// Normalize both metrics to [0, PRECISION] range
@@ -222,5 +239,5 @@ export function scoreSubnets(
 	scored.sort((a, b) => (b.score > a.score ? 1 : b.score < a.score ? -1 : 0));
 	const winners = scored.slice(0, config.maxSubnets);
 
-	return { winners, evaluations };
+	return { winners, evaluations, coldStart: false };
 }
