@@ -5,6 +5,7 @@ import { Enum } from "polkadot-api";
 import { TAO } from "./constants.ts";
 import { log } from "./logger.ts";
 import { submitShieldedTx } from "./mevShield.ts";
+import { extractProxyResults } from "./proxyEvents.ts";
 import { formatTao } from "./tao.ts";
 import type {
 	BatchResult,
@@ -315,23 +316,10 @@ async function parseBatchResultFromEvents(
 	const fee = extractFee(result.events);
 
 	// Collect per-operation results from Proxy.ProxyExecuted events
-	const proxyResults: Array<{ ok: boolean; error?: string }> = [];
-	for (const event of result.events) {
-		if (event.type !== "Proxy") continue;
-		const ev = event.value as { type: string; value?: unknown };
-		if (ev.type !== "ProxyExecuted") continue;
-		const execResult = (
-			ev.value as { result: { success: boolean; value?: unknown } }
-		).result;
-		if (execResult.success) {
-			proxyResults.push({ ok: true });
-		} else {
-			proxyResults.push({
-				ok: false,
-				error: `Proxied call failed: ${JSON.stringify(execResult.value)}`,
-			});
-		}
-	}
+	const proxyResults = extractProxyResults(
+		result.events,
+		(e) => e as { type: string; value: unknown },
+	);
 
 	const operationResults = Array.from({ length: totalOps }, (_, i) => ({
 		index: i,

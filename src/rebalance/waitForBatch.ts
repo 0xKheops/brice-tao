@@ -3,6 +3,7 @@ import type { bittensor } from "@polkadot-api/descriptors";
 import type { PolkadotClient, TypedApi } from "polkadot-api";
 import { timeout as rxTimeout } from "rxjs/operators";
 import { log } from "./logger.ts";
+import { extractProxyResults } from "./proxyEvents.ts";
 import type { BatchResult, OperationResult } from "./types.ts";
 
 type Api = TypedApi<typeof bittensor>;
@@ -200,24 +201,11 @@ async function extractOperationResults(
 	const fee = extractTransactionFee(extrinsicEvents);
 
 	// Collect Proxy.ProxyExecuted results in order — they correspond 1:1 to proxy calls
-	const proxyResults: Array<{ ok: boolean; error?: string }> = [];
-	for (const record of extrinsicEvents) {
-		if (record.event.type !== "Proxy") continue;
-		const ev = record.event.value;
-		if (ev.type !== "ProxyExecuted") continue;
-
-		const result = ev.value.result;
-		if (result.success) {
-			proxyResults.push({ ok: true });
-		} else {
-			proxyResults.push({
-				ok: false,
-				error: formatDispatchError(
-					result.value as { type: string; value?: unknown },
-				),
-			});
-		}
-	}
+	const proxyResults = extractProxyResults(
+		extrinsicEvents,
+		(r) => r.event,
+		(value) => formatDispatchError(value as { type: string; value?: unknown }),
+	);
 
 	// Check if this was a batched call by looking for Utility item events
 	const hasUtilityItems = extrinsicEvents.some(

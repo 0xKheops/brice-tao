@@ -1,3 +1,5 @@
+import { ConfigError } from "../errors.ts";
+
 export interface Env {
 	wsEndpoints: string[];
 	archiveWsEndpoints: string[];
@@ -20,9 +22,24 @@ export function loadEnv(): Env {
 	const strategy = process.env.STRATEGY;
 	const leaderAddress = process.env.LEADER_ADDRESS;
 
-	if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
-	if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
-	if (!proxyMnemonic) throw new Error("PROXY_MNEMONIC is not set");
+	if (!wsEndpoints.length) throw new ConfigError("WS_ENDPOINT is not set");
+	for (const ep of wsEndpoints) {
+		if (!/^wss?:\/\/.+/.test(ep)) {
+			throw new ConfigError(`Invalid WS_ENDPOINT URL: ${ep}`);
+		}
+	}
+	for (const ep of archiveWsEndpoints) {
+		if (!/^wss?:\/\/.+/.test(ep)) {
+			throw new ConfigError(`Invalid ARCHIVE_WS_ENDPOINT URL: ${ep}`);
+		}
+	}
+	if (!coldkey) throw new ConfigError("COLDKEY_ADDRESS is not set");
+	if (!/^[1-9A-HJ-NP-Za-km-z]{46,48}$/.test(coldkey)) {
+		throw new ConfigError(
+			`Invalid COLDKEY_ADDRESS format (expected SS58): ${coldkey}`,
+		);
+	}
+	if (!proxyMnemonic) throw new ConfigError("PROXY_MNEMONIC is not set");
 	return {
 		wsEndpoints,
 		archiveWsEndpoints,

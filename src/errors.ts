@@ -36,3 +36,32 @@ export class MevShieldError extends RebalanceError {
 		super(message, "MEV_SHIELD_ERROR", options);
 	}
 }
+
+/** RPC call failed (timeout, connection lost, method error) */
+export class RpcError extends RebalanceError {
+	constructor(
+		message: string,
+		public readonly method: string,
+		options?: ErrorOptions,
+	) {
+		super(message, "RPC_ERROR", options);
+	}
+}
+
+/** Transaction submission or finalization failed */
+export class TransactionError extends RebalanceError {
+	constructor(
+		message: string,
+		public readonly txHash: string | null = null,
+		options?: ErrorOptions,
+	) {
+		super(message, "TRANSACTION_ERROR", options);
+	}
+}
+
+/** Proxy account signing or key derivation failed */
+export class SigningError extends RebalanceError {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, "SIGNING_ERROR", options);
+	}
+}

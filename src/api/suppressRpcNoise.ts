@@ -35,7 +35,13 @@
  *
  * @see https://github.com/polkadot-api/polkadot-api — polkadot-api repository
  */
+let originalWarn: typeof console.warn | undefined;
+let originalError: typeof console.error | undefined;
+
 export function suppressRpcNoise(): void {
+	originalWarn = console.warn;
+	originalError = console.error;
+
 	const isRpcMethodNotFound = (arg: unknown): boolean =>
 		arg instanceof Error &&
 		arg.name === "RpcError" &&
@@ -49,4 +55,12 @@ export function suppressRpcNoise(): void {
 			original.apply(console, args);
 		};
 	}
+}
+
+/** Restore original console.warn and console.error — useful in tests @public */
+export function restoreConsole(): void {
+	if (originalWarn) console.warn = originalWarn;
+	if (originalError) console.error = originalError;
+	originalWarn = undefined;
+	originalError = undefined;
 }

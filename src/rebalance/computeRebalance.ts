@@ -57,6 +57,7 @@ export function computeRebalance(
 		targetTaoValue:
 			(available * BigInt(Math.round(t.share * 1e9))) / 1_000_000_000n,
 	}));
+	resolved.sort((a, b) => a.netuid - b.netuid);
 
 	log.verbose(
 		`Target allocation: ${resolved.length} subnets, ${formatTao(resolved[0]?.targetTaoValue ?? 0n)} τ each`,

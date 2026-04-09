@@ -34,6 +34,7 @@ RUN chmod +x /app/scheduler /app/scripts/entrypoint.sh
 RUN mkdir -p /app/logs /app/data /app/.papi/cache
 
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-  CMD pidof scheduler > /dev/null || exit 1
+  CMD test -f /app/data/heartbeat && \
+      [ "$(cat /app/data/heartbeat)" -gt "$(date +%s)" ] || exit 1
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]

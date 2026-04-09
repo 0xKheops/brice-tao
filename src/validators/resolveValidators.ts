@@ -46,6 +46,8 @@ export async function resolveValidators(
 	const hotkeysByTarget = new Map<number, string>();
 	const skipped: ValidatorResolution["skipped"] = [];
 
+	// Phase 1: Resolve from existing positions (no RPC needed)
+	const needsRpcLookup: number[] = [];
 	for (const netuid of targetNetuids) {
 		const existing = stakes.filter((s) => s.netuid === netuid);
 		if (existing.length > 0) {
@@ -61,34 +63,50 @@ export async function resolveValidators(
 			log.verbose(
 				`  Validator SN${netuid}: existing ${bestExisting.hotkey.slice(0, 8)}… (largest position)`,
 			);
-			continue;
+		} else {
+			needsRpcLookup.push(netuid);
 		}
+	}
 
-		try {
-			const best = await pickBestValidatorByYield(api, netuid);
-			hotkeysByTarget.set(netuid, best.hotkey);
-			log.verbose(
-				`  Validator SN${netuid}: yield-picked ${best.hotkey.slice(0, 8)}… (UID ${best.candidate.uid})`,
-			);
-		} catch (err) {
-			if (fallbackValidatorHotkey) {
-				hotkeysByTarget.set(netuid, fallbackValidatorHotkey);
-				log.warn(
-					`Validator selection failed for SN${netuid}; falling back to VALIDATOR_HOTKEY (${fallbackValidatorHotkey.slice(0, 8)}…): ${String(err)}`,
-				);
-			} else {
-				const reason =
-					err instanceof Error
-						? err.message
-						: "unknown validator selection error";
-				skipped.push({
+	// Phase 2: Parallel yield-based lookups for remaining subnets
+	const results = await Promise.all(
+		needsRpcLookup.map(async (netuid) => {
+			try {
+				const best = await pickBestValidatorByYield(api, netuid);
+				return {
 					netuid,
-					reason: `No validator selected for SN${netuid}: ${reason}`,
-				});
-				log.warn(
-					`Skipping SN${netuid} destination: no yield candidate and VALIDATOR_HOTKEY not set`,
-				);
+					hotkey: best.hotkey,
+					uid: best.candidate.uid,
+				} as const;
+			} catch (err) {
+				return { netuid, error: err } as const;
 			}
+		}),
+	);
+
+	for (const result of results) {
+		if ("hotkey" in result && result.hotkey !== undefined) {
+			hotkeysByTarget.set(result.netuid, result.hotkey);
+			log.verbose(
+				`  Validator SN${result.netuid}: yield-picked ${result.hotkey.slice(0, 8)}… (UID ${result.uid})`,
+			);
+		} else if (fallbackValidatorHotkey) {
+			hotkeysByTarget.set(result.netuid, fallbackValidatorHotkey);
+			log.warn(
+				`Validator selection failed for SN${result.netuid}; falling back to VALIDATOR_HOTKEY (${fallbackValidatorHotkey.slice(0, 8)}…): ${String(result.error)}`,
+			);
+		} else {
+			const reason =
+				result.error instanceof Error
+					? result.error.message
+					: "unknown validator selection error";
+			skipped.push({
+				netuid: result.netuid,
+				reason: `No validator selected for SN${result.netuid}: ${reason}`,
+			});
+			log.warn(
+				`Skipping SN${result.netuid} destination: no yield candidate and VALIDATOR_HOTKEY not set`,
+			);
 		}
 	}
 

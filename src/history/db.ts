@@ -52,6 +52,9 @@ export interface HistoryDatabase {
 	/** Record trade rows for a cycle in a single transaction. */
 	recordTrades(trades: TradeRecord[]): void;
 
+	/** Record a cycle and its trades atomically in a single transaction. */
+	recordCycleWithTrades(cycle: CycleRecord, trades?: TradeRecord[]): void;
+
 	/** Query cycles, optionally filtering by strategy. Newest first. */
 	getCycles(opts?: {
 		strategy?: string;
@@ -214,6 +217,47 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 			);
 		}
 	});
+	const recordCycleWithTradesTxn = sqlite.transaction(
+		(cycle: CycleRecord, trades?: TradeRecord[]): void => {
+			const result = insertCycleStmt.run(
+				cycle.strategy,
+				cycle.gitCommit,
+				cycle.blockNumber,
+				cycle.txHash,
+				cycle.timestamp,
+				cycle.status,
+				cycle.totalBefore.toString(),
+				cycle.totalAfter.toString(),
+				cycle.feeInner.toString(),
+				cycle.feeWrapper.toString(),
+				cycle.opsTotal,
+				cycle.opsSucceeded,
+				cycle.dryRun ? 1 : 0,
+			);
+			const cycleId = Number(result.lastInsertRowid);
+			if (trades && trades.length > 0) {
+				for (const t of trades) {
+					insertTradeStmt.run(
+						cycleId,
+						t.opIndex,
+						t.opKind,
+						t.netuid,
+						t.originNetuid,
+						t.hotkey,
+						t.success ? 1 : 0,
+						t.error,
+						t.estimatedTao.toString(),
+						t.alphaAmount?.toString() ?? null,
+						t.taoBefore?.toString() ?? null,
+						t.taoAfter?.toString() ?? null,
+						t.alphaBefore?.toString() ?? null,
+						t.alphaAfter?.toString() ?? null,
+						t.spotPrice?.toString() ?? null,
+					);
+				}
+			}
+		},
+	);
 	const getCyclesStmt = sqlite.prepare(
 		"SELECT * FROM cycles WHERE (? IS NULL OR strategy = ?) ORDER BY timestamp DESC LIMIT ?",
 	);
@@ -395,6 +439,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		recordTrades(trades) {
 			if (trades.length === 0) return;
 			insertTradesTxn(trades);
+		},
+
+		recordCycleWithTrades(cycle, trades) {
+			recordCycleWithTradesTxn(cycle, trades);
 		},
 
 		getCycles(opts) {

@@ -1,6 +1,6 @@
 import { deriveSigner } from "../accounts/deriveSigner.ts";
 import type { BittensorClient } from "../api/createClient.ts";
-import { getBalances } from "../balances/getBalances.ts";
+import { type Balances, getBalances } from "../balances/getBalances.ts";
 import type { Env } from "../config/env.ts";
 import { MevShieldError, RebalanceError, SlippageError } from "../errors.ts";
 import type { HistoryDatabase } from "../history/db.ts";
@@ -47,15 +47,18 @@ export async function executeRebalanceCycle(
 	const startedAt = performance.now();
 	const cycleTimestamp = Date.now();
 
+	let balances: Balances | undefined;
+
 	try {
 		if (dryRun) log.info("[DRY RUN] Will not submit transaction.\n");
 
 		// 1. Fetch current state
 		log.info("Fetching balances...");
-		const [balances, proxyAccount] = await Promise.all([
+		const [fetchedBalances, proxyAccount] = await Promise.all([
 			getBalances(api, env.coldkey),
 			api.query.System.Account.getValue(proxyAddress),
 		]);
+		balances = fetchedBalances;
 		const proxyFreeBalance = proxyAccount.data.free;
 		logBalancesDetail("BEFORE", env.coldkey, balances);
 
@@ -69,10 +72,11 @@ export async function executeRebalanceCycle(
 			skipReason,
 		} = await getStrategyTargets(client, env, balances);
 
-		// Surface strategy audit in dry-run mode for richer operator feedback
-		if (dryRun && audit) {
+		// Surface strategy audit: info for dry-run, verbose for live runs
+		if (audit) {
+			const logFn = dryRun ? log.info : log.verbose;
 			for (const line of audit.terminalLines) {
-				log.info(line);
+				logFn(line);
 			}
 		}
 
@@ -221,8 +225,8 @@ export async function executeRebalanceCycle(
 			txHash: null,
 			timestamp: cycleTimestamp,
 			status: "error",
-			totalBefore: 0n,
-			totalAfter: 0n,
+			totalBefore: balances?.totalTaoValue ?? 0n,
+			totalAfter: balances?.totalTaoValue ?? 0n,
 			feeInner: 0n,
 			feeWrapper: 0n,
 			opsTotal: 0,
@@ -243,11 +247,7 @@ function recordCycleToDb(
 	trades?: import("../history/types.ts").TradeRecord[],
 ): void {
 	try {
-		const cycleId = historyDb.recordCycle(cycle);
-		if (trades && trades.length > 0) {
-			const withId = trades.map((t) => ({ ...t, cycleId }));
-			historyDb.recordTrades(withId);
-		}
+		historyDb.recordCycleWithTrades(cycle, trades);
 	} catch (err) {
 		log.warn(
 			`Failed to record cycle to history DB: ${err instanceof Error ? err.message : String(err)}`,

@@ -243,13 +243,24 @@ async function postWebhook(
 	url: string,
 	body: Record<string, unknown>,
 ): Promise<void> {
-	const res = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body),
-	});
-	if (!res.ok) {
-		const text = await res.text().catch(() => "");
-		throw new Error(`Discord webhook ${res.status}: ${text}`);
+	const attempt = async () => {
+		const res = await fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!res.ok) {
+			const text = await res.text().catch(() => "");
+			throw new Error(`Discord webhook ${res.status}: ${text}`);
+		}
+	};
+
+	try {
+		await attempt();
+	} catch (_err) {
+		// Single retry after 2s backoff
+		await new Promise((r) => setTimeout(r, 2_000));
+		await attempt();
 	}
 }
