@@ -23,7 +23,7 @@ function initLogFile(subdir: string): void {
 	mkdirSync(logDir, { recursive: true });
 	LOG_FILE = join(
 		logDir,
-		`rebalance-${GIT_COMMIT}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`,
+		`rebalance-${new Date().toISOString().replace(/[:.]/g, "-")}-${GIT_COMMIT}.log`,
 	);
 }
 
