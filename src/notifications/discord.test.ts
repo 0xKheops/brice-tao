@@ -187,8 +187,17 @@ describe("discord notifications", () => {
 			configurable: true,
 		});
 
-		await expect(
-			sendErrorNotification(webhookUrl, new Error("test"), 1_000),
-		).rejects.toThrow("Discord webhook 500: internal error");
+		// Mock setTimeout to fire immediately (avoids 2s retry backoff)
+		const origSetTimeout = globalThis.setTimeout;
+		globalThis.setTimeout = ((fn: () => void) =>
+			origSetTimeout(fn, 0)) as typeof setTimeout;
+
+		try {
+			await expect(
+				sendErrorNotification(webhookUrl, new Error("test"), 1_000),
+			).rejects.toThrow("Discord webhook 500: internal error");
+		} finally {
+			globalThis.setTimeout = origSetTimeout;
+		}
 	});
 });
