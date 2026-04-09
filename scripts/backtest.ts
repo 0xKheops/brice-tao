@@ -7,14 +7,14 @@
  *   Trade outputs account for price impact from pool liquidity depth.
  * - Accurate for V2 pools (direct constant product) and V3 pools with only
  *   the protocol's full-range position (mathematically equivalent).
- * - SN0 (root network / Stable mechanism): 1:1 TAO↔Alpha, zero fees.
+ * - SN0 (root network / Stable mechanism): 1:1 TAO↔Alpha, zero pool fee.
  *
  * This backtest does NOT model emission rewards, staking fees, or concentrated
  * liquidity (V3 with user LP positions).
  *
  * Fee model:
  * - Pool fee: 33/65535 ≈ 0.05% on input (matches on-chain default FeeRate)
- * - Fixed transaction fee per trade (TX_FEE_RAO), skipped for SN0
+ * - Fixed transaction fee per trade (TX_FEE_RAO), charged for all operations
  * - Sell → buy rotations pay ONE pool fee (on the sell leg), matching on-chain
  *   `swap_stake` which drops the fee on the destination leg. Buys from pre-
  *   existing free balance pay the fee normally (`add_stake` model).
@@ -51,8 +51,8 @@ import type { BacktestSchedule } from "../src/strategies/types.ts";
 
 const F32 = 1n << 32n;
 
-/** Fixed transaction fee per trade (~0.0001 TAO). Skipped for SN0. */
-const TX_FEE_RAO = TAO / 10_000n;
+/** Fixed transaction fee per trade (~0.0012 TAO). Charged for all operations. */
+const TX_FEE_RAO = (TAO * 12n) / 10_000n;
 
 const DB_PATH = join("data", "history.sqlite");
 const DEFAULT_INITIAL_TAO = 10;
@@ -223,7 +223,7 @@ console.log(
 console.log(
 	`   Fee model: constant-product AMM (33/65535 pool fee, one per swap) + ${formatTao(TX_FEE_RAO)} τ tx fee`,
 );
-console.log(`   SN0: 1:1 conversion, zero fees (stable mechanism)`);
+console.log(`   SN0: 1:1 conversion, zero pool fee (tx fee still applies)`);
 console.log(`   Initial capital: ${initialTao} τ`);
 console.log(
 	`   Period: block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots)`,
@@ -322,11 +322,13 @@ const lastKnownPrices: Map<number, bigint> = new Map();
 /**
  * Fee-free budget — tracks TAO received from non-SN0 sells within the current
  * rebalance tick. On-chain `swap_stake` charges pool fee on the origin leg only,
- * so buy legs funded by sell proceeds skip the fee. SN0 sells do NOT contribute
- * because root→SN swaps charge fee on the destination (buy) leg instead.
+ * so buy legs funded by sell proceeds skip the pool fee. SN0 sells do NOT
+ * contribute because root→SN swaps charge pool fee on the destination (buy) leg
+ * instead.
  *
  * Reset to 0 at the start of each rebalance tick.
- * SN0 buys never consume from this budget (they are always fee-free).
+ * SN0 buys never consume from this budget (they use a separate path with no
+ * pool fee but tx fee still applies).
  */
 let feeFreeBudget = 0n;
 
@@ -484,7 +486,7 @@ function sellAll(
 	const feeInTao = isSN0
 		? 0n
 		: alphaFeeInTao(pos.alpha, reserves.taoIn, reserves.alphaIn, netuid);
-	const txFee = isSN0 ? 0n : TX_FEE_RAO;
+	const txFee = TX_FEE_RAO;
 	const taoReceived = swap.amountOut - txFee;
 	if (taoReceived <= 0n) return;
 
@@ -550,7 +552,7 @@ function sellPartial(
 	const feeInTao = isSN0
 		? 0n
 		: alphaFeeInTao(alphaToSell, reserves.taoIn, reserves.alphaIn, netuid);
-	const txFee = isSN0 ? 0n : TX_FEE_RAO;
+	const txFee = TX_FEE_RAO;
 	const taoReceived = swap.amountOut - txFee;
 	if (taoReceived <= 0n) return;
 
@@ -598,11 +600,16 @@ function buy(
 	const isSN0 = netuid === 0;
 	const reserves = getReserves(netuid);
 
-	// SN0: always fee-free, never consumes fee-free budget
+	// SN0: zero pool fee (stable 1:1 swap), but tx fee still applies.
+	// Never consumes fee-free budget.
 	if (isSN0) {
-		const swap = swapTaoForAlpha(actual, reserves.taoIn, reserves.alphaIn, 0);
+		const txFee = TX_FEE_RAO;
+		const netTao = actual - txFee;
+		if (netTao <= 0n) return;
+		const swap = swapTaoForAlpha(netTao, reserves.taoIn, reserves.alphaIn, 0);
 		if (swap.amountOut <= 0n) return;
 		free -= actual;
+		totalFeesPaid += txFee;
 		const pos = positions.get(0) ?? { alpha: 0n, costBasis: 0n };
 		pos.alpha += swap.amountOut;
 		pos.costBasis += actual;

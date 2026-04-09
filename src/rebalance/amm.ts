@@ -6,7 +6,7 @@
  * - V2 pools (direct constant product)
  * - V3 pools with only the protocol's full-range position (mathematically equivalent)
  *
- * SN0 (root network) uses the "Stable" mechanism on-chain: 1:1 TAO↔Alpha, zero fee.
+ * SN0 (root network) uses the "Stable" mechanism on-chain: 1:1 TAO↔Alpha, zero pool fee.
  *
  * Fee is deducted from the INPUT before the swap (matching on-chain V3 behavior).
  * The fee does NOT re-enter pool reserves — it goes to the block author.
@@ -19,7 +19,7 @@
 export const POOL_FEE_NUMERATOR = 33n;
 export const POOL_FEE_DENOMINATOR = 65535n; // u16::MAX
 
-/** SN0 (root network) uses the Stable mechanism — 1:1 swap, zero fee. */
+/** SN0 (root network) uses the Stable mechanism — 1:1 swap, zero pool fee. */
 function isStableSubnet(netuid: number): boolean {
 	return netuid === 0;
 }
@@ -39,7 +39,7 @@ export interface SwapResult {
 /**
  * Simulate buying alpha with TAO (staking) using constant-product AMM.
  *
- * For SN0: 1:1 conversion, zero fee.
+ * For SN0: 1:1 conversion, zero pool fee.
  *
  * Formula (fee on input):
  *   poolFee = taoAmount × FEE_NUM / FEE_DENOM
@@ -79,7 +79,7 @@ export function swapTaoForAlpha(
 /**
  * Simulate selling alpha for TAO (unstaking) using constant-product AMM.
  *
- * For SN0: 1:1 conversion, zero fee.
+ * For SN0: 1:1 conversion, zero pool fee.
  *
  * Formula (fee on input):
  *   poolFee  = alphaAmount × FEE_NUM / FEE_DENOM   (in alpha)

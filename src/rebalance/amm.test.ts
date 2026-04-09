@@ -42,7 +42,7 @@ describe("swapTaoForAlpha", () => {
 		expect(amountOut).toBeLessThan(400n * TAO);
 	});
 
-	test("SN0: 1:1 conversion with zero fee", () => {
+	test("SN0: 1:1 conversion with zero pool fee", () => {
 		const { amountOut, poolFee } = swapTaoForAlpha(
 			100n * TAO,
 			999n * TAO,
@@ -112,7 +112,7 @@ describe("swapAlphaForTao", () => {
 		expect(amountOut).toBeLessThan(40n * TAO);
 	});
 
-	test("SN0: 1:1 conversion with zero fee", () => {
+	test("SN0: 1:1 conversion with zero pool fee", () => {
 		const { amountOut, poolFee } = swapAlphaForTao(
 			50n * TAO,
 			999n * TAO,
@@ -192,7 +192,7 @@ describe("alphaFeeInTao", () => {
 		expect(fee).toBeGreaterThan(0n);
 	});
 
-	test("fee is zero for SN0", () => {
+	test("pool fee is zero for SN0", () => {
 		const fee = alphaFeeInTao(100n * TAO, 1000n * TAO, 5000n * TAO, 0);
 		expect(fee).toBe(0n);
 	});

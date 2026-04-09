@@ -134,10 +134,10 @@ Schedule is auto-detected from the strategy's `getBacktestSchedule()` hook. CLI 
 
 ### Backtesting Limitations
 
-Trade simulation uses **constant-product AMM math** (x·y=k) with pool reserves from the history DB, accounting for price impact from pool liquidity depth. SN0 (root network) trades at 1:1 with zero fees. Known limitations:
+Trade simulation uses **constant-product AMM math** (x·y=k) with pool reserves from the history DB, accounting for price impact from pool liquidity depth. SN0 (root network) trades at 1:1 with zero pool fee. Known limitations:
 
 - **No emission accrual**: backtests do NOT model staking emission rewards. Real returns will differ from backtest returns because emission yield is a significant component of Bittensor staking returns.
-- **Fee model**: pool fee of 33/65535 ≈ 0.05% on input (matches on-chain default) + fixed transaction fee (`TX_FEE_RAO`). SN0 trades are free. Sell→buy rotations charge **one** pool fee (on the sell leg), matching on-chain `swap_stake` behavior. Buys from pre-existing free balance charge a separate fee (`add_stake` model).
+- **Fee model**: pool fee of 33/65535 ≈ 0.05% on input (matches on-chain default) + fixed transaction fee (`TX_FEE_RAO`). SN0 has zero pool fee but tx fee still applies. Sell→buy rotations charge **one** pool fee (on the sell leg), matching on-chain `swap_stake` behavior. Buys from pre-existing free balance charge a separate fee (`add_stake` model).
 - **Constant-product approximation**: accurate for V2 pools and V3 pools with only the protocol's full-range position. Does not model concentrated liquidity from user LP positions (currently disabled on-chain).
 - **No validator rewards/take**: validator commission is not modeled.
 
