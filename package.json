@@ -21,7 +21,7 @@
 		"rebalance": "bun run src/main.ts",
 		"scheduler": "bun run src/scheduler.ts",
 		"docker:build": "./scripts/dc.sh build",
-		"docker:up": "./scripts/dc.sh up -d --build",
+		"docker:run": "./scripts/dc.sh up -d --build",
 		"postinstall": "papi"
 	},
 	"simple-git-hooks": {

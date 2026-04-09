@@ -115,23 +115,14 @@ These commands serve different purposes:
 The container runs a long-lived scheduler process. Strategy configs are baked into the image at build time — rebuild after editing `config.yaml`. The `.env` file is mounted at runtime.
 
 ```bash
-docker compose up -d --build     # start (or rebuild after changes)
+bun docker:run                   # build + start (git commit baked into logs)
+bun docker:build                 # build only
 docker compose down              # stop
 docker ps                        # check status
 cat logs/rebalance-*.log         # view execution logs (persisted on host)
 ```
 
-To tag the build with the current git commit (embedded in every log entry):
-
-```bash
-GIT_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
-```
-
-Set `TZ` in your environment to control the container timezone (defaults to UTC):
-
-```bash
-docker compose up -d --build
-```
+Both `docker:*` scripts use `scripts/dc.sh`, which automatically passes the current git commit hash as a build arg so every log entry is traceable.
 
 ## Architecture
 
