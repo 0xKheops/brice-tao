@@ -9,15 +9,21 @@ scripts/
   entrypoint.sh           → Docker entrypoint (sources .env → exec /app/scheduler)
   show-balances.ts        → Portfolio balance viewer
   preview-rebalance.ts   → Strategy-agnostic preview shell (audit report + planned operations)
+  backfill-history.ts    → History DB backfill from archive nodes
+  backtest.ts            → Strategy backtester with AMM simulation
+  bunker.ts              → Emergency exit script (move everything to SN0)
 src/
   main.ts                 → One-shot CLI entrypoint
   scheduler.ts            → Long-running scheduler (signal handling + graceful shutdown)
   errors.ts               → Custom error classes
+  version.ts              → Git commit hash resolution (env var or git CLI)
   accounts/
     deriveSigner.ts       → Mnemonic → signer + SS58 address derivation
   api/
     createClient.ts       → PAPI WebSocket client + metadata caching
+    fetchSubnetNames.ts   → On-chain subnet name lookups
     rpcThrottle.ts        → RPC block-lookup helpers
+    suppressRpcNoise.ts   → RPC log noise suppression
   config/
     env.ts                → Environment variable validation
   balances/
@@ -25,21 +31,30 @@ src/
   validators/
     pickBestValidator.ts  → Yield-based validator selection per subnet
     resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
+  history/
+    constants.ts          → Block-interval constant (DB_HISTORY_BLOCK_INTERVAL), grid helpers
+    db.ts                 → SQLite database wrapper (open, record, query)
+    fetch.ts              → On-chain snapshot fetcher (subnet data at a given block)
+    index.ts              → Barrel exports + convenience aliases
+    record.ts             → Live recording (recordCurrentBlock — grid-aligned snapshots)
+    schema.ts             → SQLite schema (blocks, subnets, cycles, trades)
+    types.ts              → History domain types (BlockMeta, SubnetSnapshot, etc.)
   scheduling/
     types.ts              → StrategyRunner, RunnerContext, CreateRunnerFn
+    blockInterval.ts      → Block-interval runner (fires on modulo-aligned finalized blocks)
     cron.ts               → Cron runner with overlap protection + stale timeout
     once.ts               → One-shot runner for CLI
     context.ts            → Shared context factory
   strategies/
-    types.ts              → Strategy contract (StrategyFn, StrategyModule, StrategyResult)
+    types.ts              → Strategy contract (StrategyFn, StrategyModule, StrategyResult, backtest types)
     loader.ts             → Strategy registry + CLI arg parsing
-    root-emission/        → Simple root + best-emission strategy
-    copy-trade/           → Mirror a leader's portfolio
-    sma-stoploss/         → SMA crossover momentum + trailing stop-loss
+    root-emission/        → Simple root + best-emission strategy (cron-based)
+    copy-trade/           → Mirror a leader's portfolio (event-driven)
+    sma-stoploss/         → SMA crossover momentum + trailing stop-loss (block-interval)
   notifications/
     discord.ts            → Discord webhook notifications
   rebalance/
-    types.ts              → Domain types (RebalanceConfig, Operation, Plan, Results)
+    types.ts              → Domain types (RebalanceConfig, Operation variants, Plan, Results)
     cycle.ts              → Rebalance cycle pipeline (shared by scheduler + CLI)
     tao.ts                → TAO constant (1 TAO = 1e9 RAO) + helpers
     computeRebalance.ts   → Operation generation from strategy targets + balances
@@ -48,6 +63,10 @@ src/
     simulateSlippage.ts   → Runtime API swap simulation → price limits
     mevShield.ts          → XChaCha20-Poly1305 + ML-KEM-768 encryption
     waitForBatch.ts       → Block scanning, event extraction
+    proxyEvents.ts        → Proxy event decoding for batch results
+    tradeRecorder.ts      → Trade history recording to the history DB
+    amm.ts                → Constant-product AMM math for backtesting
+    constants.ts          → Shared constants (re-exports TAO)
     logger.ts             → Dual logger: terminal + JSON file
 ```
 
@@ -56,16 +75,17 @@ src/
 The rebalance pipeline runs as a single cycle, either on a cron schedule or as a one-shot CLI invocation:
 
 ```
-Fetch Balances → Compute Targets → Compute Operations → Simulate Slippage → Execute → Verify → Notify
+Fetch Balances → Compute Targets → Compute Operations → Simulate Slippage → MEV Shield → Execute → Verify → Notify
 ```
 
 1. **Fetch balances** — query on-chain TAO and Alpha balances for the coldkey.
 2. **Compute targets** — the active strategy scores subnets and returns allocation targets (`netuid` + `hotkey` + `share`).
 3. **Compute operations** — diff current positions against targets to generate add/remove/move operations.
 4. **Simulate slippage** — use the runtime API to estimate swap outcomes and compute price limits.
-5. **Execute** — build a batch extrinsic, encrypt with MEV Shield (if available), and submit to the chain.
-6. **Verify** — scan blocks for batch events, fetch post-balances, and compare against expectations.
-7. **Notify** — send results to a Discord webhook.
+5. **MEV Shield** — encrypt the batch extrinsic (XChaCha20-Poly1305 + ML-KEM-768) to prevent frontrunning. Falls back to limit-price extrinsics when unavailable.
+6. **Execute** — build a batch extrinsic and submit to the chain.
+7. **Verify** — scan blocks for batch events, fetch post-balances, and compare against expectations.
+8. **Notify** — send results to a Discord webhook.
 
 ## Key Design Decisions
 
@@ -93,7 +113,7 @@ The bot supports three strategies, each in `src/strategies/<name>/`:
 |---|---|---|
 | `root-emission` | Cron | Allocates to root subnet plus the highest-emission subnets |
 | `copy-trade` | Event-driven | Mirrors a leader address's portfolio in real time |
-| `sma-stoploss` | Cron | SMA crossover momentum with fixed trailing stop-loss |
+| `sma-stoploss` | Block-interval | SMA crossover momentum with fixed trailing stop-loss |
 
 ### Strategy Contract
 
@@ -124,8 +144,10 @@ U64F64 fixed-point values that protect swaps against slippage. The bot simulates
 
 ### Operations
 
-The rebalance pipeline generates three types of operations:
+The rebalance pipeline generates five types of operations:
 
-- **`add_stake`** — stake free TAO into a subnet.
-- **`remove_stake`** — unstake from a subnet back to free TAO.
-- **`move_stake`** — move stake directly between subnets (most gas-efficient).
+- **`swap`** — move stake directly between subnets via AMM (cross-subnet swap).
+- **`unstake`** — fully unstake a position from a subnet back to free TAO.
+- **`unstake_partial`** — partially unstake from a subnet (reduce overweight position).
+- **`stake`** — stake free TAO into a subnet.
+- **`move`** — reassign stake to a different validator hotkey within the same subnet.

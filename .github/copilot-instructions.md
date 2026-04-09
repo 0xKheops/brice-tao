@@ -90,12 +90,12 @@ No `.env` file in repo — variables set externally (Docker mounts `.env`).
 The shared history DB (`data/history.sqlite`) records on-chain subnet snapshots on a fixed **25-block grid** (~5 min per sample, since Bittensor produces 1 block every ~12 s). This keeps disk usage manageable for long-term backtesting while providing sufficient resolution.
 
 **Invariant:** every `block_number` in the DB satisfies `block_number % 25 === 0`. Enforced at:
-1. Code level — `recordCurrentBlock()` calls `isGridBlock()` and skips non-grid blocks
+1. Code level — `recordCurrentBlock()` calls `isDbHistoryBlock()` and skips non-grid blocks
 2. Schema level — `CHECK(block_number % 25 = 0)` on the `blocks` table
 
 **Rules for backfill / backtest scripts:**
-- Iterate in steps of `BLOCK_INTERVAL` (25): `for (let b = snapToGrid(start); b <= end; b += BLOCK_INTERVAL)`
-- Use `snapToGrid()` and `isGridBlock()` from `src/history/constants.ts` — never hardcode `25`
+- Iterate in steps of `DB_HISTORY_BLOCK_INTERVAL` (25): `for (let b = snapToDbHistory(start); b <= end; b += DB_HISTORY_BLOCK_INTERVAL)`
+- Use `snapToDbHistory()` and `isDbHistoryBlock()` from `src/history/constants.ts` — never hardcode `25`
 - Only query archive nodes at grid-aligned block numbers
 - The `recordCurrentBlock()` function in `src/history/record.ts` is the only way to populate the DB during live operation; backfill scripts may use `db.recordSnapshot()` directly but must pre-validate block numbers
 
@@ -109,10 +109,10 @@ Strategies can use different scheduling mechanisms. The `StrategyRunner` interfa
 
 **Key constants** (from `src/history/constants.ts`):
 - `SECONDS_PER_BLOCK = 12` — Bittensor block time
-- `BLOCK_INTERVAL = 25` — history DB grid (25 blocks ≈ 5 min)
+- `DB_HISTORY_BLOCK_INTERVAL = 25` — history DB grid (25 blocks ≈ 5 min)
 
 **Rules for block-interval strategies:**
-- `rebalanceIntervalBlocks` must be a **multiple of `BLOCK_INTERVAL` (25)** — enforced at runtime by `createBlockIntervalRunner`
+- `rebalanceIntervalBlocks` must be a **multiple of `DB_HISTORY_BLOCK_INTERVAL` (25)** — enforced at runtime by `createBlockIntervalRunner`
 - Config files use `rebalanceIntervalBlocks` and `staleTimeoutBlocks`
 
 **Rules for cron strategies:**

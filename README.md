@@ -9,7 +9,7 @@ The bot ships with three strategies. Select one with `--strategy <name>` or the 
 | | root-emission | copy-trade | sma-stoploss |
 |---|---|---|---|
 | **Approach** | Fixed % to root (SN0), rest to best emission-yield subnet | Mirror a leader wallet's portfolio proportions | SMA crossover momentum + emission yield scoring |
-| **Scheduling** | Cron (every 12 h) | Event-driven (leader staking events) | Cron (every 4 h) |
+| **Scheduling** | Cron (every 12 h) | Event-driven (leader staking events) | Block-interval (~4 h) |
 | **# Slots** | 2 (root + alpha) | Dynamic (matches leader) | 3 fixed (33% each, unfilled → SN0) |
 | **Risk management** | Simple (fixed root allocation) | Follows leader | Fixed % trailing stop-loss |
 | **State** | Stateless | Stateless | Persistent (SQLite price history) |
@@ -108,7 +108,6 @@ These commands serve different purposes:
 | **Output** | Terminal audit tables + `reports/preview-*.md` | Terminal logs + decoded extrinsic JSON + log file |
 | **Validates** | Strategy logic, allocation math, operation planning | Everything above + signer, proxy, MEV shield, slippage simulation |
 | **Safe to share?** | Yes — no secrets needed or exposed | No — requires full production credentials |
-```
 
 ## Docker
 

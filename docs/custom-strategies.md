@@ -15,6 +15,12 @@ Each strategy must export a `StrategyModule` with two functions:
 export interface StrategyModule {
 	getStrategyTargets: StrategyFn
 	createRunner: CreateRunnerFn
+	/** Optional: hydrate shared state before preview (e.g. load indicator histories) */
+	preparePreview?: () => Promise<void>
+	/** Optional: factory for backtest-compatible strategy instance */
+	createBacktest?: () => BacktestStrategy
+	/** Optional: schedule descriptor for backtesting (block-interval or cron) */
+	getBacktestSchedule?: () => BacktestSchedule
 }
 ```
 
@@ -55,6 +61,8 @@ export interface RunnerContext {
 	client: PolkadotClient
 	env: Env
 	strategyName: string
+	/** Shared history database for recording subnet snapshots */
+	historyDb: HistoryDatabase
 	/** Execute a full rebalance cycle */
 	runRebalanceCycle(): Promise<RebalanceCycleResult>
 }
