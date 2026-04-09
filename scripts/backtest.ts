@@ -415,6 +415,7 @@ interface TradeLog {
 }
 
 const tickTrades: TradeLog[] = [];
+let tickTxFees = 0n;
 
 function formatPnl(pnlPct: number | null): string {
 	if (pnlPct === null) return "";
@@ -456,9 +457,11 @@ function flushTrades(blockNumber: number, timestamp: number) {
 		console.log(`  ${ANSI_DIM}  ──→${ANSI_RESET}`);
 	}
 	for (const b of buys) console.log(b.line);
+	console.log(`  ${ANSI_DIM}tx fees: ${formatTao(tickTxFees)} τ${ANSI_RESET}`);
 	console.log();
 
 	tickTrades.length = 0;
+	tickTxFees = 0n;
 }
 
 function sellAll(
@@ -504,6 +507,7 @@ function sellAll(
 
 	free += taoReceived;
 	totalFeesPaid += feeInTao + txFee;
+	tickTxFees += txFee;
 	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
 	if (!isSN0) feeFreeBudget += taoReceived;
 	logSell(netuid, subnetName, taoReceived, pnlPct);
@@ -578,6 +582,7 @@ function sellPartial(
 	pos.costBasis -= proportionalCostBasis;
 	free += taoReceived;
 	totalFeesPaid += feeInTao + txFee;
+	tickTxFees += txFee;
 	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
 	if (!isSN0) feeFreeBudget += taoReceived;
 	if (pos.alpha <= 0n) positions.delete(netuid);
@@ -610,6 +615,7 @@ function buy(
 		if (swap.amountOut <= 0n) return;
 		free -= actual;
 		totalFeesPaid += txFee;
+		tickTxFees += txFee;
 		const pos = positions.get(0) ?? { alpha: 0n, costBasis: 0n };
 		pos.alpha += swap.amountOut;
 		pos.costBasis += actual;
@@ -658,6 +664,7 @@ function buy(
 			reserves.taoIn += netTao - swap.poolFee;
 			reserves.alphaIn -= swap.amountOut;
 			totalFeesPaid += swap.poolFee + txFee;
+			tickTxFees += txFee;
 		}
 	}
 
@@ -901,6 +908,29 @@ const finalPriceMap = buildPriceMap(finalSnapshots);
 const finalValue = portfolioValue(finalPriceMap);
 
 db.close();
+
+// ---------------------------------------------------------------------------
+// Unrealised PnL per remaining position
+// ---------------------------------------------------------------------------
+
+if (positions.size > 0) {
+	console.log(`\n${ANSI_DIM}── Unrealised PnL ──${ANSI_RESET}`);
+	for (const [netuid, pos] of positions) {
+		const price = finalPriceMap.get(netuid) ?? 0n;
+		const taoVal = alphaToTao(pos.alpha, price);
+		const pnlRaoPos = taoVal - pos.costBasis;
+		const pnlPctPos =
+			pos.costBasis > 0n
+				? Number((pnlRaoPos * 10000n) / pos.costBasis) / 100
+				: 0;
+		const name = finalSnapshots.find((s) => s.netuid === netuid)?.name ?? "?";
+		const sign = pnlPctPos >= 0 ? "+" : "";
+		const color = pnlPctPos >= 0 ? ANSI_GREEN : ANSI_RED;
+		console.log(
+			`  SN${String(netuid).padEnd(3)} (${name.slice(0, 15).padEnd(15)})  cost ${formatTao(pos.costBasis).padStart(10)} τ  val ${formatTao(taoVal).padStart(10)} τ  ${color}${sign}${pnlPctPos.toFixed(2)}%${ANSI_RESET}`,
+		);
+	}
+}
 
 const pnlRao = finalValue - initialValue;
 const pnlPct = Number((pnlRao * 10000n) / initialValue) / 100;
