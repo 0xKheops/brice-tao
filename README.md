@@ -4,17 +4,17 @@ Automated portfolio rebalancer for [Bittensor](https://bittensor.com/) subnets. 
 
 ## Strategies
 
-The bot ships with three strategies. Select one with `--strategy <name>` or the `STRATEGY` env var (defaults to `root-emission`).
+The bot ships with four strategies. Select one with `--strategy <name>` or the `STRATEGY` env var (defaults to `root-emission`).
 
-| | root-emission | copy-trade | sma-stoploss |
-|---|---|---|---|
-| **Approach** | Fixed % to root (SN0), rest to best emission-yield subnet | Mirror a leader wallet's portfolio proportions | SMA crossover momentum + emission yield scoring |
-| **Scheduling** | Cron (every 12 h) | Event-driven (leader staking events) | Block-interval (~4 h) |
-| **# Slots** | 2 (root + alpha) | Dynamic (matches leader) | 3 fixed (33% each, unfilled → SN0) |
-| **Risk management** | Simple (fixed root allocation) | Follows leader | Fixed % trailing stop-loss |
-| **State** | Stateless | Stateless | Persistent (SQLite price history) |
-| **Complexity** | Low | Low | Medium |
-| **Best for** | Small portfolios, passive yield | Tracking an expert allocator | Trend-following with downside protection |
+| | root-emission | copy-trade | sma-stoploss | coward |
+|---|---|---|---|---|
+| **Approach** | Fixed % to root (SN0), rest to best emission-yield subnet | Mirror a leader wallet's portfolio proportions | SMA crossover momentum + emission yield scoring | 100% to SN0 (root), switches validator for ≥1% yield improvement |
+| **Scheduling** | Cron (every 12 h) | Event-driven (leader staking events) | Block-interval (~4 h) | Cron (every 24 h) |
+| **# Slots** | 2 (root + alpha) | Dynamic (matches leader) | 3 fixed (33% each, unfilled → SN0) | 1 (root only) |
+| **Risk management** | Simple (fixed root allocation) | Follows leader | Fixed % trailing stop-loss | Maximum safety (all root) |
+| **State** | Stateless | Stateless | Persistent (SQLite price history) | Stateless |
+| **Complexity** | Low | Low | Medium | Minimal |
+| **Best for** | Small portfolios, passive yield | Tracking an expert allocator | Trend-following with downside protection | Risk-off / capital preservation |
 
 Each strategy has its own `config.yaml` with tunable parameters — see `src/strategies/<name>/config.yaml`.
 
@@ -63,6 +63,7 @@ Environment variables are for secrets and connection strings only. Tunable param
 - [`src/strategies/root-emission/config.yaml`](src/strategies/root-emission/config.yaml)
 - [`src/strategies/copy-trade/config.yaml`](src/strategies/copy-trade/config.yaml)
 - [`src/strategies/sma-stoploss/config.yaml`](src/strategies/sma-stoploss/config.yaml)
+- [`src/strategies/coward/config.yaml`](src/strategies/coward/config.yaml)
 
 ### Discord notifications (optional)
 

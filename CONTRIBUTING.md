@@ -96,7 +96,7 @@ Please use [GitHub Issues](../../issues) to report bugs or request features.
 
 When filing a bug report, include:
 
-- **Strategy name** (e.g., `root-emission`, `copy-trade`)
+- **Strategy name** (e.g., `root-emission`, `copy-trade`, `coward`)
 - **Error message** and relevant log output
 - **Steps to reproduce** if possible
 

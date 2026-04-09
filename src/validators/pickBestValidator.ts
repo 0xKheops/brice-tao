@@ -17,12 +17,10 @@ export interface BestValidatorResult {
 }
 
 /**
- * Pick the best validator on a subnet by last-epoch realized alpha yield.
+ * Fetch and rank all eligible validators on a subnet by last-epoch alpha yield.
  *
- * This is a **default fallback** — strategies should ideally implement their
- * own validator selection that accounts for factors this utility ignores
- * (take rate, uptime, reputation, external scoring APIs). Use this when you
- * don't have a better signal or want a reasonable starting point.
+ * Returns the full sorted list so callers can implement custom selection
+ * logic (e.g. stickiness / incumbency thresholds).
  *
  * ## Algorithm
  *
@@ -42,10 +40,10 @@ export interface BestValidatorResult {
  *
  * @throws {Error} If the subnet doesn't exist or has no eligible validators
  */
-export async function pickBestValidatorByYield(
+export async function getValidatorCandidatesByYield(
 	api: Api,
 	netuid: number,
-): Promise<BestValidatorResult> {
+): Promise<ValidatorYieldCandidate[]> {
 	// Fetch selective metagraph with specific field property indexes:
 	// [52] = hotkeys
 	// [57] = validator_permit
@@ -107,6 +105,24 @@ export async function pickBestValidatorByYield(
 		return a.uid - b.uid;
 	});
 
+	return candidates;
+}
+
+/**
+ * Pick the best validator on a subnet by last-epoch realized alpha yield.
+ *
+ * This is a **default fallback** — strategies should ideally implement their
+ * own validator selection that accounts for factors this utility ignores
+ * (take rate, uptime, reputation, external scoring APIs). Use this when you
+ * don't have a better signal or want a reasonable starting point.
+ *
+ * @throws {Error} If the subnet doesn't exist or has no eligible validators
+ */
+export async function pickBestValidatorByYield(
+	api: Api,
+	netuid: number,
+): Promise<BestValidatorResult> {
+	const candidates = await getValidatorCandidatesByYield(api, netuid);
 	const best = candidates[0];
 	if (!best) {
 		throw new Error(`No validator candidate selected on SN${netuid}`);

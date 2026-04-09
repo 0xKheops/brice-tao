@@ -1,0 +1,18 @@
+cronSchedule: "0 0 * * *"                  # rebalance once per day at midnight UTC
+staleTimeoutMinutes: 5                     # max time allowed for one rebalance cycle
+
+# Coward strategy — 100% allocation to SN0 (root network)
+# Liquidates all alpha positions and parks everything in root.
+# Switches to the best-yielding SN0 validator on each cycle.
+# All TAO amounts are in TAO (not RAO). Slippage values are in percent.
+
+rebalance:
+  minPositionTao: 0.3                      # smallest position to maintain (TAO)
+  freeReserveTao: 0.05                     # idle TAO kept for transaction fees
+  freeReserveTaoDriftPercent: 5            # allowable drift % before rebalancing reserve
+  minOperationTao: 0.01                    # minimum operation size (skip smaller ops)
+  minStakeTao: 0.01                        # minimum stake amount per extrinsic
+  minRebalanceTao: 0.15                    # skip entire cycle if total rebalance < this
+  slippageBufferPercent: 3                 # buffer applied to slippage simulations
+  enforceSlippage: false                   # true = always use limit-price extrinsics
+  allocationDriftPercent: 25               # rebalance when position drifts > 25% from target

@@ -2,6 +2,10 @@ import { readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getStrategyTargets as copyTrade } from "./copy-trade/index.ts";
 import { createRunner as copyTradeRunner } from "./copy-trade/runner.ts";
+import { createBacktest as cowardBacktest } from "./coward/backtest.ts";
+import { loadCowardConfig } from "./coward/config.ts";
+import { getStrategyTargets as coward } from "./coward/index.ts";
+import { createRunner as cowardRunner } from "./coward/runner.ts";
 import { createBacktest as rootEmissionBacktest } from "./root-emission/backtest.ts";
 import { loadRootEmissionConfig } from "./root-emission/config.ts";
 import { getStrategyTargets as rootEmission } from "./root-emission/index.ts";
@@ -32,6 +36,14 @@ const smaStoplossConfigPath = new URL(
 	import.meta.url,
 ).pathname;
 
+const cowardConfigPath = new URL("./coward/config.yaml", import.meta.url)
+	.pathname;
+
+function getCowardBacktestSchedule(): BacktestSchedule {
+	const config = loadCowardConfig(cowardConfigPath);
+	return { type: "cron", cronSchedule: config.schedule.cronSchedule };
+}
+
 function getRootEmissionBacktestSchedule(): BacktestSchedule {
 	const config = loadRootEmissionConfig(rootEmissionConfigPath);
 	return { type: "cron", cronSchedule: config.schedule.cronSchedule };
@@ -51,6 +63,12 @@ const strategyRegistry: Record<string, StrategyModule> = {
 	"copy-trade": {
 		getStrategyTargets: copyTrade,
 		createRunner: copyTradeRunner,
+	},
+	coward: {
+		getStrategyTargets: coward,
+		createRunner: cowardRunner,
+		createBacktest: cowardBacktest,
+		getBacktestSchedule: getCowardBacktestSchedule,
 	},
 	"root-emission": {
 		getStrategyTargets: rootEmission,

@@ -103,7 +103,7 @@ The shared history DB (`data/history.sqlite`) records on-chain subnet snapshots 
 
 Strategies can use different scheduling mechanisms. The `StrategyRunner` interface is generic (`start()`/`stop()`), and three concrete runner types exist:
 
-1. **Cron-based** (`src/scheduling/cron.ts`) — UTC cron expression via `croner`. Used by `root-emission`.
+1. **Cron-based** (`src/scheduling/cron.ts`) — UTC cron expression via `croner`. Used by `root-emission`, `coward`.
 2. **Block-interval** (`src/scheduling/blockInterval.ts`) — fires on `blockNumber % intervalBlocks === 0`. Used by `sma-stoploss`.
 3. **Event-driven** — custom runner subscribing to on-chain events. Used by `copy-trade`.
 
