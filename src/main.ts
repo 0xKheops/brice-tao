@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { createBittensorClient } from "./api/createClient.ts";
 import { suppressRpcNoise } from "./api/suppressRpcNoise.ts";
 import { loadEnv } from "./config/env.ts";
-import { openHistoryDatabase } from "./history/db.ts";
+import { assertEmissionData, openHistoryDatabase } from "./history/db.ts";
 import { log } from "./rebalance/logger.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
 import { createOneShotRunner } from "./scheduling/once.ts";
@@ -27,6 +27,7 @@ export async function runRebalance({
 
 	const bittensorClient = createBittensorClient(env.wsEndpoints);
 	const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
+	assertEmissionData(historyDb);
 
 	try {
 		const context = buildRunnerContext(

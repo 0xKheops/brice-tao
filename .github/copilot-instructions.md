@@ -17,7 +17,7 @@ Use **Bun** for everything. Do not use npm, pnpm, or yarn. Lockfile is `bun.lock
 | Scheduler | `bun scheduler -- --strategy <name>` |
 | List strategies | `bun rebalance -- --list-strategies` |
 | Emergency exit (SN0) | `bun bunker` (dry run: `bun bunker -- --dry-run`) |
-| Backfill history DB | `bun backfill -- --days 30` |
+| Backfill history DB | `bun backfill -- --days 7` |
 | Lint / format | `bun check` (fix: `bun check --fix --unsafe`) |
 | Type-check | `bun typecheck` |
 | Dead code | `bun knip` |

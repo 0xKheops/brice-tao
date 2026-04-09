@@ -14,6 +14,14 @@ export interface SubnetSnapshot {
 	alphaIn: bigint;
 	alphaOut: bigint;
 	taoInEmission: bigint;
+	/** Alpha minted per block for distribution (from DynamicInfo.alpha_out_emission) */
+	alphaOutEmission: bigint;
+	/** Alpha injected into pool reserve per block (from DynamicInfo.alpha_in_emission) */
+	alphaInEmission: bigint;
+	/** Accumulated validator+server emission pending epoch drain */
+	pendingAlphaEmission: bigint;
+	/** Accumulated root emission pending epoch drain (TAO-denominated) */
+	pendingRootEmission: bigint;
 	/** Accurate spot price in I96F32 scale, from SwapRuntimeApi.current_alpha_price_all */
 	spotPrice: bigint;
 	/** Moving price in I96F32 scale, from dynamic_info.moving_price */

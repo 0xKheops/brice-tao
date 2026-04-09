@@ -225,3 +225,90 @@ describe("position tracking DB", () => {
 		}
 	});
 });
+
+describe("hasEmissionData", () => {
+	test("returns true for empty DB", () => {
+		const db = openHistoryDatabase(TEST_DB);
+		try {
+			expect(db.hasEmissionData()).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("returns false when all emission columns are zero", () => {
+		const db = openHistoryDatabase(TEST_DB);
+		try {
+			db.recordSnapshot({
+				block: {
+					blockNumber: 100,
+					blockHash: "0xabc",
+					timestamp: Date.now(),
+				},
+				subnets: [
+					{
+						netuid: 1,
+						name: "test",
+						taoIn: 1000n,
+						alphaIn: 2000n,
+						alphaOut: 3000n,
+						taoInEmission: 100n,
+						alphaOutEmission: 0n,
+						alphaInEmission: 0n,
+						pendingAlphaEmission: 0n,
+						pendingRootEmission: 0n,
+						spotPrice: 500n,
+						movingPrice: 500n,
+						subnetVolume: 0n,
+						tempo: 360,
+						blocksSinceLastStep: 0n,
+						networkRegisteredAt: 0n,
+						immunityPeriod: 100,
+						subnetToPrune: null,
+					},
+				],
+			});
+			expect(db.hasEmissionData()).toBe(false);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("returns true when emission columns have real values", () => {
+		const db = openHistoryDatabase(TEST_DB);
+		try {
+			db.recordSnapshot({
+				block: {
+					blockNumber: 100,
+					blockHash: "0xabc",
+					timestamp: Date.now(),
+				},
+				subnets: [
+					{
+						netuid: 1,
+						name: "test",
+						taoIn: 1000n,
+						alphaIn: 2000n,
+						alphaOut: 3000n,
+						taoInEmission: 100n,
+						alphaOutEmission: 50n,
+						alphaInEmission: 30n,
+						pendingAlphaEmission: 10n,
+						pendingRootEmission: 5n,
+						spotPrice: 500n,
+						movingPrice: 500n,
+						subnetVolume: 0n,
+						tempo: 360,
+						blocksSinceLastStep: 0n,
+						networkRegisteredAt: 0n,
+						immunityPeriod: 100,
+						subnetToPrune: null,
+					},
+				],
+			});
+			expect(db.hasEmissionData()).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+});

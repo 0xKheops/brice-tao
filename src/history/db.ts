@@ -64,7 +64,47 @@ export interface HistoryDatabase {
 	/** Get all trades for a given cycle ID. */
 	getTradesForCycle(cycleId: number): TradeRecord[];
 
+	/**
+	 * Check whether the DB has emission data populated.
+	 * Returns true if the DB is empty OR has non-zero emission columns.
+	 * Returns false if the DB has rows but all emission columns are '0'
+	 * (indicating data was backfilled before the emission schema was added).
+	 */
+	hasEmissionData(): boolean;
+
 	close(): void;
+}
+
+/**
+ * Verify the history DB contains emission data. If the DB has snapshot rows
+ * but all emission columns are zero, it was backfilled before the emission
+ * schema was added and must be re-created.
+ *
+ * Prints a descriptive error and calls `process.exit(1)` if stale.
+ */
+export function assertEmissionData(db: HistoryDatabase): void {
+	if (!db.hasEmissionData()) {
+		console.error(
+			"\n" +
+				"═".repeat(60) +
+				"\n" +
+				"  ❌ History DB is missing emission data.\n" +
+				"\n" +
+				"  The database was backfilled before the emission-aware schema\n" +
+				"  was added. Backtest emission accrual requires these columns\n" +
+				"  to contain real values from DynamicInfo.\n" +
+				"\n" +
+				"  To fix, delete the DB and re-backfill:\n" +
+				"\n" +
+				"    rm data/history.sqlite\n" +
+				"    bun backfill -- --days 30\n" +
+				"\n" +
+				"═".repeat(60) +
+				"\n",
+		);
+		db.close();
+		process.exit(1);
+	}
 }
 
 export function openHistoryDatabase(dbPath: string): HistoryDatabase {
@@ -73,6 +113,22 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 
 	sqlite.exec("PRAGMA journal_mode = WAL");
 	sqlite.exec("PRAGMA synchronous = NORMAL");
+
+	// Ensure WAL is checkpointed on process exit so -wal/-shm files are cleaned up.
+	// Using "exit" (not "beforeExit") because "beforeExit" does NOT fire on explicit
+	// process.exit() calls — only when the event loop drains naturally.
+	let closed = false;
+	const onExit = () => {
+		if (closed) return;
+		closed = true;
+		try {
+			sqlite.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+			sqlite.close();
+		} catch {
+			// DB may already be closed
+		}
+	};
+	process.on("exit", onExit);
 
 	// Create tables if they don't exist
 	sqlite.exec(`
@@ -95,6 +151,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 			alpha_in              TEXT    NOT NULL,
 			alpha_out             TEXT    NOT NULL,
 			tao_in_emission       TEXT    NOT NULL,
+			alpha_out_emission    TEXT    NOT NULL DEFAULT '0',
+			alpha_in_emission     TEXT    NOT NULL DEFAULT '0',
+			pending_alpha_emission TEXT   NOT NULL DEFAULT '0',
+			pending_root_emission TEXT    NOT NULL DEFAULT '0',
 			spot_price            TEXT    NOT NULL,
 			moving_price          TEXT    NOT NULL,
 			subnet_volume         TEXT    NOT NULL,
@@ -109,6 +169,21 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 	sqlite.exec(
 		"CREATE INDEX IF NOT EXISTS idx_snapshots_netuid_block ON subnet_snapshots(netuid, block_hash)",
 	);
+
+	// Migrate existing DBs: add emission columns if missing.
+	// SQLite has no ADD COLUMN IF NOT EXISTS — use try/catch per column.
+	for (const col of [
+		"alpha_out_emission TEXT NOT NULL DEFAULT '0'",
+		"alpha_in_emission TEXT NOT NULL DEFAULT '0'",
+		"pending_alpha_emission TEXT NOT NULL DEFAULT '0'",
+		"pending_root_emission TEXT NOT NULL DEFAULT '0'",
+	]) {
+		try {
+			sqlite.exec(`ALTER TABLE subnet_snapshots ADD COLUMN ${col}`);
+		} catch {
+			// Column already exists — ignore
+		}
+	}
 
 	// --- Position tracking tables ---
 	sqlite.exec(`
@@ -272,10 +347,12 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 	const insertSnapshotStmt = sqlite.prepare(`
 		INSERT OR IGNORE INTO subnet_snapshots (
 			block_hash, netuid, name, tao_in, alpha_in, alpha_out,
-			tao_in_emission, spot_price, moving_price, subnet_volume,
+			tao_in_emission, alpha_out_emission, alpha_in_emission,
+			pending_alpha_emission, pending_root_emission,
+			spot_price, moving_price, subnet_volume,
 			tempo, blocks_since_last_step, network_registered_at,
 			immunity_period, subnet_to_prune
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`);
 
 	const recordSnapshotTxn = sqlite.transaction(
@@ -298,6 +375,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 					s.alphaIn.toString(),
 					s.alphaOut.toString(),
 					s.taoInEmission.toString(),
+					s.alphaOutEmission.toString(),
+					s.alphaInEmission.toString(),
+					s.pendingAlphaEmission.toString(),
+					s.pendingRootEmission.toString(),
 					s.spotPrice.toString(),
 					s.movingPrice.toString(),
 					s.subnetVolume.toString(),
@@ -355,6 +436,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 					alphaIn: BigInt(r.subnet_snapshots.alphaIn),
 					alphaOut: BigInt(r.subnet_snapshots.alphaOut),
 					taoInEmission: BigInt(r.subnet_snapshots.taoInEmission),
+					alphaOutEmission: BigInt(r.subnet_snapshots.alphaOutEmission),
+					alphaInEmission: BigInt(r.subnet_snapshots.alphaInEmission),
+					pendingAlphaEmission: BigInt(r.subnet_snapshots.pendingAlphaEmission),
+					pendingRootEmission: BigInt(r.subnet_snapshots.pendingRootEmission),
 					spotPrice: BigInt(r.subnet_snapshots.spotPrice),
 					movingPrice: BigInt(r.subnet_snapshots.movingPrice),
 					subnetVolume: BigInt(r.subnet_snapshots.subnetVolume),
@@ -368,7 +453,23 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		},
 
 		close() {
+			if (closed) return;
+			closed = true;
+			process.removeListener("exit", onExit);
+			sqlite.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 			sqlite.close();
+		},
+
+		hasEmissionData() {
+			const row = sqlite
+				.query(
+					`SELECT COUNT(*) as total,
+					        SUM(CASE WHEN alpha_out_emission != '0' THEN 1 ELSE 0 END) as with_emission
+					 FROM subnet_snapshots`,
+				)
+				.get() as { total: number; with_emission: number };
+			// Empty DB is fine (no stale data). Non-empty with zero emission rows is stale.
+			return row.total === 0 || row.with_emission > 0;
 		},
 
 		getBlockMetas() {
@@ -390,6 +491,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 				alpha_in: string;
 				alpha_out: string;
 				tao_in_emission: string;
+				alpha_out_emission: string;
+				alpha_in_emission: string;
+				pending_alpha_emission: string;
+				pending_root_emission: string;
 				spot_price: string;
 				moving_price: string;
 				subnet_volume: string;
@@ -406,6 +511,10 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 				alphaIn: BigInt(r.alpha_in),
 				alphaOut: BigInt(r.alpha_out),
 				taoInEmission: BigInt(r.tao_in_emission),
+				alphaOutEmission: BigInt(r.alpha_out_emission),
+				alphaInEmission: BigInt(r.alpha_in_emission),
+				pendingAlphaEmission: BigInt(r.pending_alpha_emission),
+				pendingRootEmission: BigInt(r.pending_root_emission),
 				spotPrice: BigInt(r.spot_price),
 				movingPrice: BigInt(r.moving_price),
 				subnetVolume: BigInt(r.subnet_volume),

@@ -9,8 +9,15 @@
  *   the protocol's full-range position (mathematically equivalent).
  * - SN0 (root network / Stable mechanism): 1:1 TAO↔Alpha, zero pool fee.
  *
- * This backtest does NOT model emission rewards, staking fees, or concentrated
- * liquidity (V3 with user LP positions).
+ * This backtest models emission accrual using a simplified drip model:
+ * - Uses `alpha_out_emission` from DynamicInfo (per-block alpha minted)
+ * - Applies owner cut (9%), 50/50 miner/validator split, validator take (12%)
+ * - Root staking (SN0) positions earn dividends from all subnets (Swap claim)
+ * - Accrual happens at every snapshot (25 blocks ≈ 5 min)
+ *
+ * Limitations:
+ * - Does NOT model full Yuma consensus (~85-90% accuracy vs on-chain)
+ * - Does NOT model staking fees or concentrated liquidity (V3 user LP)
  *
  * Fee model:
  * - Pool fee: 33/65535 ≈ 0.05% on input (matches on-chain default FeeRate)
@@ -33,7 +40,11 @@
 import { join } from "node:path";
 import { Cron } from "croner";
 import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
-import { openHistoryDatabase } from "../src/history/index.ts";
+import {
+	assertEmissionData,
+	openHistoryDatabase,
+} from "../src/history/index.ts";
+import type { SubnetSnapshot } from "../src/history/types.ts";
 import {
 	alphaFeeInTao,
 	alphaNeededForTao,
@@ -56,6 +67,21 @@ const TX_FEE_RAO = (TAO * 12n) / 10_000n;
 
 const DB_PATH = join("data", "history.sqlite");
 const DEFAULT_INITIAL_TAO = 10;
+
+// ---------------------------------------------------------------------------
+// Emission model constants (hardcoded realistic defaults)
+// ---------------------------------------------------------------------------
+
+/** Subnet owner cut percentage — deducted before miner/validator split */
+const OWNER_CUT_PCT = 9n;
+/** Validator take percentage — deducted from validator dividends before delegators */
+const VALIDATOR_TAKE_PCT = 12n;
+/**
+ * TAO weight — multiplier for root TAO stake when computing root proportion.
+ * On-chain TaoWeight is ~0.18. We use 18/100 for bigint math.
+ */
+const TAO_WEIGHT_NUM = 18n;
+const TAO_WEIGHT_DENOM = 100n;
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -197,6 +223,7 @@ if (
 // ---------------------------------------------------------------------------
 
 const db = openHistoryDatabase(DB_PATH);
+assertEmissionData(db);
 const blockMetas = db.getBlockMetas();
 
 if (blockMetas.length < 2) {
@@ -218,7 +245,7 @@ const scheduleLabel =
 		: `every ${schedule.intervalBlocks} blocks`;
 
 console.log(
-	`\n📊 Backtest: ${strategyName} (AMM-simulated, no emission accrual)`,
+	`\n📊 Backtest: ${strategyName} (AMM-simulated, with emission accrual)`,
 );
 console.log(
 	`   Fee model: constant-product AMM (33/65535 pool fee, one per swap) + ${formatTao(TX_FEE_RAO)} τ tx fee`,
@@ -394,6 +421,163 @@ function updateLastKnownPrices(
 			lastKnownPrices.set(s.netuid, s.spotPrice);
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Emission accrual
+// ---------------------------------------------------------------------------
+
+let totalEmissionsAccruedRao = 0n;
+let lastAccrualBlock = 0;
+
+/**
+ * Accrue alpha emissions for non-SN0 positions.
+ *
+ * For each held alpha position on subnet i (skip SN0):
+ *   validatorAlphaPerBlock = alphaOutEmission × (1 − ownerCut) × 0.5
+ *   rootProp = (sn0TaoIn × taoWeight) / (sn0TaoIn × taoWeight + alphaOut)
+ *   alphaStakerPerBlock = validatorAlphaPerBlock × (1 − rootProp)
+ *   ourShare = alphaStakerPerBlock × (posAlpha / alphaOut)
+ *   netEmission = ourShare × (1 − validatorTake)
+ *   accrued = netEmission × blockDelta
+ *   position.alpha += accrued
+ *
+ * Returns TAO-equivalent of accrued emissions (for reporting).
+ */
+function accrueAlphaEmissions(
+	snapshots: SubnetSnapshot[],
+	blockDelta: number,
+	priceMap: Map<number, bigint>,
+): bigint {
+	if (blockDelta <= 0) return 0n;
+	const delta = BigInt(blockDelta);
+
+	const sn0 = snapshots.find((s) => s.netuid === 0);
+	const sn0TaoIn = sn0?.taoIn ?? 0n;
+
+	let totalTaoEquiv = 0n;
+
+	for (const [netuid, pos] of positions) {
+		if (netuid === 0 || pos.alpha <= 0n) continue;
+
+		const snap = snapshots.find((s) => s.netuid === netuid);
+		if (!snap || snap.alphaOutEmission <= 0n || snap.alphaOut <= 0n) continue;
+
+		// validatorAlphaPerBlock = alphaOutEmission × (100 − ownerCut) / 100 × 0.5
+		const afterOwnerCut =
+			(snap.alphaOutEmission * (100n - OWNER_CUT_PCT)) / 100n;
+		const validatorAlphaPerBlock = afterOwnerCut / 2n;
+
+		// rootProp = (sn0TaoIn × taoWeight) / (sn0TaoIn × taoWeight + alphaOut)
+		const weightedRoot = (sn0TaoIn * TAO_WEIGHT_NUM) / TAO_WEIGHT_DENOM;
+		const rootDenom = weightedRoot + snap.alphaOut;
+		// alphaStakerPerBlock = validatorAlphaPerBlock × (1 − rootProp)
+		//                     = validatorAlphaPerBlock × alphaOut / rootDenom
+		const alphaStakerPerBlock =
+			rootDenom > 0n
+				? (validatorAlphaPerBlock * snap.alphaOut) / rootDenom
+				: validatorAlphaPerBlock;
+
+		// ourShare = alphaStakerPerBlock × (posAlpha / alphaOut)
+		const ourShare = (alphaStakerPerBlock * pos.alpha) / snap.alphaOut;
+
+		// netEmission = ourShare × (1 − validatorTake)
+		const netEmission = (ourShare * (100n - VALIDATOR_TAKE_PCT)) / 100n;
+
+		const accrued = netEmission * delta;
+		if (accrued > 0n) {
+			pos.alpha += accrued;
+			const price = priceMap.get(netuid) ?? 0n;
+			totalTaoEquiv += price > 0n ? (accrued * price) / F32 : 0n;
+		}
+	}
+
+	return totalTaoEquiv;
+}
+
+/**
+ * Accrue root (SN0) emissions.
+ *
+ * SN0 stakers earn a share of every other subnet's emissions proportional
+ * to root proportion and their share of total root stake. Modeled as Swap
+ * claim type (alpha → TAO at spot price).
+ *
+ * For SN0 position, for each other subnet j:
+ *   rootAlphaPerBlock = alphaOutEmission_j × (1 − ownerCut) × 0.5 × rootProp_j
+ *   ourRootDiv = rootAlphaPerBlock × (sn0Pos.alpha / sn0TaoIn)
+ *   afterTake = ourRootDiv × (1 − validatorTake)
+ *   taoEquiv = afterTake × spotPrice_j / F32   (Swap claim type)
+ *   totalTaoAccrued += taoEquiv
+ *
+ * SN0's "alpha" is denominated in TAO (1:1 stable mechanism), so adding
+ * TAO-equivalent directly to sn0Pos.alpha is correct.
+ *
+ * Root sell flag: skip accrual when sum of moving prices ≤ 1.0 (F32),
+ * matching on-chain behavior where root divs are recycled.
+ */
+function accrueRootEmissions(
+	snapshots: SubnetSnapshot[],
+	blockDelta: number,
+	priceMap: Map<number, bigint>,
+): bigint {
+	if (blockDelta <= 0) return 0n;
+
+	const sn0Pos = positions.get(0);
+	if (!sn0Pos || sn0Pos.alpha <= 0n) return 0n;
+
+	const sn0 = snapshots.find((s) => s.netuid === 0);
+	const sn0TaoIn = sn0?.taoIn ?? 0n;
+	if (sn0TaoIn <= 0n) return 0n;
+
+	// Root sell flag: if sum of all moving prices ≤ 1.0 (F32), skip
+	let movingPriceSum = 0n;
+	for (const s of snapshots) {
+		if (s.netuid !== 0) movingPriceSum += s.movingPrice;
+	}
+	if (movingPriceSum <= F32) return 0n;
+
+	const delta = BigInt(blockDelta);
+	let totalTaoAccrued = 0n;
+
+	for (const snap of snapshots) {
+		if (snap.netuid === 0 || snap.alphaOutEmission <= 0n || snap.alphaOut <= 0n)
+			continue;
+
+		// validatorAlphaPerBlock = alphaOutEmission × (100 − ownerCut) / 100 × 0.5
+		const afterOwnerCut =
+			(snap.alphaOutEmission * (100n - OWNER_CUT_PCT)) / 100n;
+		const validatorAlphaPerBlock = afterOwnerCut / 2n;
+
+		// rootProp = (sn0TaoIn × taoWeight) / (sn0TaoIn × taoWeight + alphaOut)
+		const weightedRoot = (sn0TaoIn * TAO_WEIGHT_NUM) / TAO_WEIGHT_DENOM;
+		const rootDenom = weightedRoot + snap.alphaOut;
+		if (rootDenom <= 0n) continue;
+
+		// rootAlphaPerBlock = validatorAlphaPerBlock × rootProp
+		//                   = validatorAlphaPerBlock × weightedRoot / rootDenom
+		const rootAlphaPerBlock =
+			(validatorAlphaPerBlock * weightedRoot) / rootDenom;
+
+		// ourRootDiv = rootAlphaPerBlock × (sn0Pos.alpha / sn0TaoIn)
+		const ourRootDiv = (rootAlphaPerBlock * sn0Pos.alpha) / sn0TaoIn;
+
+		// afterTake = ourRootDiv × (1 − validatorTake)
+		const afterTake = (ourRootDiv * (100n - VALIDATOR_TAKE_PCT)) / 100n;
+
+		// Swap claim type: convert alpha to TAO at spot price
+		const price = priceMap.get(snap.netuid) ?? 0n;
+		if (price <= 0n) continue;
+
+		const taoEquiv = (afterTake * price) / F32;
+		totalTaoAccrued += taoEquiv;
+	}
+
+	const totalAccrued = totalTaoAccrued * delta;
+	if (totalAccrued > 0n) {
+		sn0Pos.alpha += totalAccrued;
+	}
+
+	return totalAccrued;
 }
 
 // ---------------------------------------------------------------------------
@@ -750,6 +934,25 @@ for (const meta of blockMetas) {
 	// Track prices for all observed subnets (carry-forward for missing data)
 	updateLastKnownPrices(snapshots);
 
+	// --- Emission accrual (every snapshot, not just rebalance ticks) ---
+	const blockDelta =
+		lastAccrualBlock > 0 ? meta.blockNumber - lastAccrualBlock : 0;
+	if (blockDelta > 0 && positions.size > 0) {
+		const emissionPriceMap = buildPriceMap(snapshots);
+		const alphaEmTao = accrueAlphaEmissions(
+			snapshots,
+			blockDelta,
+			emissionPriceMap,
+		);
+		const rootEmTao = accrueRootEmissions(
+			snapshots,
+			blockDelta,
+			emissionPriceMap,
+		);
+		totalEmissionsAccruedRao += alphaEmTao + rootEmTao;
+	}
+	lastAccrualBlock = meta.blockNumber;
+
 	const heldNetuids = getHeldNetuids();
 	const isScheduled = shouldRebalance(meta.blockNumber, meta.timestamp);
 	const gapExpired =
@@ -942,7 +1145,7 @@ const annualizedReturn =
 	durationDays > 0 ? (totalReturn ** (365.25 / durationDays) - 1) * 100 : 0;
 
 console.log(`\n${"═".repeat(60)}`);
-console.log("  BACKTEST SUMMARY (AMM-simulated, no emission accrual)");
+console.log("  BACKTEST SUMMARY (AMM-simulated, with emission accrual)");
 console.log("═".repeat(60));
 console.log(`  Strategy:         ${strategyName}`);
 console.log(`  Schedule:         ${scheduleLabel}`);
@@ -957,6 +1160,13 @@ console.log(`  Initial value:    ${formatTao(initialValue)} τ`);
 console.log(`  Final value:      ${formatTao(finalValue)} τ`);
 console.log(
 	`  PnL:              ${pnlRao >= 0n ? "+" : ""}${formatTao(pnlRao)} τ (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)`,
+);
+const tradePnl = pnlRao - totalEmissionsAccruedRao;
+console.log(
+	`    Trade PnL:      ${tradePnl >= 0n ? "+" : ""}${formatTao(tradePnl)} τ`,
+);
+console.log(
+	`    Emission PnL:   +${formatTao(totalEmissionsAccruedRao)} τ (estimated)`,
 );
 console.log(
 	`  Annualized:       ${annualizedReturn >= 0 ? "+" : ""}${annualizedReturn.toFixed(2)}% APY`,
