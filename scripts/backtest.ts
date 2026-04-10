@@ -246,23 +246,13 @@ const firstBlock = blockMetas[0]!;
 // biome-ignore lint/style/noNonNullAssertion: length >= 2 guaranteed above
 const lastBlock = blockMetas[blockMetas.length - 1]!;
 
-const scheduleLabel =
-	schedule.type === "cron"
-		? `cron "${schedule.cronSchedule}" (UTC)`
-		: `every ${schedule.intervalBlocks} blocks`;
-
 console.log(
 	`\n📊 Backtest: ${strategyName} (AMM-simulated, with emission accrual)`,
 );
-console.log(
-	`   Fee model: constant-product AMM (33/65535 pool fee, one per swap) + ${formatTao(TX_FEE_RAO)} τ tx fee`,
-);
-console.log(`   SN0: 1:1 conversion, zero pool fee (tx fee still applies)`);
 console.log(`   Initial capital: ${initialTao} τ`);
 console.log(
 	`   Period: block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots)`,
 );
-console.log(`   Rebalance schedule: ${scheduleLabel}`);
 console.log();
 
 // ---------------------------------------------------------------------------
@@ -278,11 +268,8 @@ const reportLines: string[] = [
 	``,
 	`| Parameter | Value |`,
 	`| --- | --- |`,
-	`| Fee model | constant-product AMM (33/65535 pool fee) + ${formatTao(TX_FEE_RAO)} τ tx fee |`,
-	`| SN0 | 1:1 conversion, zero pool fee (tx fee still applies) |`,
 	`| Initial capital | ${initialTao} τ |`,
 	`| Period | block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots) |`,
-	`| Schedule | ${scheduleLabel} |`,
 	``,
 	`## Operations`,
 	``,
@@ -1283,7 +1270,6 @@ const hodlMetrics = computeMetrics(hodlEquityCurve, []);
 
 const metricsExtra = {
 	strategyName,
-	scheduleLabel,
 	durationDays,
 	rebalanceCount,
 	totalTrades,

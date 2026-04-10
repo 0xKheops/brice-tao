@@ -603,7 +603,6 @@ function buildMetricRows(
 
 export interface MetricsExtra {
 	strategyName: string;
-	scheduleLabel: string;
 	durationDays: number;
 	rebalanceCount: number;
 	totalTrades: number;
@@ -826,7 +825,6 @@ export function formatMetricsMarkdown(
 	lines.push("| Parameter | Value |");
 	lines.push("| --- | --- |");
 	lines.push(`| Strategy | ${extra.strategyName} |`);
-	lines.push(`| Schedule | ${extra.scheduleLabel} |`);
 	lines.push(`| Period | ${extra.durationDays.toFixed(1)} days |`);
 	lines.push(`| Rebalances | ${extra.rebalanceCount} |`);
 	lines.push(`| Total trades | ${extra.totalTrades} |`);
