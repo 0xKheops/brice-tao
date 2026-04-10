@@ -15,3 +15,4 @@ export type {
 	SubnetSnapshot,
 	TradeRecord,
 } from "./types.ts";
+export { warmupHistoryDb } from "./warmup.ts";
