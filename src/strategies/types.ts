@@ -1,6 +1,7 @@
 import type { PolkadotClient } from "polkadot-api";
 import type { Balances } from "../balances/getBalances.ts";
 import type { Env } from "../config/env.ts";
+import type { HistoryDatabase } from "../history/db.ts";
 import type { SubnetSnapshot } from "../history/types.ts";
 import type { RebalanceConfig, StrategyTarget } from "../rebalance/types.ts";
 import type { CreateRunnerFn } from "../scheduling/types.ts";
@@ -154,6 +155,14 @@ export interface StrategyModule {
 	 * Strategies that don't need this can omit it.
 	 */
 	preparePreview?: () => Promise<void>;
+	/**
+	 * Optional hook called by the scheduler to fetch missing historical data
+	 * from an archive node BEFORE the initial rebalance. This ensures
+	 * data-dependent strategies have full indicator windows on first run.
+	 *
+	 * Must be idempotent — runners may call the same warmup again in start().
+	 */
+	warmup?: (env: Env, historyDb: HistoryDatabase) => Promise<void>;
 	/**
 	 * Optional factory for creating a backtest-compatible strategy instance.
 	 * Returns a stateful BacktestStrategy that can be stepped through

@@ -14,7 +14,7 @@ suppressRpcNoise();
 // --- Resolve strategy ---
 const env = loadEnv();
 const strategyName = resolveStrategyName(env.strategy);
-const { getStrategyTargets, createRunner, preparePreview } =
+const { getStrategyTargets, createRunner, preparePreview, warmup } =
 	await loadStrategy(strategyName);
 
 // --- Open shared history DB ---
@@ -31,6 +31,13 @@ const context = buildRunnerContext(
 	{ dryRun: false },
 	historyDb,
 );
+
+// Warm up from archive node BEFORE the initial rebalance so data-dependent
+// strategies have full indicator windows (SMA histories, price stability, etc.)
+// on first run. Idempotent — runners may re-invoke the same warmup in start().
+if (warmup) {
+	await warmup(env, historyDb);
+}
 
 // Hydrate shared state from persistent DB before the initial rebalance so
 // data-dependent strategies (sma-stoploss, steady-tide) have indicator

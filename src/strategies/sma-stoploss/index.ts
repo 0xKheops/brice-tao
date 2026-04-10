@@ -3,6 +3,7 @@ import { bittensor } from "@polkadot-api/descriptors";
 import type { PolkadotClient, TypedApi } from "polkadot-api";
 import type { Balances } from "../../balances/getBalances.ts";
 import type { Env } from "../../config/env.ts";
+import type { HistoryDatabase } from "../../history/db.ts";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
@@ -64,6 +65,30 @@ export async function preparePreview(): Promise<void> {
 
 /** Get the current config path (for runner to load config) */
 export { CONFIG_PATH };
+
+/**
+ * Warm up price history from an archive node so SMA indicators have a full
+ * window on first rebalance. Idempotent — skips if DB already has data.
+ */
+export async function warmup(
+	env: Env,
+	_historyDb: HistoryDatabase,
+): Promise<void> {
+	if (env.archiveWsEndpoints.length === 0) return;
+	const config = loadSmaStoplossConfig(CONFIG_PATH);
+	const db = openPriceDatabase(DB_PATH);
+	try {
+		const { warmupPriceHistory } = await import("./warmup.ts");
+		await warmupPriceHistory(
+			db,
+			env.archiveWsEndpoints,
+			config.strategy.maxPriceSamples,
+			config.schedule.rebalanceIntervalBlocks,
+		);
+	} finally {
+		db.close();
+	}
+}
 
 /**
  * SMA Crossover + Stop-Loss strategy: selects top subnets by blended

@@ -15,6 +15,7 @@ import { loadSmaStoplossConfig } from "./sma-stoploss/config.ts";
 import {
 	getStrategyTargets as smaStoploss,
 	preparePreview as smaStoplossPreview,
+	warmup as smaStoplossWarmup,
 } from "./sma-stoploss/index.ts";
 import { createRunner as smaStoplossRunner } from "./sma-stoploss/runner.ts";
 import type { BacktestSchedule, StrategyModule } from "./types.ts";
@@ -80,6 +81,7 @@ const strategyRegistry: Record<string, StrategyModule> = {
 		getStrategyTargets: smaStoploss,
 		createRunner: smaStoplossRunner,
 		preparePreview: smaStoplossPreview,
+		warmup: smaStoplossWarmup,
 		createBacktest: smaStoplossBacktest,
 		getBacktestSchedule: getSmaStoplossBacktestSchedule,
 	},
