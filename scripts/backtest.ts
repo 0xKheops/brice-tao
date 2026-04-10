@@ -37,11 +37,13 @@
  *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--observe-gap <blocks>] [--backfill]
  */
 
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Cron } from "croner";
 import type { EquitySample, TradeResult } from "../src/backtest/metrics.ts";
 import {
 	computeMetrics,
+	formatMetricsMarkdown,
 	formatMetricsSummary,
 } from "../src/backtest/metrics.ts";
 import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
@@ -262,6 +264,29 @@ console.log(
 );
 console.log(`   Rebalance schedule: ${scheduleLabel}`);
 console.log();
+
+// ---------------------------------------------------------------------------
+// Markdown report accumulator
+// ---------------------------------------------------------------------------
+
+const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+const reportPath = join("reports", `backtest-${strategyName}-${ts}.md`);
+const reportLines: string[] = [
+	`# Backtest Report`,
+	``,
+	`> Generated ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC — strategy: \`${strategyName}\``,
+	``,
+	`| Parameter | Value |`,
+	`| --- | --- |`,
+	`| Fee model | constant-product AMM (33/65535 pool fee) + ${formatTao(TX_FEE_RAO)} τ tx fee |`,
+	`| SN0 | 1:1 conversion, zero pool fee (tx fee still applies) |`,
+	`| Initial capital | ${initialTao} τ |`,
+	`| Period | block ${firstBlock.blockNumber} → ${lastBlock.blockNumber} (${blockMetas.length} snapshots) |`,
+	`| Schedule | ${scheduleLabel} |`,
+	``,
+	`## Operations`,
+	``,
+];
 
 // ---------------------------------------------------------------------------
 // Price helpers
@@ -608,24 +633,18 @@ function formatTime(timestampMs: number): string {
 	return new Date(timestampMs).toISOString().replace("T", " ").slice(0, 19);
 }
 
-const ANSI_GREEN = "\x1b[32m";
-const ANSI_RED = "\x1b[31m";
-const ANSI_DIM = "\x1b[2m";
-const ANSI_RESET = "\x1b[0m";
-
 interface TradeLog {
 	side: "sell" | "buy";
-	line: string;
+	mdLine: string;
 }
 
 const tickTrades: TradeLog[] = [];
 let tickTxFees = 0n;
 
-function formatPnl(pnlPct: number | null): string {
+function formatPnlMd(pnlPct: number | null): string {
 	if (pnlPct === null) return "";
 	const sign = pnlPct >= 0 ? "+" : "";
-	const color = pnlPct >= 0 ? ANSI_GREEN : ANSI_RED;
-	return `  ${color}PnL: ${sign}${pnlPct.toFixed(2)}%${ANSI_RESET}`;
+	return ` (${sign}${pnlPct.toFixed(2)}%)`;
 }
 
 function logSell(
@@ -636,14 +655,14 @@ function logSell(
 ) {
 	tickTrades.push({
 		side: "sell",
-		line: `  SELL  SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoReceived).padStart(10)} τ${formatPnl(pnlPct)}`,
+		mdLine: `| SELL | SN${netuid} ${subnetName.slice(0, 15)} | ${formatTao(taoReceived)} τ${formatPnlMd(pnlPct)} |`,
 	});
 }
 
 function logBuy(netuid: number, subnetName: string, taoSpent: bigint) {
 	tickTrades.push({
 		side: "buy",
-		line: `  BUY   SN${String(netuid).padEnd(3)} (${subnetName.slice(0, 15).padEnd(15)})  ${formatTao(taoSpent).padStart(10)} τ`,
+		mdLine: `| BUY | SN${netuid} ${subnetName.slice(0, 15)} | ${formatTao(taoSpent)} τ |`,
 	});
 }
 
@@ -653,16 +672,26 @@ function flushTrades(blockNumber: number, timestamp: number) {
 	const sells = tickTrades.filter((t) => t.side === "sell");
 	const buys = tickTrades.filter((t) => t.side === "buy");
 
-	console.log(
-		`${ANSI_DIM}── Rebalance  ${formatTime(timestamp)}  #${blockNumber} ──${ANSI_RESET}`,
+	reportLines.push(
+		`### Rebalance — ${formatTime(timestamp)} — #${blockNumber}`,
 	);
-	for (const s of sells) console.log(s.line);
-	if (sells.length > 0 && buys.length > 0) {
-		console.log(`  ${ANSI_DIM}  ──→${ANSI_RESET}`);
+	reportLines.push("");
+	if (sells.length > 0) {
+		reportLines.push("| Side | Subnet | Amount |");
+		reportLines.push("| --- | --- | --- |");
+		for (const s of sells) reportLines.push(s.mdLine);
+		reportLines.push("");
 	}
-	for (const b of buys) console.log(b.line);
-	console.log(`  ${ANSI_DIM}tx fees: ${formatTao(tickTxFees)} τ${ANSI_RESET}`);
-	console.log();
+	if (buys.length > 0) {
+		if (sells.length === 0) {
+			reportLines.push("| Side | Subnet | Amount |");
+			reportLines.push("| --- | --- | --- |");
+		}
+		for (const b of buys) reportLines.push(b.mdLine);
+		reportLines.push("");
+	}
+	reportLines.push(`> tx fees: ${formatTao(tickTxFees)} τ`);
+	reportLines.push("");
 
 	tickTrades.length = 0;
 	tickTxFees = 0n;
@@ -1194,11 +1223,14 @@ const finalValue = portfolioValue(finalPriceMap);
 db.close();
 
 // ---------------------------------------------------------------------------
-// Unrealised PnL per remaining position
+// Unrealised PnL + final positions (markdown report)
 // ---------------------------------------------------------------------------
 
 if (positions.size > 0) {
-	console.log(`\n${ANSI_DIM}── Unrealised PnL ──${ANSI_RESET}`);
+	reportLines.push("## Unrealised PnL");
+	reportLines.push("");
+	reportLines.push("| Subnet | Cost | Value | PnL |");
+	reportLines.push("| --- | --- | --- | --- |");
 	for (const [netuid, pos] of positions) {
 		const price = finalPriceMap.get(netuid) ?? 0n;
 		const taoVal = alphaToTao(pos.alpha, price);
@@ -1209,33 +1241,34 @@ if (positions.size > 0) {
 				: 0;
 		const name = finalSnapshots.find((s) => s.netuid === netuid)?.name ?? "?";
 		const sign = pnlPctPos >= 0 ? "+" : "";
-		const color = pnlPctPos >= 0 ? ANSI_GREEN : ANSI_RED;
-		console.log(
-			`  SN${String(netuid).padEnd(3)} (${name.slice(0, 15).padEnd(15)})  cost ${formatTao(pos.costBasis).padStart(10)} τ  val ${formatTao(taoVal).padStart(10)} τ  ${color}${sign}${pnlPctPos.toFixed(2)}%${ANSI_RESET}`,
+		reportLines.push(
+			`| SN${netuid} ${name.slice(0, 15)} | ${formatTao(pos.costBasis)} τ | ${formatTao(taoVal)} τ | ${sign}${pnlPctPos.toFixed(2)}% |`,
 		);
 	}
+	reportLines.push("");
 }
 
-// Show final positions
 if (positions.size > 0) {
-	console.log(`\n${ANSI_DIM}── Final Positions ──${ANSI_RESET}`);
+	reportLines.push("## Final Positions");
+	reportLines.push("");
+	reportLines.push("| Subnet | Value |");
+	reportLines.push("| --- | --- |");
 	for (const [netuid, pos] of positions) {
 		const price = finalPriceMap.get(netuid) ?? 0n;
 		const taoVal = alphaToTao(pos.alpha, price);
 		const name = finalSnapshots.find((s) => s.netuid === netuid)?.name ?? "?";
-		console.log(
-			`    SN${String(netuid).padEnd(3)} (${name.slice(0, 15).padEnd(15)}): ${formatTao(taoVal).padStart(12)} τ`,
+		reportLines.push(
+			`| SN${netuid} ${name.slice(0, 15)} | ${formatTao(taoVal)} τ |`,
 		);
 	}
 	if (free > 0n) {
-		console.log(
-			`    Free TAO:${"".padEnd(17)} ${formatTao(free).padStart(12)} τ`,
-		);
+		reportLines.push(`| Free TAO | ${formatTao(free)} τ |`);
 	}
+	reportLines.push("");
 }
 
 // ---------------------------------------------------------------------------
-// Compute and display comprehensive metrics
+// Compute metrics + write report + print summary
 // ---------------------------------------------------------------------------
 
 const pnlRao = finalValue - initialValue;
@@ -1248,7 +1281,7 @@ const tradePnl = pnlRao - totalEmissionsAccruedRao;
 const metrics = computeMetrics(equityCurve, tradeResults);
 const hodlMetrics = computeMetrics(hodlEquityCurve, []);
 
-const summary = formatMetricsSummary(metrics, {
+const metricsExtra = {
 	strategyName,
 	scheduleLabel,
 	durationDays,
@@ -1263,6 +1296,14 @@ const summary = formatMetricsSummary(metrics, {
 	emissionPnlTao: `+${formatTao(totalEmissionsAccruedRao)}`,
 	hodlReturnPct: hodlMetrics.totalReturnPct,
 	hodlCagr: hodlMetrics.cagr,
-});
+};
 
+reportLines.push(formatMetricsMarkdown(metrics, metricsExtra));
+
+await mkdir("reports", { recursive: true });
+await writeFile(reportPath, reportLines.join("\n"));
+
+const summary = formatMetricsSummary(metrics, metricsExtra);
 console.log(summary);
+console.log(`  📄 Full report: ${reportPath}`);
+console.log();

@@ -529,3 +529,118 @@ export function formatMetricsSummary(
 
 	return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Markdown formatter (for report files)
+// ---------------------------------------------------------------------------
+
+export function formatMetricsMarkdown(
+	m: BacktestMetrics,
+	extra: {
+		strategyName: string;
+		scheduleLabel: string;
+		durationDays: number;
+		rebalanceCount: number;
+		totalTrades: number;
+		totalFeesTao: string;
+		initialTao: string;
+		finalTao: string;
+		pnlTao: string;
+		pnlPct: number;
+		tradePnlTao: string;
+		emissionPnlTao: string;
+		hodlReturnPct?: number;
+		hodlCagr?: number;
+	},
+): string {
+	const lines: string[] = [];
+
+	lines.push("## Summary");
+	lines.push("");
+	lines.push(`| Parameter | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| Strategy | ${extra.strategyName} |`);
+	lines.push(`| Schedule | ${extra.scheduleLabel} |`);
+	lines.push(`| Period | ${extra.durationDays.toFixed(1)} days |`);
+	lines.push(`| Rebalances | ${extra.rebalanceCount} |`);
+	lines.push(`| Total trades | ${extra.totalTrades} |`);
+	lines.push(`| Total fees | ${extra.totalFeesTao} τ |`);
+
+	lines.push("");
+	lines.push("## Returns");
+	lines.push("");
+	lines.push(`| Metric | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| Total Return | ${fmtPct(m.totalReturnPct)} |`);
+	lines.push(`| CAGR | ${fmtPct(m.cagr)} |`);
+	lines.push(`| Ann. Volatility | ${fmtPct(m.annualizedVolatility)} |`);
+	if (extra.hodlReturnPct !== undefined) {
+		lines.push(`| HODL (SN0) | ${fmtPct(extra.hodlReturnPct)} |`);
+		lines.push(
+			`| Excess Return | ${fmtPct(m.totalReturnPct - extra.hodlReturnPct)} |`,
+		);
+	}
+	if (extra.hodlCagr !== undefined) {
+		lines.push(`| HODL CAGR | ${fmtPct(extra.hodlCagr)} |`);
+	}
+
+	lines.push("");
+	lines.push("## Risk-Adjusted Ratios");
+	lines.push("");
+	lines.push(`| Metric | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| Sharpe Ratio | ${fmtRatio(m.sharpeRatio)} |`);
+	lines.push(`| Sortino Ratio | ${fmtRatio(m.sortinoRatio)} |`);
+	lines.push(`| Calmar Ratio | ${fmtRatio(m.calmarRatio)} |`);
+	lines.push(`| Omega Ratio | ${fmtRatio(m.omegaRatio)} |`);
+
+	lines.push("");
+	lines.push("## Drawdown");
+	lines.push("");
+	lines.push(`| Metric | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| Max Drawdown | ${fmtPct(-m.maxDrawdownPct)} |`);
+	lines.push(
+		`| Max DD Duration | ${m.maxDrawdownDurationDays.toFixed(1)} days |`,
+	);
+	lines.push(`| Recovery Factor | ${fmtRatio(m.recoveryFactor)} |`);
+
+	lines.push("");
+	lines.push("## Trade Metrics");
+	lines.push("");
+	lines.push(`| Metric | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(
+		`| Win Rate | ${m.winRate !== null ? `${m.winRate.toFixed(1)}%` : "N/A"} |`,
+	);
+	lines.push(`| Profit Factor | ${fmtRatio(m.profitFactor)} |`);
+	lines.push(
+		`| Expectancy | ${m.expectancy !== null ? `${fmtNum(m.expectancy)} τ/trade` : "N/A"} |`,
+	);
+	lines.push(`| Payoff Ratio | ${fmtRatio(m.payoffRatio)} |`);
+
+	lines.push("");
+	lines.push("## Tail Risk (daily)");
+	lines.push("");
+	lines.push(`| Metric | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| VaR (95%) | ${fmtPct(m.var95)} |`);
+	lines.push(`| CVaR (95%) | ${fmtPct(m.cvar95)} |`);
+	lines.push(`| Tail Ratio | ${fmtRatio(m.tailRatio)} |`);
+	lines.push(`| Skewness | ${fmtRatio(m.skewness)} |`);
+	lines.push(`| Kurtosis | ${fmtRatio(m.kurtosis)} |`);
+
+	lines.push("");
+	lines.push("## PnL Decomposition");
+	lines.push("");
+	lines.push(`| | Value |`);
+	lines.push(`| --- | --- |`);
+	lines.push(`| Initial value | ${extra.initialTao} τ |`);
+	lines.push(`| Final value | ${extra.finalTao} τ |`);
+	lines.push(`| PnL | ${extra.pnlTao} τ (${fmtPct(extra.pnlPct)}) |`);
+	lines.push(`| Trade PnL | ${extra.tradePnlTao} τ |`);
+	lines.push(`| Emission PnL | ${extra.emissionPnlTao} τ (estimated) |`);
+	lines.push("");
+
+	return lines.join("\n");
+}
