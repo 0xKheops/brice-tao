@@ -757,19 +757,18 @@ function buildVerdict(
 		const excessColor = beat ? c.green : c.red;
 
 		lines.push(
-			`  ${icon} ${c.bold}VERDICT${c.reset}: ${verb} SN0 HODL by ${excessColor}${Math.abs(excess).toFixed(2)}%${c.reset} (${colorPct(m.totalReturnPct, true, c)} vs ${fmtPct(extra.hodlReturnPct)})`,
+			`${icon} ${c.bold}VERDICT${c.reset}: ${verb} SN0 HODL by ${excessColor}${Math.abs(excess).toFixed(2)}%${c.reset} (${colorPct(m.totalReturnPct, true, c)} vs ${fmtPct(extra.hodlReturnPct)})`,
 		);
 	} else {
 		const icon = m.totalReturnPct >= 0 ? "🏆" : "📉";
 		lines.push(
-			`  ${icon} ${c.bold}VERDICT${c.reset}: Total return ${colorPct(m.totalReturnPct, true, c)}`,
+			`${icon} ${c.bold}VERDICT${c.reset}: Total return ${colorPct(m.totalReturnPct, true, c)}`,
 		);
 	}
 
-	// Add risk context
 	if (m.maxDrawdownPct > 0) {
 		lines.push(
-			`  ${" ".repeat(10)}Max drawdown ${colorPct(-m.maxDrawdownPct, true, c)} over ${m.maxDrawdownDurationDays.toFixed(1)} days`,
+			`   Max drawdown ${colorPct(-m.maxDrawdownPct, true, c)} over ${m.maxDrawdownDurationDays.toFixed(1)} days`,
 		);
 	}
 
