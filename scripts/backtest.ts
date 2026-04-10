@@ -39,6 +39,11 @@
 
 import { join } from "node:path";
 import { Cron } from "croner";
+import type { EquitySample, TradeResult } from "../src/backtest/metrics.ts";
+import {
+	computeMetrics,
+	formatMetricsSummary,
+} from "../src/backtest/metrics.ts";
 import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
 import {
 	assertEmissionData,
@@ -338,6 +343,21 @@ let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
 let totalFeesPaid = 0n;
+
+// ---------------------------------------------------------------------------
+// Metrics tracking — equity curve, trade results, HODL benchmark
+// ---------------------------------------------------------------------------
+
+const equityCurve: EquitySample[] = [];
+const tradeResults: TradeResult[] = [];
+
+/**
+ * HODL benchmark: what if all capital sat in SN0 collecting root emissions?
+ * Tracked as a virtual alpha balance (SN0 is 1:1 stable mechanism).
+ */
+let hodlSn0Alpha: bigint = BigInt(initialTao) * TAO;
+let hodlLastAccrualBlock = 0;
+const hodlEquityCurve: EquitySample[] = [];
 
 /**
  * Last-known prices for each subnet — updated every snapshot.
@@ -694,6 +714,10 @@ function sellAll(
 	tickTxFees += txFee;
 	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
 	if (!isSN0) feeFreeBudget += taoReceived;
+	// Track realized trade result for metrics
+	tradeResults.push({
+		pnlAbsolute: Number(taoReceived - pos.costBasis) / Number(TAO),
+	});
 	logSell(netuid, subnetName, taoReceived, pnlPct);
 	positions.delete(netuid);
 	totalTrades++;
@@ -769,6 +793,10 @@ function sellPartial(
 	tickTxFees += txFee;
 	// Non-SN0 sell proceeds are fee-free for subsequent buys (swap_stake model)
 	if (!isSN0) feeFreeBudget += taoReceived;
+	// Track realized trade result for metrics
+	tradeResults.push({
+		pnlAbsolute: Number(taoReceived - proportionalCostBasis) / Number(TAO),
+	});
 	if (pos.alpha <= 0n) positions.delete(netuid);
 	logSell(netuid, subnetName, taoReceived, pnlPct);
 	totalTrades++;
@@ -953,6 +981,59 @@ for (const meta of blockMetas) {
 	}
 	lastAccrualBlock = meta.blockNumber;
 
+	// --- HODL benchmark emission accrual (SN0 root dividends) ---
+	const hodlBlockDelta =
+		hodlLastAccrualBlock > 0 ? meta.blockNumber - hodlLastAccrualBlock : 0;
+	if (hodlBlockDelta > 0 && hodlSn0Alpha > 0n) {
+		const sn0 = snapshots.find((s) => s.netuid === 0);
+		const sn0TaoIn = sn0?.taoIn ?? 0n;
+		if (sn0TaoIn > 0n) {
+			let movingPriceSum = 0n;
+			for (const s of snapshots) {
+				if (s.netuid !== 0) movingPriceSum += s.movingPrice;
+			}
+			if (movingPriceSum > F32) {
+				const delta = BigInt(hodlBlockDelta);
+				let hodlRootAccrued = 0n;
+				for (const snap of snapshots) {
+					if (
+						snap.netuid === 0 ||
+						snap.alphaOutEmission <= 0n ||
+						snap.alphaOut <= 0n
+					)
+						continue;
+					const afterOwnerCut =
+						(snap.alphaOutEmission * (100n - OWNER_CUT_PCT)) / 100n;
+					const validatorAlphaPerBlock = afterOwnerCut / 2n;
+					const weightedRoot = (sn0TaoIn * TAO_WEIGHT_NUM) / TAO_WEIGHT_DENOM;
+					const rootDenom = weightedRoot + snap.alphaOut;
+					if (rootDenom <= 0n) continue;
+					const rootAlphaPerBlock =
+						(validatorAlphaPerBlock * weightedRoot) / rootDenom;
+					const ourRootDiv = (rootAlphaPerBlock * hodlSn0Alpha) / sn0TaoIn;
+					const afterTake = (ourRootDiv * (100n - VALIDATOR_TAKE_PCT)) / 100n;
+					const price =
+						snapshots.find((ss) => ss.netuid === snap.netuid)?.spotPrice ?? 0n;
+					if (price <= 0n) continue;
+					hodlRootAccrued += (afterTake * price) / F32;
+				}
+				hodlSn0Alpha += hodlRootAccrued * delta;
+			}
+		}
+	}
+	hodlLastAccrualBlock = meta.blockNumber;
+
+	// --- Record equity curve + HODL benchmark at every snapshot ---
+	{
+		const snapPriceMap = buildPriceMap(snapshots);
+		const strategyValue = Number(portfolioValue(snapPriceMap)) / Number(TAO);
+		equityCurve.push({ timestamp: meta.timestamp, value: strategyValue });
+		hodlEquityCurve.push({
+			timestamp: meta.timestamp,
+			value: Number(hodlSn0Alpha) / Number(TAO),
+		});
+	}
+
 	const heldNetuids = getHeldNetuids();
 	const isScheduled = shouldRebalance(meta.blockNumber, meta.timestamp);
 	const gapExpired =
@@ -1135,46 +1216,9 @@ if (positions.size > 0) {
 	}
 }
 
-const pnlRao = finalValue - initialValue;
-const pnlPct = Number((pnlRao * 10000n) / initialValue) / 100;
-
-const durationMs = lastBlock.timestamp - firstBlock.timestamp;
-const durationDays = durationMs / (86_400 * 1000);
-const totalReturn = Number(finalValue) / Number(initialValue);
-const annualizedReturn =
-	durationDays > 0 ? (totalReturn ** (365.25 / durationDays) - 1) * 100 : 0;
-
-console.log(`\n${"═".repeat(60)}`);
-console.log("  BACKTEST SUMMARY (AMM-simulated, with emission accrual)");
-console.log("═".repeat(60));
-console.log(`  Strategy:         ${strategyName}`);
-console.log(`  Schedule:         ${scheduleLabel}`);
-if (observeGap > 0) {
-	console.log(`  Observe gap:      ${observeGap} blocks`);
-}
-console.log(`  Period:           ${durationDays.toFixed(1)} days`);
-console.log(`  Rebalances:       ${rebalanceCount}`);
-console.log(`  Total trades:     ${totalTrades}`);
-console.log(`  Total fees paid:  ${formatTao(totalFeesPaid)} τ`);
-console.log(`  Initial value:    ${formatTao(initialValue)} τ`);
-console.log(`  Final value:      ${formatTao(finalValue)} τ`);
-console.log(
-	`  PnL:              ${pnlRao >= 0n ? "+" : ""}${formatTao(pnlRao)} τ (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)`,
-);
-const tradePnl = pnlRao - totalEmissionsAccruedRao;
-console.log(
-	`    Trade PnL:      ${tradePnl >= 0n ? "+" : ""}${formatTao(tradePnl)} τ`,
-);
-console.log(
-	`    Emission PnL:   +${formatTao(totalEmissionsAccruedRao)} τ (estimated)`,
-);
-console.log(
-	`  Annualized:       ${annualizedReturn >= 0 ? "+" : ""}${annualizedReturn.toFixed(2)}% APY`,
-);
-
 // Show final positions
 if (positions.size > 0) {
-	console.log("\n  Final positions:");
+	console.log(`\n${ANSI_DIM}── Final Positions ──${ANSI_RESET}`);
 	for (const [netuid, pos] of positions) {
 		const price = finalPriceMap.get(netuid) ?? 0n;
 		const taoVal = alphaToTao(pos.alpha, price);
@@ -1189,5 +1233,36 @@ if (positions.size > 0) {
 		);
 	}
 }
-console.log("═".repeat(60));
-console.log();
+
+// ---------------------------------------------------------------------------
+// Compute and display comprehensive metrics
+// ---------------------------------------------------------------------------
+
+const pnlRao = finalValue - initialValue;
+const pnlPct = Number((pnlRao * 10000n) / initialValue) / 100;
+const durationMs = lastBlock.timestamp - firstBlock.timestamp;
+const durationDays = durationMs / (86_400 * 1000);
+
+const tradePnl = pnlRao - totalEmissionsAccruedRao;
+
+const metrics = computeMetrics(equityCurve, tradeResults);
+const hodlMetrics = computeMetrics(hodlEquityCurve, []);
+
+const summary = formatMetricsSummary(metrics, {
+	strategyName,
+	scheduleLabel,
+	durationDays,
+	rebalanceCount,
+	totalTrades,
+	totalFeesTao: formatTao(totalFeesPaid),
+	initialTao: formatTao(initialValue),
+	finalTao: formatTao(finalValue),
+	pnlTao: `${pnlRao >= 0n ? "+" : ""}${formatTao(pnlRao)}`,
+	pnlPct,
+	tradePnlTao: `${tradePnl >= 0n ? "+" : ""}${formatTao(tradePnl)}`,
+	emissionPnlTao: `+${formatTao(totalEmissionsAccruedRao)}`,
+	hodlReturnPct: hodlMetrics.totalReturnPct,
+	hodlCagr: hodlMetrics.cagr,
+});
+
+console.log(summary);
