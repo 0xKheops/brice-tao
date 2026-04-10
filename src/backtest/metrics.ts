@@ -633,6 +633,12 @@ export interface MetricsExtra {
 	hodlCagr?: number;
 	equityCurve?: EquitySample[];
 	hodlEquityCurve?: EquitySample[];
+	/** Code context — helps AI match reports to source */
+	gitCommit?: string;
+	gitBranch?: string;
+	strategyConfigPath?: string;
+	schedule?: string;
+	blockRange?: { first: number; last: number; snapshots: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,6 +1028,86 @@ export function formatMetricsMarkdown(
 	lines.push("");
 
 	return lines.join("\n");
+}
+
+/**
+ * Machine-readable JSON summary of all metrics + run parameters.
+ * Wrapped in a fenced code block so AI tools can extract structured data
+ * from the markdown report.
+ */
+export function formatMetricsJson(
+	m: BacktestMetrics,
+	extra: MetricsExtra,
+): string {
+	const data: Record<string, unknown> = {
+		// Code context — lets AI match this report to the exact code that produced it
+		source: {
+			gitCommit: extra.gitCommit ?? null,
+			gitBranch: extra.gitBranch ?? null,
+			strategy: extra.strategyName,
+			strategyConfigPath: extra.strategyConfigPath ?? null,
+			strategySourceDir: `src/strategies/${extra.strategyName}/`,
+			schedule: extra.schedule ?? null,
+		},
+		// Run parameters
+		run: {
+			generatedAt: new Date().toISOString(),
+			durationDays: round(extra.durationDays, 1),
+			blockRange: extra.blockRange ?? null,
+			rebalanceCount: extra.rebalanceCount,
+			totalTrades: extra.totalTrades,
+			initialTao: extra.initialTao,
+			finalTao: extra.finalTao,
+			pnlTao: extra.pnlTao,
+			pnlPct: round(extra.pnlPct, 2),
+			totalFeesTao: extra.totalFeesTao,
+			tradePnlTao: extra.tradePnlTao,
+			emissionPnlTao: extra.emissionPnlTao,
+		},
+		metrics: {
+			totalReturnPct: round(m.totalReturnPct, 2),
+			cagr: round(m.cagr, 2),
+			annualizedVolatility: round(m.annualizedVolatility, 2),
+			sharpeRatio: round(m.sharpeRatio, 4),
+			sortinoRatio: round(m.sortinoRatio, 4),
+			calmarRatio: round(m.calmarRatio, 4),
+			omegaRatio: round(m.omegaRatio, 4),
+			maxDrawdownPct: round(m.maxDrawdownPct, 2),
+			maxDrawdownDurationDays: round(m.maxDrawdownDurationDays, 1),
+			recoveryFactor: round(m.recoveryFactor, 4),
+			winRate: m.winRate !== null ? round(m.winRate, 1) : null,
+			profitFactor: m.profitFactor !== null ? round(m.profitFactor, 4) : null,
+			expectancy: m.expectancy !== null ? round(m.expectancy, 6) : null,
+			payoffRatio: m.payoffRatio !== null ? round(m.payoffRatio, 4) : null,
+			var95: round(m.var95, 4),
+			cvar95: round(m.cvar95, 4),
+			tailRatio: round(m.tailRatio, 4),
+			skewness: round(m.skewness, 4),
+			kurtosis: round(m.kurtosis, 4),
+		},
+		hodl:
+			extra.hodlReturnPct !== undefined
+				? {
+						returnPct: round(extra.hodlReturnPct, 2),
+						cagr:
+							extra.hodlCagr !== undefined ? round(extra.hodlCagr, 2) : null,
+					}
+				: null,
+	};
+
+	return [
+		"## Raw Metrics (JSON)",
+		"",
+		"```json",
+		JSON.stringify(data, null, 2),
+		"```",
+	].join("\n");
+}
+
+function round(v: number | null, decimals: number): number | null {
+	if (v === null) return null;
+	const factor = 10 ** decimals;
+	return Math.round(v * factor) / factor;
 }
 
 /** Returns a 🟢/🟡/🔴 indicator emoji based on whether value is above/at/below a threshold */

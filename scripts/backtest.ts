@@ -37,12 +37,14 @@
  *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--observe-gap <blocks>] [--backfill]
  */
 
+import { execSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Cron } from "croner";
 import type { EquitySample, TradeResult } from "../src/backtest/metrics.ts";
 import {
 	computeMetrics,
+	formatMetricsJson,
 	formatMetricsMarkdown,
 	formatMetricsSummary,
 } from "../src/backtest/metrics.ts";
@@ -62,6 +64,7 @@ import { formatTao, TAO } from "../src/rebalance/tao.ts";
 import type { StrategyTarget } from "../src/rebalance/types.ts";
 import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
 import type { BacktestSchedule } from "../src/strategies/types.ts";
+import { GIT_COMMIT } from "../src/version.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -264,7 +267,7 @@ const reportPath = join("reports", `backtest-${strategyName}-${ts}.md`);
 const reportLines: string[] = [
 	`# Backtest Report`,
 	``,
-	`> Generated ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC — strategy: \`${strategyName}\``,
+	`> Generated ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC — strategy: \`${strategyName}\` — commit: \`${GIT_COMMIT}\``,
 	``,
 	`| Parameter | Value |`,
 	`| --- | --- |`,
@@ -1268,6 +1271,22 @@ const tradePnl = pnlRao - totalEmissionsAccruedRao;
 const metrics = computeMetrics(equityCurve, tradeResults);
 const hodlMetrics = computeMetrics(hodlEquityCurve, []);
 
+const scheduleLabel =
+	schedule.type === "cron"
+		? `cron "${schedule.cronSchedule}" (UTC)`
+		: `every ${schedule.intervalBlocks} blocks`;
+
+const gitBranch = (() => {
+	try {
+		return execSync("git rev-parse --abbrev-ref HEAD", {
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+	} catch {
+		return undefined;
+	}
+})();
+
 const metricsExtra = {
 	strategyName,
 	durationDays,
@@ -1284,9 +1303,19 @@ const metricsExtra = {
 	hodlCagr: hodlMetrics.cagr,
 	equityCurve,
 	hodlEquityCurve,
+	gitCommit: GIT_COMMIT,
+	gitBranch,
+	strategyConfigPath: `src/strategies/${strategyName}/config.yaml`,
+	schedule: scheduleLabel,
+	blockRange: {
+		first: firstBlock.blockNumber,
+		last: lastBlock.blockNumber,
+		snapshots: blockMetas.length,
+	},
 };
 
 reportLines.push(formatMetricsMarkdown(metrics, metricsExtra));
+reportLines.push(formatMetricsJson(metrics, metricsExtra));
 
 await mkdir("reports", { recursive: true });
 await writeFile(reportPath, reportLines.join("\n"));
