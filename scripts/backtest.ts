@@ -1296,6 +1296,8 @@ const metricsExtra = {
 	emissionPnlTao: `+${formatTao(totalEmissionsAccruedRao)}`,
 	hodlReturnPct: hodlMetrics.totalReturnPct,
 	hodlCagr: hodlMetrics.cagr,
+	equityCurve,
+	hodlEquityCurve,
 };
 
 reportLines.push(formatMetricsMarkdown(metrics, metricsExtra));
