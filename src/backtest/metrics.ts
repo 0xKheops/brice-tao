@@ -462,6 +462,22 @@ function colorRatio(
 }
 
 // ---------------------------------------------------------------------------
+// ANSI-aware padding — invisible escape sequences don't count toward width
+// ---------------------------------------------------------------------------
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI escapes
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+function visibleLength(s: string): number {
+	return s.replace(ANSI_RE, "").length;
+}
+
+function padStartVisible(s: string, width: number): string {
+	const pad = width - visibleLength(s);
+	return pad > 0 ? " ".repeat(pad) + s : s;
+}
+
+// ---------------------------------------------------------------------------
 // Metric descriptors — single source of truth for labels + explanations
 // ---------------------------------------------------------------------------
 
@@ -675,7 +691,7 @@ export function formatMetricsSummary(
 		for (const row of sectionRows) {
 			// Fixed-width columns: label (20) + value (16) + hint (rest)
 			const labelStr = `  ${row.label}`.padEnd(22);
-			const valueStr = row.value.padStart(16);
+			const valueStr = padStartVisible(row.value, 16);
 			const hintStr = `${c.dim}${row.hint}${c.reset}`;
 			lines.push(`${labelStr}${valueStr}    ${hintStr}`);
 		}
@@ -707,7 +723,7 @@ export function formatMetricsSummary(
 		}
 		for (const row of hodlRows) {
 			const labelStr = `  ${row.label}`.padEnd(22);
-			const valueStr = row.value.padStart(16);
+			const valueStr = padStartVisible(row.value, 16);
 			const hintStr = `${c.dim}${row.hint}${c.reset}`;
 			lines.push(`${labelStr}${valueStr}    ${hintStr}`);
 		}
