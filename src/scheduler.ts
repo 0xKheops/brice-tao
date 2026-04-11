@@ -32,6 +32,22 @@ const context = buildRunnerContext(
 	historyDb,
 );
 
+// --- Graceful shutdown (registered early to handle SIGTERM during startup) ---
+let runner: Awaited<ReturnType<typeof createRunner>> | undefined;
+let isShuttingDown = false;
+const shutdown = async () => {
+	if (isShuttingDown) return;
+	isShuttingDown = true;
+	console.log("[scheduler] Shutting down...");
+	if (runner) await runner.stop();
+	historyDb.close();
+	bittensorClient.client.destroy();
+	process.exit(0);
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+
 // Warm up from archive node BEFORE the initial rebalance so data-dependent
 // strategies have full indicator windows (SMA histories, price stability, etc.)
 // on first run. Idempotent — runners may re-invoke the same warmup in start().
@@ -58,20 +74,5 @@ if (exitCode === 0) {
 }
 
 // --- Start strategy runner ---
-const runner = createRunner(context);
+runner = createRunner(context);
 await runner.start();
-
-// --- Graceful shutdown ---
-let isShuttingDown = false;
-const shutdown = async () => {
-	if (isShuttingDown) return;
-	isShuttingDown = true;
-	console.log("[scheduler] Shutting down...");
-	await runner.stop();
-	historyDb.close();
-	bittensorClient.client.destroy();
-	process.exit(0);
-};
-
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
