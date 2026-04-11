@@ -15,11 +15,16 @@ const F32 = 1n << 32n;
 const PRICE_SCALE = 1_000_000_000n;
 const BLOCKS_PER_DAY = 7200;
 
-const BATCH_SIZE = 5;
 const PROGRESS_EVERY = 50;
 
 /** Per-block fetch timeout — prevents hanging on unresponsive archive nodes */
 const BLOCK_FETCH_TIMEOUT_MS = 30_000;
+
+/** Maximum retry attempts per block before skipping */
+const MAX_RETRIES = 3;
+
+/** Base delay (ms) for exponential backoff between retries */
+const RETRY_BASE_DELAY_MS = 2_000;
 
 async function withTimeout<T>(
 	promise: Promise<T>,
@@ -38,6 +43,10 @@ async function withTimeout<T>(
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
@@ -167,107 +176,113 @@ const startTime = Date.now();
 let backfilled = 0;
 
 try {
-	for (let i = 0; i < missingBlocks.length; i += BATCH_SIZE) {
-		const batch = missingBlocks.slice(i, i + BATCH_SIZE);
+	let skipped = 0;
+	for (let i = 0; i < missingBlocks.length; i++) {
+		const blockNum = missingBlocks[i] as number;
+		let snapshot: HistorySnapshot | null = null;
 
-		const results = await Promise.all(
-			batch.map(async (blockNum) => {
-				try {
-					return await withTimeout(
-						(async () => {
-							const blockHash = await getBlockHash(archiveClient, blockNum);
-							if (!blockHash || isZeroHash(blockHash)) {
-								throw new Error(
-									`Archive node returned zero/empty hash for block ${blockNum}`,
-								);
-							}
+		for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+			try {
+				snapshot = await withTimeout(
+					(async () => {
+						const blockHash = await getBlockHash(archiveClient, blockNum);
+						if (!blockHash || isZeroHash(blockHash)) {
+							throw new Error(
+								`Archive node returned zero/empty hash for block ${blockNum}`,
+							);
+						}
 
-							const atOptions = { at: blockHash };
+						const atOptions = { at: blockHash };
 
-							const [
-								dynamicInfos,
-								immunityPeriod,
-								subnetToPrune,
-								alphaPrices,
-								timestamp,
-							] = await Promise.all([
-								api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
-								api.query.SubtensorModule.NetworkImmunityPeriod.getValue(
-									atOptions,
-								),
-								api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-								api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
-								api.query.Timestamp.Now.getValue(atOptions),
-							]);
+						const [
+							dynamicInfos,
+							immunityPeriod,
+							subnetToPrune,
+							alphaPrices,
+							timestamp,
+						] = await Promise.all([
+							api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
+							api.query.SubtensorModule.NetworkImmunityPeriod.getValue(
+								atOptions,
+							),
+							api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
+							api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
+							api.query.Timestamp.Now.getValue(atOptions),
+						]);
 
-							const priceMap = new Map<number, bigint>();
-							for (const entry of alphaPrices) {
-								priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
-							}
+						const priceMap = new Map<number, bigint>();
+						for (const entry of alphaPrices) {
+							priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
+						}
 
-							const decoder = new TextDecoder();
-							const subnets: SubnetSnapshot[] = [];
+						const decoder = new TextDecoder();
+						const subnets: SubnetSnapshot[] = [];
 
-							for (const info of dynamicInfos) {
-								if (info === undefined) continue;
-								const name = decoder
-									.decode(new Uint8Array(info.subnet_name))
-									.trim();
-								subnets.push({
-									netuid: info.netuid,
-									name,
-									taoIn: info.tao_in,
-									alphaIn: info.alpha_in,
-									alphaOut: info.alpha_out,
-									taoInEmission: info.tao_in_emission,
-									alphaOutEmission: info.alpha_out_emission,
-									alphaInEmission: info.alpha_in_emission,
-									pendingAlphaEmission: info.pending_alpha_emission,
-									pendingRootEmission: info.pending_root_emission,
-									spotPrice: priceMap.get(info.netuid) ?? 0n,
-									movingPrice: info.moving_price,
-									subnetVolume: info.subnet_volume,
-									tempo: info.tempo,
-									blocksSinceLastStep: info.blocks_since_last_step,
-									networkRegisteredAt: info.network_registered_at,
-									immunityPeriod: Number(immunityPeriod),
-									subnetToPrune: subnetToPrune ?? null,
-								});
-							}
+						for (const info of dynamicInfos) {
+							if (info === undefined) continue;
+							const name = decoder
+								.decode(new Uint8Array(info.subnet_name))
+								.trim();
+							subnets.push({
+								netuid: info.netuid,
+								name,
+								taoIn: info.tao_in,
+								alphaIn: info.alpha_in,
+								alphaOut: info.alpha_out,
+								taoInEmission: info.tao_in_emission,
+								alphaOutEmission: info.alpha_out_emission,
+								alphaInEmission: info.alpha_in_emission,
+								pendingAlphaEmission: info.pending_alpha_emission,
+								pendingRootEmission: info.pending_root_emission,
+								spotPrice: priceMap.get(info.netuid) ?? 0n,
+								movingPrice: info.moving_price,
+								subnetVolume: info.subnet_volume,
+								tempo: info.tempo,
+								blocksSinceLastStep: info.blocks_since_last_step,
+								networkRegisteredAt: info.network_registered_at,
+								immunityPeriod: Number(immunityPeriod),
+								subnetToPrune: subnetToPrune ?? null,
+							});
+						}
 
-							return {
-								block: {
-									blockHash,
-									blockNumber: blockNum,
-									timestamp: Number(timestamp),
-								},
-								subnets,
-							} satisfies HistorySnapshot;
-						})(),
-						BLOCK_FETCH_TIMEOUT_MS,
-						`block ${blockNum}`,
-					);
-				} catch (err) {
+						return {
+							block: {
+								blockHash,
+								blockNumber: blockNum,
+								timestamp: Number(timestamp),
+							},
+							subnets,
+						} satisfies HistorySnapshot;
+					})(),
+					BLOCK_FETCH_TIMEOUT_MS,
+					`block ${blockNum}`,
+				);
+				break;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (attempt < MAX_RETRIES) {
+					const delay = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
 					console.warn(
-						`⚠ Skipping block ${blockNum}: ${err instanceof Error ? err.message : String(err)}`,
+						`⚠ Block ${blockNum} attempt ${attempt}/${MAX_RETRIES} failed: ${msg} — retrying in ${(delay / 1000).toFixed(0)}s`,
 					);
-					return null;
+					await sleep(delay);
+				} else {
+					console.warn(
+						`⚠ Skipping block ${blockNum} after ${MAX_RETRIES} attempts: ${msg}`,
+					);
+					skipped++;
 				}
-			}),
-		);
+			}
+		}
 
-		for (const snapshot of results) {
-			if (!snapshot) continue;
+		if (snapshot) {
 			historyDb.recordSnapshot(snapshot);
 			backfilled++;
 		}
 
 		// Progress logging
-		const done = Math.min(i + batch.length, missingBlocks.length);
-		if (
-			backfilled % PROGRESS_EVERY < BATCH_SIZE ||
-			done === missingBlocks.length
-		) {
+		const done = i + 1;
+		if (done % PROGRESS_EVERY === 0 || done === missingBlocks.length) {
 			const elapsed = (Date.now() - startTime) / 1000;
 			const rate = done / elapsed;
 			const remaining = (missingBlocks.length - done) / rate;
@@ -279,7 +294,10 @@ try {
 	}
 
 	const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-	console.log(`\nBackfill complete: ${backfilled} blocks in ${elapsed}s`);
+	const skipMsg = skipped > 0 ? ` (${skipped} skipped after retries)` : "";
+	console.log(
+		`\nBackfill complete: ${backfilled} blocks in ${elapsed}s${skipMsg}`,
+	);
 } catch (err) {
 	const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 	console.error(
