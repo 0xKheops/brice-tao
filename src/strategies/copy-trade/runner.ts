@@ -151,7 +151,7 @@ function isLeaderStakingEvent(event: unknown, leaderAddress: string): boolean {
 	};
 	if (e.event?.type !== "SubtensorModule") return false;
 	const v = e.event.value;
-	if (!v || !v.type || !LEADER_EVENT_TYPES.has(v.type)) return false;
+	if (!v?.type || !LEADER_EVENT_TYPES.has(v.type)) return false;
 
 	const coldkey = Array.isArray(v.value) ? v.value[0] : undefined;
 	if (coldkey === leaderAddress) return true;
