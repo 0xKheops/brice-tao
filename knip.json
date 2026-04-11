@@ -6,5 +6,10 @@
 		"src/history/index.ts",
 		"src/errors.ts"
 	],
-	"ignoreDependencies": ["bun-types"]
+	"ignore": [".papi/**"],
+	"ignoreDependencies": ["bun-types"],
+	"ignoreExportsUsedInFile": {
+		"interface": true,
+		"type": true
+	}
 }
