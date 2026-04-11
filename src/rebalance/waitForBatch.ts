@@ -1,6 +1,7 @@
-import { blake2AsHex } from "@polkadot/util-crypto";
 import type { bittensor } from "@polkadot-api/descriptors";
+import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import type { PolkadotClient, TypedApi } from "polkadot-api";
+import { toHex } from "polkadot-api/utils";
 import { timeout as rxTimeout } from "rxjs/operators";
 import { log } from "./logger.ts";
 import { extractProxyResults } from "./proxyEvents.ts";
@@ -23,7 +24,7 @@ export async function waitForInnerBatch(
 	wrapperFee: bigint,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<BatchResult> {
-	const innerTxHash = blake2AsHex(innerSignedBytes, 256);
+	const innerTxHash = toHex(Blake2256(innerSignedBytes));
 	log.verbose(
 		`Watching finalized blocks for inner batch transaction (${innerTxHash})...`,
 	);

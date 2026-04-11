@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "bun:test";
 
-const xxhashAsU8aMock = vi.fn();
+const Twox128Mock = vi.fn();
 const randomBytesMock = vi.fn();
 const xchacha20poly1305Mock = vi.fn();
 const encapMock = vi.fn();
 const MlKem768Mock = vi.fn();
 
-vi.mock("@polkadot/util-crypto", () => ({
-	xxhashAsU8a: xxhashAsU8aMock,
+vi.mock("@polkadot-api/substrate-bindings", () => ({
+	Twox128: Twox128Mock,
 }));
 
 vi.mock("@noble/ciphers/utils.js", () => ({
@@ -78,7 +78,7 @@ describe("mevShield utilities", () => {
 			tx: { MevShield: { submit_encrypted: submitEncrypted } },
 		} as unknown as Parameters<typeof submitShieldedTx>[0];
 
-		xxhashAsU8aMock.mockReturnValue(keyHash);
+		Twox128Mock.mockReturnValue(keyHash);
 		randomBytesMock.mockReturnValue(nonce);
 		xchacha20poly1305Mock.mockReturnValue({ encrypt: encryptMock });
 		encapMock.mockResolvedValue([kemCt, sharedSecret]);
@@ -108,7 +108,7 @@ describe("mevShield utilities", () => {
 		expect(result.txHash).toBe(submitResult.txHash);
 		expect(result.block).toEqual(submitResult.block);
 		expect(encapMock).toHaveBeenCalledWith(publicKey);
-		expect(xxhashAsU8aMock).toHaveBeenCalledWith(publicKey, 128);
+		expect(Twox128Mock).toHaveBeenCalledWith(publicKey);
 		expect(xchacha20poly1305Mock).toHaveBeenCalledWith(sharedSecret, nonce);
 		expect(encryptMock).toHaveBeenCalledWith(innerSignedExtrinsic);
 		expect(submitEncrypted).toHaveBeenCalledWith({
@@ -132,7 +132,7 @@ describe("mevShield utilities", () => {
 			tx: { MevShield: { submit_encrypted: submitEncrypted } },
 		} as unknown as Parameters<typeof submitShieldedTx>[0];
 
-		xxhashAsU8aMock.mockReturnValue(keyHash);
+		Twox128Mock.mockReturnValue(keyHash);
 		randomBytesMock.mockReturnValue(nonce);
 		xchacha20poly1305Mock.mockReturnValue({
 			encrypt: vi.fn().mockReturnValue(aeadCt),

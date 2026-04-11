@@ -1,7 +1,7 @@
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { randomBytes } from "@noble/ciphers/utils.js";
-import { xxhashAsU8a } from "@polkadot/util-crypto";
 import type { bittensor } from "@polkadot-api/descriptors";
+import { Twox128 } from "@polkadot-api/substrate-bindings";
 import { MlKem768 } from "mlkem";
 import type {
 	PolkadotSigner,
@@ -20,7 +20,7 @@ async function encryptTransaction(
 	plaintext: Uint8Array,
 	publicKey: Uint8Array,
 ): Promise<Uint8Array> {
-	const keyHash = xxhashAsU8a(publicKey, 128); // 16 bytes
+	const keyHash = Twox128(publicKey); // 16 bytes
 
 	const mlKem = new MlKem768();
 	const [kemCt, sharedSecret] = await mlKem.encap(publicKey);

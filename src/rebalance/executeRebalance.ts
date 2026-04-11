@@ -1,5 +1,5 @@
 import { type bittensor, MultiAddress } from "@polkadot-api/descriptors";
-import { ss58Address } from "@polkadot-labs/hdkd-helpers";
+import { fromBufferToBase58 } from "@polkadot-api/substrate-bindings";
 import type { PolkadotClient, PolkadotSigner, TypedApi } from "polkadot-api";
 import { Enum } from "polkadot-api";
 import { TAO } from "./constants.ts";
@@ -267,8 +267,10 @@ function buildStakingCall(
 	}
 }
 
+const toSs58 = fromBufferToBase58(42);
+
 function signerAddress(signer: PolkadotSigner): string {
-	return ss58Address(signer.publicKey, 42);
+	return toSs58(signer.publicKey);
 }
 
 function describeOperation(op: RebalanceOperation): string {
