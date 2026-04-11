@@ -666,17 +666,10 @@ function flushTrades(blockNumber: number, timestamp: number) {
 		`### Rebalance — ${formatTime(timestamp)} — #${blockNumber}`,
 	);
 	reportLines.push("");
-	if (sells.length > 0) {
+	if (sells.length > 0 || buys.length > 0) {
 		reportLines.push("| Side | Subnet | Amount |");
 		reportLines.push("| --- | --- | --- |");
 		for (const s of sells) reportLines.push(s.mdLine);
-		reportLines.push("");
-	}
-	if (buys.length > 0) {
-		if (sells.length === 0) {
-			reportLines.push("| Side | Subnet | Amount |");
-			reportLines.push("| --- | --- | --- |");
-		}
 		for (const b of buys) reportLines.push(b.mdLine);
 		reportLines.push("");
 	}
