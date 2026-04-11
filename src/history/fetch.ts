@@ -37,9 +37,14 @@ export async function fetchHistorySnapshot(
 		]);
 
 	// Build price lookup: netuid → I96F32 spot price
+	// SN0 (Stable mechanism) is always 1:1 — the runtime API returns a reserve
+	// ratio that drifts from 1.0 due to emissions/fees, but trades are always 1:1.
 	const priceMap = new Map<number, bigint>();
 	for (const entry of alphaPrices) {
-		priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
+		priceMap.set(
+			entry.netuid,
+			entry.netuid === 0 ? F32 : (entry.price * F32) / PRICE_SCALE,
+		);
 	}
 
 	const subnets: SubnetSnapshot[] = [];

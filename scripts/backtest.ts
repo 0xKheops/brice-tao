@@ -434,6 +434,11 @@ function buildPriceMap(
 ): Map<number, bigint> {
 	const map = new Map(snapshots.map((s) => [s.netuid, s.spotPrice]));
 
+	// SN0 (Stable mechanism) is always 1:1 with TAO — force to F32 regardless
+	// of what the DB contains (reserve ratio drifts from 1.0 due to emissions/fees
+	// but actual trades are always 1:1).
+	map.set(0, F32);
+
 	// Carry forward last-known prices for held subnets missing from this snapshot
 	for (const [netuid] of positions) {
 		if (!map.has(netuid)) {
@@ -453,7 +458,8 @@ function updateLastKnownPrices(
 ): void {
 	for (const s of snapshots) {
 		if (s.spotPrice > 0n) {
-			lastKnownPrices.set(s.netuid, s.spotPrice);
+			// SN0 always 1:1 — don't carry forward a drifted reserve-ratio price
+			lastKnownPrices.set(s.netuid, s.netuid === 0 ? F32 : s.spotPrice);
 		}
 	}
 }

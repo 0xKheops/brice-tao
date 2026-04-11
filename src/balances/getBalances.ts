@@ -36,7 +36,9 @@ export async function getBalances(
 
 	const prices = new Map<number, bigint>();
 	for (const entry of alphaPrices) {
-		prices.set(entry.netuid, entry.price);
+		// SN0 (Stable mechanism) is always 1:1 — the runtime API returns a
+		// reserve ratio that drifts, but actual trades are 1:1 with TAO.
+		prices.set(entry.netuid, entry.netuid === 0 ? TAO : entry.price);
 	}
 
 	const stakes: StakeEntry[] = stakeInfos.map((s) => {

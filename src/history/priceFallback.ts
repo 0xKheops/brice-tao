@@ -43,7 +43,12 @@ export async function fetchAlphaPricesWithFallback(
 
 			const priceMap = new Map<number, bigint>();
 			for (const entry of alphaPrices) {
-				priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
+				// SN0 (Stable mechanism) is always 1:1 — normalize to avoid
+				// reserve-ratio drift (matching the storage fallback below).
+				priceMap.set(
+					entry.netuid,
+					entry.netuid === 0 ? F32 : (entry.price * F32) / PRICE_SCALE,
+				);
 			}
 			return priceMap;
 		} catch {
