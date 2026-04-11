@@ -24,14 +24,9 @@ export const SECONDS_PER_BLOCK = 12;
 export const DB_HISTORY_BLOCK_INTERVAL = 25;
 
 /**
- * Oldest block that can be backfilled from archive nodes.
- *
- * The runtime APIs used by the backfill script (e.g.
- * `SwapRuntimeApi.current_alpha_price_all`) did not exist before this block.
- * Attempting to query earlier blocks will fail, so we enforce this as a
- * hard floor for any backfill or backtest range.
+ * Subnets were introduced at this block
  */
-export const OLDEST_BACKFILL_BLOCK = 7_818_900;
+export const OLDEST_BACKFILL_BLOCK = 4_920_000;
 
 /** Returns `true` if `blockNumber` falls on the 25-block recording grid. */
 export function isDbHistoryBlock(blockNumber: number): boolean {

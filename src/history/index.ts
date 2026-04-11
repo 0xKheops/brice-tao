@@ -7,6 +7,10 @@ export {
 export type { HistoryDatabase } from "./db.ts";
 export { assertEmissionData, openHistoryDatabase } from "./db.ts";
 export { fetchHistorySnapshot } from "./fetch.ts";
+export {
+	fetchAlphaPricesWithFallback,
+	resetRuntimeApiFlag,
+} from "./priceFallback.ts";
 export { recordCurrentBlock } from "./record.ts";
 export type {
 	BlockMeta,

@@ -1,12 +1,9 @@
 import type { PolkadotClient } from "polkadot-api";
 import { createBittensorClient } from "../../api/createClient.ts";
 import { getBlockHash, isZeroHash } from "../../api/rpcThrottle.ts";
+import { fetchAlphaPricesWithFallback } from "../../history/priceFallback.ts";
 import { log } from "../../rebalance/logger.ts";
 import type { PriceDatabase } from "./db.ts";
-
-/** Conversion factor from ×1e9 runtime API prices to I96F32 fixed-point */
-const F32 = 1n << 32n;
-const PRICE_SCALE = 1_000_000_000n;
 
 /**
  * Warm up price histories by fetching historical subnet spot prices
@@ -77,12 +74,11 @@ export async function warmupPriceHistory(
 						const blockHash = await getBlockHash(client, blockNum);
 						if (!blockHash || isZeroHash(blockHash)) return null;
 
-						const alphaPrices =
-							await api.apis.SwapRuntimeApi.current_alpha_price_all({
-								at: blockHash,
-							});
+						const priceMap = await fetchAlphaPricesWithFallback(api, {
+							at: blockHash,
+						});
 
-						return { blockNum, alphaPrices };
+						return { blockNum, priceMap };
 					} catch {
 						return null;
 					}
@@ -92,16 +88,10 @@ export async function warmupPriceHistory(
 			for (const result of results) {
 				if (!result) continue;
 
-				for (const entry of result.alphaPrices) {
-					if (entry.price <= 0n) continue;
+				for (const [netuid, spotPrice] of result.priceMap) {
+					if (spotPrice <= 0n) continue;
 
-					const spotPrice = (entry.price * F32) / PRICE_SCALE;
-					db.insertPriceSample(
-						entry.netuid,
-						result.blockNum,
-						spotPrice,
-						maxSamples,
-					);
+					db.insertPriceSample(netuid, result.blockNum, spotPrice, maxSamples);
 				}
 
 				fetched++;

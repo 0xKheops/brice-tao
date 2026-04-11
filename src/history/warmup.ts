@@ -9,11 +9,8 @@ import {
 	snapToDbHistory,
 } from "./constants.ts";
 import type { HistoryDatabase } from "./db.ts";
+import { fetchAlphaPricesWithFallback } from "./priceFallback.ts";
 import type { HistorySnapshot, SubnetSnapshot } from "./types.ts";
-
-/** Conversion factor from ×1e9 runtime API prices to I96F32 fixed-point */
-const F32 = 1n << 32n;
-const PRICE_SCALE = 1_000_000_000n;
 
 const BATCH_SIZE = 5;
 const BLOCK_FETCH_TIMEOUT_MS = 30_000;
@@ -166,19 +163,14 @@ async function fetchBlockSnapshot(
 
 	const atOptions = { at: blockHash };
 
-	const [dynamicInfos, immunityPeriod, subnetToPrune, alphaPrices, timestamp] =
+	const [dynamicInfos, immunityPeriod, subnetToPrune, priceMap, timestamp] =
 		await Promise.all([
 			api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
 			api.query.SubtensorModule.NetworkImmunityPeriod.getValue(atOptions),
 			api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-			api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
+			fetchAlphaPricesWithFallback(api, atOptions),
 			api.query.Timestamp.Now.getValue(atOptions),
 		]);
-
-	const priceMap = new Map<number, bigint>();
-	for (const entry of alphaPrices) {
-		priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
-	}
 
 	const decoder = new TextDecoder();
 	const subnets: SubnetSnapshot[] = [];

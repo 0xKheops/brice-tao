@@ -8,12 +8,26 @@ import {
 	openHistoryDatabase,
 	snapToGrid,
 } from "../src/history/index.ts";
+import {
+	fetchAlphaPricesWithFallback,
+	resetRuntimeApiFlag,
+} from "../src/history/priceFallback.ts";
 import type { HistorySnapshot, SubnetSnapshot } from "../src/history/types.ts";
 
-/** Conversion factor from ×1e9 runtime API prices to I96F32 fixed-point */
-const F32 = 1n << 32n;
-const PRICE_SCALE = 1_000_000_000n;
 const BLOCKS_PER_DAY = 7200;
+
+/** Format seconds as "Xh Ym Zs", omitting zero-valued leading units */
+function formatDuration(totalSeconds: number): string {
+	const h = Math.floor(totalSeconds / 3600);
+	const m = Math.floor((totalSeconds % 3600) / 60);
+	const s = Math.floor(totalSeconds % 60);
+	if (h > 0) return `${h}h ${m}m ${s}s`;
+	if (m > 0) return `${m}m ${s}s`;
+	return `${s}s`;
+}
+
+/** Number of blocks to fetch concurrently */
+const BATCH_SIZE = 2;
 
 const PROGRESS_EVERY = 50;
 
@@ -177,13 +191,12 @@ let backfilled = 0;
 
 try {
 	let skipped = 0;
-	for (let i = 0; i < missingBlocks.length; i++) {
-		const blockNum = missingBlocks[i] as number;
-		let snapshot: HistorySnapshot | null = null;
 
+	/** Fetch a single block with retries. Returns snapshot or null on failure. */
+	async function fetchBlock(blockNum: number): Promise<HistorySnapshot | null> {
 		for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 			try {
-				snapshot = await withTimeout(
+				return await withTimeout(
 					(async () => {
 						const blockHash = await getBlockHash(archiveClient, blockNum);
 						if (!blockHash || isZeroHash(blockHash)) {
@@ -198,7 +211,7 @@ try {
 							dynamicInfos,
 							immunityPeriod,
 							subnetToPrune,
-							alphaPrices,
+							priceMap,
 							timestamp,
 						] = await Promise.all([
 							api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
@@ -206,14 +219,9 @@ try {
 								atOptions,
 							),
 							api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-							api.apis.SwapRuntimeApi.current_alpha_price_all(atOptions),
+							fetchAlphaPricesWithFallback(api, atOptions),
 							api.query.Timestamp.Now.getValue(atOptions),
 						]);
-
-						const priceMap = new Map<number, bigint>();
-						for (const entry of alphaPrices) {
-							priceMap.set(entry.netuid, (entry.price * F32) / PRICE_SCALE);
-						}
 
 						const decoder = new TextDecoder();
 						const subnets: SubnetSnapshot[] = [];
@@ -257,7 +265,6 @@ try {
 					BLOCK_FETCH_TIMEOUT_MS,
 					`block ${blockNum}`,
 				);
-				break;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				if (attempt < MAX_RETRIES) {
@@ -270,38 +277,52 @@ try {
 					console.warn(
 						`⚠ Skipping block ${blockNum} after ${MAX_RETRIES} attempts: ${msg}`,
 					);
-					skipped++;
 				}
 			}
 		}
+		return null;
+	}
 
-		if (snapshot) {
-			historyDb.recordSnapshot(snapshot);
-			backfilled++;
+	for (let i = 0; i < missingBlocks.length; i += BATCH_SIZE) {
+		// Re-check the runtime API periodically as we move into newer blocks
+		// where the API may have been deployed (blocks are processed ascending).
+		if (i % 500 === 0) resetRuntimeApiFlag();
+
+		const batch = missingBlocks.slice(i, i + BATCH_SIZE);
+
+		const results = await Promise.all(batch.map((b) => fetchBlock(b)));
+
+		for (const snapshot of results) {
+			if (snapshot) {
+				historyDb.recordSnapshot(snapshot);
+				backfilled++;
+			} else {
+				skipped++;
+			}
 		}
 
 		// Progress logging
-		const done = i + 1;
-		if (done % PROGRESS_EVERY === 0 || done === missingBlocks.length) {
+		const done = Math.min(i + BATCH_SIZE, missingBlocks.length);
+		if (done % PROGRESS_EVERY < BATCH_SIZE || done === missingBlocks.length) {
 			const elapsed = (Date.now() - startTime) / 1000;
 			const rate = done / elapsed;
 			const remaining = (missingBlocks.length - done) / rate;
 			console.log(
 				`Progress: ${done}/${missingBlocks.length} (${((done / missingBlocks.length) * 100).toFixed(1)}%) — ` +
-					`${elapsed.toFixed(0)}s elapsed, ~${remaining.toFixed(0)}s remaining`,
+					`${formatDuration(elapsed)} elapsed, ~${formatDuration(remaining)} remaining`,
 			);
 		}
 	}
 
-	const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+	const elapsed = (Date.now() - startTime) / 1000;
 	const skipMsg = skipped > 0 ? ` (${skipped} skipped after retries)` : "";
 	console.log(
-		`\nBackfill complete: ${backfilled} blocks in ${elapsed}s${skipMsg}`,
+		`\nBackfill complete: ${backfilled} blocks in ${formatDuration(elapsed)}${skipMsg}`,
 	);
 } catch (err) {
-	const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+	const elapsed = (Date.now() - startTime) / 1000;
 	console.error(
-		`\nBackfill failed after ${backfilled} blocks (${elapsed}s): ${err instanceof Error ? err.message : String(err)}`,
+		`\nBackfill failed after ${backfilled} blocks (${formatDuration(elapsed)}): ${err instanceof Error ? err.message : String(err)}`,
 	);
 	process.exitCode = 1;
 } finally {
