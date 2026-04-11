@@ -924,9 +924,20 @@ function buildTrigger(
 	sched: BacktestSchedule,
 	firstTimestamp: number,
 ): (blockNumber: number, timestamp: number) => boolean {
+	// Always trigger on the very first call — models the initial deployment
+	// rebalance (`bun rebalance`) that positions the portfolio before the
+	// scheduler takes over with cron / block-interval ticks.
+	let isFirstCall = true;
+
 	if (sched.type === "block-interval") {
 		const interval = sched.intervalBlocks;
-		return (blockNumber) => blockNumber % interval === 0;
+		return (blockNumber) => {
+			if (isFirstCall) {
+				isFirstCall = false;
+				return true;
+			}
+			return blockNumber % interval === 0;
+		};
 	}
 
 	// Cron-based: maintain persistent nextScheduledAt
@@ -941,6 +952,10 @@ function buildTrigger(
 	}
 
 	return (_blockNumber, timestamp) => {
+		if (isFirstCall) {
+			isFirstCall = false;
+			return true;
+		}
 		if (!nextScheduledAt) return false;
 		if (timestamp < nextScheduledAt.getTime()) return false;
 
