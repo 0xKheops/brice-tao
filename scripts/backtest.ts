@@ -34,7 +34,7 @@
  *   specific schedule regardless of strategy config.
  *
  * Usage:
- *   bun backtest -- --strategy <name> [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--observe-gap <blocks>] [--backfill]
+ *   bun backtest -- --strategy <name> [--days <number>] [--initial-tao <number>] [--interval-blocks <number>] [--cron "<expr>"] [--observe-gap <blocks>] [--backfill]
  */
 
 import { execSync } from "node:child_process";
@@ -126,6 +126,9 @@ function parseStringArg(flag: string): string | undefined {
 
 const strategyName = resolveStrategyName(process.env.STRATEGY);
 const initialTao = parseIntArg("--initial-tao", DEFAULT_INITIAL_TAO);
+const cliDays = process.argv.includes("--days")
+	? parseIntArg("--days", 0)
+	: undefined;
 const cliIntervalBlocks = process.argv.includes("--interval-blocks")
 	? parseIntArg("--interval-blocks", 0)
 	: undefined;
@@ -234,7 +237,14 @@ if (
 
 const db = openHistoryDatabase(DB_PATH);
 assertEmissionData(db);
-const blockMetas = db.getBlockMetas();
+let blockMetas = db.getBlockMetas();
+
+// Apply --days filter: keep only snapshots within the last N days
+if (cliDays !== undefined) {
+	const lastTimestamp = blockMetas[blockMetas.length - 1]?.timestamp ?? 0;
+	const cutoff = lastTimestamp - cliDays * 86_400_000;
+	blockMetas = blockMetas.filter((m) => m.timestamp >= cutoff);
+}
 
 if (blockMetas.length < 2) {
 	console.error(
