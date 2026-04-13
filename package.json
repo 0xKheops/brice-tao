@@ -47,7 +47,6 @@
 		"@polkadot-labs/hdkd": "^0.0.26",
 		"@polkadot-labs/hdkd-helpers": "^0.0.27",
 		"croner": "^10.0.1",
-		"drizzle-orm": "^0.45.2",
 		"mlkem": "^2.7.0",
 		"polkadot-api": "^2.0.0",
 		"rxjs": "^7.8.2",

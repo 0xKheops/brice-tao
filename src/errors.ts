@@ -19,6 +19,13 @@ export class ConfigError extends RebalanceError {
 	}
 }
 
+/** History DB is stale, missing required columns, or otherwise unusable */
+export class HistoryDataError extends RebalanceError {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, "HISTORY_DATA_ERROR", options);
+	}
+}
+
 /** Swap simulation returned zero output or price moved beyond buffer */
 export class SlippageError extends RebalanceError {
 	constructor(

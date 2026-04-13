@@ -1,9 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { and, between, eq } from "drizzle-orm";
-import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
-import * as schema from "./schema.ts";
+import { HistoryDataError } from "../errors.ts";
 import type {
 	CycleRecord,
 	HistorySnapshot,
@@ -75,16 +73,43 @@ export interface HistoryDatabase {
 	close(): void;
 }
 
+interface SnapshotRow {
+	netuid: number;
+	name: string;
+	tao_in: string;
+	alpha_in: string;
+	alpha_out: string;
+	tao_in_emission: string;
+	alpha_out_emission: string;
+	alpha_in_emission: string;
+	pending_alpha_emission: string;
+	pending_root_emission: string;
+	spot_price: string;
+	moving_price: string;
+	subnet_volume: string;
+	tempo: number;
+	blocks_since_last_step: string;
+	network_registered_at: string;
+	immunity_period: number;
+	subnet_to_prune: number | null;
+}
+
+interface SubnetSeriesRow extends SnapshotRow {
+	block_number: number;
+	block_hash: string;
+	timestamp: number;
+}
+
 /**
  * Verify the history DB contains emission data. If the DB has snapshot rows
  * but all emission columns are zero, it was backfilled before the emission
  * schema was added and must be re-created.
  *
- * Prints a descriptive error and calls `process.exit(1)` if stale.
+ * Throws a typed error so entrypoints can decide how to surface the failure.
  */
 export function assertEmissionData(db: HistoryDatabase): void {
 	if (!db.hasEmissionData()) {
-		console.error(
+		throw new HistoryDataError(
 			"\n" +
 				"═".repeat(60) +
 				"\n" +
@@ -102,8 +127,6 @@ export function assertEmissionData(db: HistoryDatabase): void {
 				"═".repeat(60) +
 				"\n",
 		);
-		db.close();
-		process.exit(1);
 	}
 }
 
@@ -115,8 +138,8 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 	sqlite.exec("PRAGMA synchronous = NORMAL");
 
 	// Ensure WAL is checkpointed on process exit so -wal/-shm files are cleaned up.
-	// Using "exit" (not "beforeExit") because "beforeExit" does NOT fire on explicit
-	// process.exit() calls — only when the event loop drains naturally.
+	// Using "exit" (not "beforeExit") because "beforeExit" does NOT fire on all
+	// shutdown paths — only when the event loop drains naturally.
 	let closed = false;
 	const onExit = () => {
 		if (closed) return;
@@ -237,8 +260,6 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 	);
 	sqlite.exec("CREATE INDEX IF NOT EXISTS idx_trades_netuid ON trades(netuid)");
 
-	const db: BunSQLiteDatabase<typeof schema> = drizzle(sqlite, { schema });
-
 	// Pre-compiled statement for fast block existence check
 	const hasBlockStmt = sqlite.prepare(
 		"SELECT 1 FROM blocks WHERE block_hash = ? LIMIT 1",
@@ -254,6 +275,14 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		FROM subnet_snapshots s
 		INNER JOIN blocks b ON s.block_hash = b.block_hash
 		WHERE b.block_number = ?
+	`);
+	const subnetSeriesStmt = sqlite.prepare(`
+		SELECT s.*, b.block_number, b.block_hash, b.timestamp
+		FROM subnet_snapshots s
+		INNER JOIN blocks b ON s.block_hash = b.block_hash
+		WHERE s.netuid = ?
+		  AND b.block_number BETWEEN ? AND ?
+		ORDER BY b.block_number ASC
 	`);
 
 	// --- Position tracking statements ---
@@ -409,46 +438,17 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		},
 
 		getSubnetSeries(netuid, fromBlock, toBlock) {
-			const rows = db
-				.select()
-				.from(schema.subnetSnapshots)
-				.innerJoin(
-					schema.blocks,
-					eq(schema.subnetSnapshots.blockHash, schema.blocks.blockHash),
-				)
-				.where(
-					and(
-						eq(schema.subnetSnapshots.netuid, netuid),
-						between(schema.blocks.blockNumber, fromBlock, toBlock),
-					),
-				)
-				.orderBy(schema.blocks.blockNumber)
-				.all();
+			const rows = subnetSeriesStmt.all(
+				netuid,
+				fromBlock,
+				toBlock,
+			) as Array<SubnetSeriesRow>;
 
-			return rows.map((r) => ({
-				blockNumber: r.blocks.blockNumber,
-				blockHash: r.blocks.blockHash,
-				timestamp: r.blocks.timestamp,
-				snapshot: {
-					netuid: r.subnet_snapshots.netuid,
-					name: r.subnet_snapshots.name,
-					taoIn: BigInt(r.subnet_snapshots.taoIn),
-					alphaIn: BigInt(r.subnet_snapshots.alphaIn),
-					alphaOut: BigInt(r.subnet_snapshots.alphaOut),
-					taoInEmission: BigInt(r.subnet_snapshots.taoInEmission),
-					alphaOutEmission: BigInt(r.subnet_snapshots.alphaOutEmission),
-					alphaInEmission: BigInt(r.subnet_snapshots.alphaInEmission),
-					pendingAlphaEmission: BigInt(r.subnet_snapshots.pendingAlphaEmission),
-					pendingRootEmission: BigInt(r.subnet_snapshots.pendingRootEmission),
-					spotPrice: BigInt(r.subnet_snapshots.spotPrice),
-					movingPrice: BigInt(r.subnet_snapshots.movingPrice),
-					subnetVolume: BigInt(r.subnet_snapshots.subnetVolume),
-					tempo: r.subnet_snapshots.tempo,
-					blocksSinceLastStep: BigInt(r.subnet_snapshots.blocksSinceLastStep),
-					networkRegisteredAt: BigInt(r.subnet_snapshots.networkRegisteredAt),
-					immunityPeriod: r.subnet_snapshots.immunityPeriod,
-					subnetToPrune: r.subnet_snapshots.subnetToPrune,
-				},
+			return rows.map((row) => ({
+				blockNumber: row.block_number,
+				blockHash: row.block_hash,
+				timestamp: row.timestamp,
+				snapshot: mapSnapshotRow(row),
 			}));
 		},
 
@@ -484,46 +484,8 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 		},
 
 		getSnapshotsAtBlock(blockNumber) {
-			const rows = snapshotsAtBlockStmt.all(blockNumber) as Array<{
-				netuid: number;
-				name: string;
-				tao_in: string;
-				alpha_in: string;
-				alpha_out: string;
-				tao_in_emission: string;
-				alpha_out_emission: string;
-				alpha_in_emission: string;
-				pending_alpha_emission: string;
-				pending_root_emission: string;
-				spot_price: string;
-				moving_price: string;
-				subnet_volume: string;
-				tempo: number;
-				blocks_since_last_step: string;
-				network_registered_at: string;
-				immunity_period: number;
-				subnet_to_prune: number | null;
-			}>;
-			return rows.map((r) => ({
-				netuid: r.netuid,
-				name: r.name,
-				taoIn: BigInt(r.tao_in),
-				alphaIn: BigInt(r.alpha_in),
-				alphaOut: BigInt(r.alpha_out),
-				taoInEmission: BigInt(r.tao_in_emission),
-				alphaOutEmission: BigInt(r.alpha_out_emission),
-				alphaInEmission: BigInt(r.alpha_in_emission),
-				pendingAlphaEmission: BigInt(r.pending_alpha_emission),
-				pendingRootEmission: BigInt(r.pending_root_emission),
-				spotPrice: BigInt(r.spot_price),
-				movingPrice: BigInt(r.moving_price),
-				subnetVolume: BigInt(r.subnet_volume),
-				tempo: r.tempo,
-				blocksSinceLastStep: BigInt(r.blocks_since_last_step),
-				networkRegisteredAt: BigInt(r.network_registered_at),
-				immunityPeriod: r.immunity_period,
-				subnetToPrune: r.subnet_to_prune,
-			}));
+			const rows = snapshotsAtBlockStmt.all(blockNumber) as Array<SnapshotRow>;
+			return rows.map((row) => mapSnapshotRow(row));
 		},
 
 		recordCycle(cycle) {
@@ -628,5 +590,28 @@ export function openHistoryDatabase(dbPath: string): HistoryDatabase {
 				spotPrice: r.spot_price !== null ? BigInt(r.spot_price) : null,
 			}));
 		},
+	};
+}
+
+function mapSnapshotRow(row: SnapshotRow): SubnetSnapshot {
+	return {
+		netuid: row.netuid,
+		name: row.name,
+		taoIn: BigInt(row.tao_in),
+		alphaIn: BigInt(row.alpha_in),
+		alphaOut: BigInt(row.alpha_out),
+		taoInEmission: BigInt(row.tao_in_emission),
+		alphaOutEmission: BigInt(row.alpha_out_emission),
+		alphaInEmission: BigInt(row.alpha_in_emission),
+		pendingAlphaEmission: BigInt(row.pending_alpha_emission),
+		pendingRootEmission: BigInt(row.pending_root_emission),
+		spotPrice: BigInt(row.spot_price),
+		movingPrice: BigInt(row.moving_price),
+		subnetVolume: BigInt(row.subnet_volume),
+		tempo: row.tempo,
+		blocksSinceLastStep: BigInt(row.blocks_since_last_step),
+		networkRegisteredAt: BigInt(row.network_registered_at),
+		immunityPeriod: row.immunity_period,
+		subnetToPrune: row.subnet_to_prune,
 	};
 }
