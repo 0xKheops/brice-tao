@@ -1,23 +1,11 @@
-import { writeFileSync } from "node:fs";
 import type { PolkadotClient } from "polkadot-api";
 import type { Subscription } from "rxjs";
 import {
 	DB_HISTORY_BLOCK_INTERVAL,
 	SECONDS_PER_BLOCK,
 } from "../history/constants.ts";
+import { writeHeartbeat } from "./heartbeat.ts";
 import type { RebalanceCycleResult, StrategyRunner } from "./types.ts";
-
-/**
- * Write a heartbeat deadline (epoch seconds) to `data/heartbeat`.
- * Docker healthcheck verifies the deadline is still in the future.
- */
-function writeHeartbeat(deadlineSeconds: number): void {
-	try {
-		writeFileSync("data/heartbeat", String(Math.round(deadlineSeconds)));
-	} catch {
-		// Non-critical — don't fail the run
-	}
-}
 
 /** Block info passed to the tick callback — use this for queries instead of re-fetching */
 export interface BlockInfo {
@@ -29,6 +17,8 @@ export interface BlockIntervalRunnerOptions {
 	client: PolkadotClient;
 	intervalBlocks: number;
 	staleTimeoutBlocks: number;
+	observeIntervalBlocks?: number;
+	onObserve?: (block: BlockInfo) => Promise<void>;
 	onTick: (block: BlockInfo) => Promise<RebalanceCycleResult>;
 	label: string;
 }
@@ -48,6 +38,8 @@ export function createBlockIntervalRunner({
 	client,
 	intervalBlocks,
 	staleTimeoutBlocks,
+	observeIntervalBlocks,
+	onObserve,
 	onTick,
 	label,
 }: BlockIntervalRunnerOptions): StrategyRunner {
@@ -56,9 +48,26 @@ export function createBlockIntervalRunner({
 			`[${label}] rebalanceIntervalBlocks (${intervalBlocks}) must be a multiple of BLOCK_INTERVAL (${DB_HISTORY_BLOCK_INTERVAL}) for history DB / backtest alignment`,
 		);
 	}
+	if (
+		observeIntervalBlocks !== undefined &&
+		observeIntervalBlocks % DB_HISTORY_BLOCK_INTERVAL !== 0
+	) {
+		throw new Error(
+			`[${label}] observeIntervalBlocks (${observeIntervalBlocks}) must be a multiple of BLOCK_INTERVAL (${DB_HISTORY_BLOCK_INTERVAL})`,
+		);
+	}
+	if (
+		observeIntervalBlocks !== undefined &&
+		intervalBlocks % observeIntervalBlocks !== 0
+	) {
+		throw new Error(
+			`[${label}] rebalanceIntervalBlocks (${intervalBlocks}) must be a multiple of observeIntervalBlocks (${observeIntervalBlocks})`,
+		);
+	}
 
 	let sub: Subscription | undefined;
 	let inflightRun: Promise<void> | null = null;
+	let observeChain: Promise<void> = Promise.resolve();
 	let stopped = false;
 	let consecutiveStaleTimeouts = 0;
 	const MAX_CONSECUTIVE_STALE = 3;
@@ -94,15 +103,15 @@ export function createBlockIntervalRunner({
 
 			try {
 				console.log(`[${label}] Starting run at block #${block.number}...`);
-				const { exitCode } = await onTick(block);
+				const result = await onTick(block);
 				consecutiveStaleTimeouts = 0;
-				if (exitCode === 0) {
+				if (result.exitCode === 0) {
 					console.log(
-						`[${label}] Run finished successfully at block #${block.number}`,
+						`[${label}] Run finished successfully at block #${block.number} (${result.outcome})`,
 					);
 				} else {
 					console.error(
-						`[${label}] Run finished with exit code ${exitCode} at block #${block.number}`,
+						`[${label}] Run finished with exit code ${result.exitCode} at block #${block.number} (${result.outcome})`,
 					);
 				}
 			} catch (err) {
@@ -121,6 +130,24 @@ export function createBlockIntervalRunner({
 		}
 	}
 
+	function enqueueObserve(block: BlockInfo): Promise<void> {
+		if (!onObserve) return observeChain;
+
+		const nextObserve = observeChain
+			.then(async () => {
+				await onObserve(block);
+			})
+			.catch((err) => {
+				console.error(
+					`[${label}] Unexpected error during observe at block #${block.number}:`,
+					err,
+				);
+			});
+
+		observeChain = nextObserve;
+		return nextObserve;
+	}
+
 	return {
 		async start() {
 			console.log(
@@ -131,9 +158,25 @@ export function createBlockIntervalRunner({
 			sub = client.finalizedBlock$.subscribe({
 				next: (block) => {
 					if (stopped) return;
-					if (block.number % intervalBlocks !== 0) return;
+					const blockInfo = { number: block.number, hash: block.hash };
+					const shouldObserve =
+						onObserve !== undefined &&
+						observeIntervalBlocks !== undefined &&
+						block.number % observeIntervalBlocks === 0;
+					const shouldTick = block.number % intervalBlocks === 0;
+					if (!shouldObserve && !shouldTick) return;
 
-					void runTick({ number: block.number, hash: block.hash });
+					void (async () => {
+						if (shouldObserve) {
+							await enqueueObserve(blockInfo);
+						} else {
+							await observeChain;
+						}
+
+						if (shouldTick) {
+							await runTick(blockInfo);
+						}
+					})();
 				},
 				error: (err) => {
 					console.error(
@@ -151,6 +194,7 @@ export function createBlockIntervalRunner({
 			stopped = true;
 			sub?.unsubscribe();
 			sub = undefined;
+			await observeChain;
 			if (inflightRun) await inflightRun;
 		},
 	};

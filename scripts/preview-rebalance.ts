@@ -1,130 +1,123 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createBittensorClient } from "../src/api/createClient.ts";
 import type { Balances } from "../src/balances/getBalances.ts";
 import { getBalances } from "../src/balances/getBalances.ts";
+import { loadEnv } from "../src/config/env.ts";
+import { assertEmissionData, openHistoryDatabase } from "../src/history/db.ts";
 import { computeRebalance } from "../src/rebalance/computeRebalance.ts";
 import { formatTao } from "../src/rebalance/tao.ts";
 import type { RebalanceOperation } from "../src/rebalance/types.ts";
-import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
+import {
+	formatStrategyList,
+	loadStrategy,
+	resolveStrategySelection,
+} from "../src/strategies/loader.ts";
 
-// ---------------------------------------------------------------------------
-// Environment & strategy
-// ---------------------------------------------------------------------------
-const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
-const coldkey = process.env.COLDKEY_ADDRESS;
-const envStrategy = process.env.STRATEGY;
+async function runPreview(): Promise<void> {
+	const env = loadEnv({ requireProxyMnemonic: false });
+	const selection = resolveStrategySelection({ envStrategy: env.strategy });
+	if (selection.kind === "list") {
+		console.log(formatStrategyList(selection.available));
+		return;
+	}
 
-if (!wsEndpoints.length) throw new Error("WS_ENDPOINT is not set");
-if (!coldkey) throw new Error("COLDKEY_ADDRESS is not set");
+	const strategyName = selection.name;
+	const { getStrategyTargets, preparePreview } = loadStrategy(strategyName);
+	console.log(`Strategy: ${strategyName}`);
 
-const strategyName = resolveStrategyName(envStrategy);
-const { getStrategyTargets, preparePreview } = await loadStrategy(strategyName);
-console.log(`Strategy: ${strategyName}`);
+	if (preparePreview) {
+		await preparePreview();
+	}
 
-// Hydrate strategy-specific shared state from DB (if the strategy supports it)
-if (preparePreview) {
-	await preparePreview();
+	const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
+	try {
+		assertEmissionData(historyDb);
+		const { client, api } = createBittensorClient(env.wsEndpoints);
+		try {
+			console.log("Fetching on-chain data and running strategy…");
+
+			const balances = await getBalances(api, env.coldkey);
+
+			const {
+				targets,
+				skipped: strategySkips,
+				rebalanceConfig,
+				audit,
+			} = await getStrategyTargets({
+				client,
+				env,
+				balances,
+				historyDb,
+			});
+
+			if (audit) {
+				for (const line of audit.terminalLines) {
+					console.log(line);
+				}
+			}
+
+			const plan = computeRebalance(balances, targets, rebalanceConfig, {
+				onDiagnostic: ({ message }) => console.log(message),
+			});
+			plan.skipped.push(...strategySkips);
+
+			const subnetNames = new Map<number, string>();
+			printPortfolio(balances, subnetNames, rebalanceConfig.freeReserveTao);
+			printOperations(plan.operations, plan.skipped, subnetNames);
+
+			const now = new Date()
+				.toISOString()
+				.replace("T", " ")
+				.replace(/\.\d+Z$/, " UTC");
+
+			let md = `# Rebalance Preview\n\n`;
+			md += `> Generated ${now} — strategy: \`${strategyName}\`\n\n`;
+
+			if (audit) {
+				md += audit.reportMarkdown;
+			}
+
+			md += `\n## Portfolio\n\n`;
+			md += `| Asset | Value (τ) |\n|---|---|\n`;
+			md += `| **Native TAO** | ${formatTao(balances.free)} (reserve: ${formatTao(rebalanceConfig.freeReserveTao)}) |\n`;
+			for (const s of balances.stakes) {
+				const name = subnetNames.get(s.netuid) ?? `SN${s.netuid}`;
+				md += `| SN${s.netuid} ${name} | ${formatTao(s.taoValue)} |\n`;
+			}
+			md += `| **Total** | **${formatTao(balances.totalTaoValue)}** |\n`;
+
+			md += `\n## Planned Operations (${plan.operations.length})\n\n`;
+			if (plan.operations.length === 0) {
+				md += `Portfolio is balanced — nothing to do.\n`;
+			} else {
+				md += `| # | Operation | Details | ~Value (τ) |\n|---|---|---|---|\n`;
+				for (const [i, op] of plan.operations.entries()) {
+					md += `| ${i + 1} | ${formatOpKind(op)} | ${formatOpDetail(op, subnetNames)} | ${formatTao(opEstimatedValue(op))} |\n`;
+				}
+			}
+			if (plan.skipped.length > 0) {
+				md += `\n### Skipped\n\n`;
+				for (const s of plan.skipped) {
+					md += `- SN${s.netuid}: ${s.reason}\n`;
+				}
+			}
+
+			const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+			const outPath = `reports/preview-${ts}.md`;
+			await mkdir("reports", { recursive: true });
+			await writeFile(outPath, md);
+
+			console.log(`\nPreview written to ${outPath}`);
+		} finally {
+			client.destroy();
+		}
+	} finally {
+		historyDb.close();
+	}
 }
 
-// ---------------------------------------------------------------------------
-// Connect
-// ---------------------------------------------------------------------------
-const { client, api } = createBittensorClient(wsEndpoints);
-
-try {
-	console.log("Fetching on-chain data and running strategy…");
-
-	// Fetch balances
-	const balances = await getBalances(api, coldkey);
-
-	// Build a minimal env object for the strategy
-	const strategyEnv = {
-		wsEndpoints,
-		coldkey,
-		proxyMnemonic: process.env.PROXY_MNEMONIC ?? "",
-		validatorHotkey: process.env.VALIDATOR_HOTKEY,
-		discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL ?? "",
-		strategy: envStrategy,
-		leaderAddress: process.env.LEADER_ADDRESS,
-		archiveWsEndpoints: process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [],
-	};
-
-	// Run strategy
-	const {
-		targets,
-		skipped: strategySkips,
-		rebalanceConfig,
-		audit,
-	} = await getStrategyTargets(client, strategyEnv, balances);
-
-	// Print strategy-specific terminal output
-	if (audit) {
-		for (const line of audit.terminalLines) {
-			console.log(line);
-		}
-	}
-
-	// Compute rebalance plan
-	const plan = computeRebalance(balances, targets, rebalanceConfig);
-	plan.skipped.push(...strategySkips);
-
-	// --- Portfolio & operations terminal output ---
-	const subnetNames = new Map<number, string>(); // populated from audit if available
-	printPortfolio(balances, subnetNames, rebalanceConfig.freeReserveTao);
-	printOperations(plan.operations, plan.skipped, subnetNames);
-
-	// --- Build markdown report ---
-	const now = new Date()
-		.toISOString()
-		.replace("T", " ")
-		.replace(/\.\d+Z$/, " UTC");
-
-	let md = `# Rebalance Preview\n\n`;
-	md += `> Generated ${now} — strategy: \`${strategyName}\`\n\n`;
-
-	// Strategy-specific audit sections
-	if (audit) {
-		md += audit.reportMarkdown;
-	}
-
-	// --- Portfolio section ---
-	md += `\n## Portfolio\n\n`;
-	md += `| Asset | Value (τ) |\n|---|---|\n`;
-	md += `| **Native TAO** | ${formatTao(balances.free)} (reserve: ${formatTao(rebalanceConfig.freeReserveTao)}) |\n`;
-	for (const s of balances.stakes) {
-		const name = subnetNames.get(s.netuid) ?? `SN${s.netuid}`;
-		md += `| SN${s.netuid} ${name} | ${formatTao(s.taoValue)} |\n`;
-	}
-	md += `| **Total** | **${formatTao(balances.totalTaoValue)}** |\n`;
-
-	// --- Operations section ---
-	md += `\n## Planned Operations (${plan.operations.length})\n\n`;
-	if (plan.operations.length === 0) {
-		md += `Portfolio is balanced — nothing to do.\n`;
-	} else {
-		md += `| # | Operation | Details | ~Value (τ) |\n|---|---|---|---|\n`;
-		for (const [i, op] of plan.operations.entries()) {
-			md += `| ${i + 1} | ${formatOpKind(op)} | ${formatOpDetail(op, subnetNames)} | ${formatTao(opEstimatedValue(op))} |\n`;
-		}
-	}
-	if (plan.skipped.length > 0) {
-		md += `\n### Skipped\n\n`;
-		for (const s of plan.skipped) {
-			md += `- SN${s.netuid}: ${s.reason}\n`;
-		}
-	}
-
-	// Write preview report
-	const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const outPath = `reports/preview-${ts}.md`;
-	await mkdir("reports", { recursive: true });
-	await writeFile(outPath, md);
-
-	console.log(`\nPreview written to ${outPath}`);
-} finally {
-	client.destroy();
-	process.exit(0);
-}
+await runPreview();
 
 // ---------------------------------------------------------------------------
 // Format helpers

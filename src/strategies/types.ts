@@ -8,11 +8,14 @@ import type { CreateRunnerFn } from "../scheduling/types.ts";
 
 export type { RebalanceConfig, StrategyTarget };
 
-export type StrategyFn = (
-	client: PolkadotClient,
-	env: Env,
-	balances: Balances,
-) => Promise<StrategyResult>;
+export interface StrategyContext {
+	client: PolkadotClient;
+	env: Env;
+	balances: Balances;
+	historyDb: HistoryDatabase;
+}
+
+export type StrategyFn = (context: StrategyContext) => Promise<StrategyResult>;
 
 export interface AuditSections {
 	/** Lines printed to the terminal during preview and dry-run */

@@ -12,7 +12,10 @@ import {
 import type { RebalanceCycleResult } from "../scheduling/types.ts";
 import type { StrategyFn } from "../strategies/types.ts";
 import { GIT_COMMIT } from "../version.ts";
-import { computeRebalance } from "./computeRebalance.ts";
+import {
+	computeRebalance,
+	type RebalanceDiagnostic,
+} from "./computeRebalance.ts";
 import { executeRebalancePlan } from "./executeRebalancePlan.ts";
 import { initLog, log, logBalancesDetail } from "./logger.ts";
 import { getNextKey } from "./mevShield.ts";
@@ -70,7 +73,12 @@ export async function executeRebalanceCycle(
 			rebalanceConfig,
 			audit,
 			skipReason,
-		} = await getStrategyTargets(client, env, balances);
+		} = await getStrategyTargets({
+			client,
+			env,
+			balances,
+			historyDb,
+		});
 
 		// Surface strategy audit: info for dry-run, verbose for live runs
 		if (audit) {
@@ -101,7 +109,13 @@ export async function executeRebalanceCycle(
 				dryRun,
 			});
 			log.info(`Log file: ${log.filePath()}`);
-			return { exitCode: 0 };
+			return {
+				exitCode: 0,
+				outcome: "skipped",
+				reason: skipReason,
+				plan: null,
+				batchResult: null,
+			};
 		}
 
 		// 3. Determine MEV shield state (single query, threaded through entire flow)
@@ -111,6 +125,7 @@ export async function executeRebalanceCycle(
 		// 4. Ask rebalance module for a plan
 		const plan = computeRebalance(balances, targets, rebalanceConfig, {
 			useLimits,
+			onDiagnostic: logPlanDiagnostic,
 		});
 		plan.skipped.push(...strategySkips);
 
@@ -131,6 +146,13 @@ export async function executeRebalanceCycle(
 				opsSucceeded: 0,
 				dryRun,
 			});
+			log.info(`Log file: ${log.filePath()}`);
+			return {
+				exitCode: 0,
+				outcome: "no_ops",
+				plan,
+				batchResult: null,
+			};
 		} else {
 			// 5. Execute the rebalancing plan
 			const { batchResult, balancesAfter, proxyFreeBalanceAfter } =
@@ -147,6 +169,8 @@ export async function executeRebalanceCycle(
 					dryRun,
 					mevKey,
 				});
+			const status = batchResult?.status ?? "completed";
+			const exitCode = status === "completed" ? 0 : 1;
 
 			// 5b. Record cycle + trades to history DB
 			const opsSucceeded =
@@ -162,7 +186,7 @@ export async function executeRebalanceCycle(
 						: null,
 				txHash: batchResult?.innerTxHash ?? null,
 				timestamp: cycleTimestamp,
-				status: batchResult?.status ?? "error",
+				status,
 				totalBefore: balances.totalTaoValue,
 				totalAfter: balancesAfter.totalTaoValue,
 				feeInner:
@@ -196,10 +220,15 @@ export async function executeRebalanceCycle(
 					coldkeyAddress: env.coldkey,
 				});
 			}
-		}
 
-		log.info(`Log file: ${log.filePath()}`);
-		return { exitCode: 0 };
+			log.info(`Log file: ${log.filePath()}`);
+			return {
+				exitCode,
+				outcome: status,
+				plan,
+				batchResult,
+			};
+		}
 	} catch (err) {
 		const errorLabel =
 			err instanceof SlippageError
@@ -233,7 +262,14 @@ export async function executeRebalanceCycle(
 			opsSucceeded: 0,
 			dryRun,
 		});
-		return { exitCode: 1 };
+		log.info(`Log file: ${log.filePath()}`);
+		return {
+			exitCode: 1,
+			outcome: "error",
+			reason: err instanceof Error ? err.message : "Unknown rebalance failure",
+			plan: null,
+			batchResult: null,
+		};
 	}
 }
 
@@ -253,4 +289,9 @@ function recordCycleToDb(
 			`Failed to record cycle to history DB: ${err instanceof Error ? err.message : String(err)}`,
 		);
 	}
+}
+
+function logPlanDiagnostic({ level, message }: RebalanceDiagnostic): void {
+	const logFn = level === "info" ? log.info : log.verbose;
+	logFn(message);
 }

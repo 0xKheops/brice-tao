@@ -12,7 +12,12 @@ export interface Env {
 	leaderAddress: string | undefined;
 }
 
-export function loadEnv(): Env {
+export interface LoadEnvOptions {
+	requireProxyMnemonic?: boolean;
+}
+
+export function loadEnv(options: LoadEnvOptions = {}): Env {
+	const requireProxyMnemonic = options.requireProxyMnemonic ?? true;
 	const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
 	const archiveWsEndpoints = process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [];
 	const coldkey = process.env.COLDKEY_ADDRESS;
@@ -39,12 +44,14 @@ export function loadEnv(): Env {
 			`Invalid COLDKEY_ADDRESS format (expected SS58): ${coldkey}`,
 		);
 	}
-	if (!proxyMnemonic) throw new ConfigError("PROXY_MNEMONIC is not set");
+	if (!proxyMnemonic && requireProxyMnemonic) {
+		throw new ConfigError("PROXY_MNEMONIC is not set");
+	}
 	return {
 		wsEndpoints,
 		archiveWsEndpoints,
 		coldkey,
-		proxyMnemonic,
+		proxyMnemonic: proxyMnemonic ?? "",
 		validatorHotkey,
 		discordWebhookUrl: discordWebhookUrl || undefined,
 		strategy,

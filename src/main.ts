@@ -6,7 +6,11 @@ import { assertEmissionData, openHistoryDatabase } from "./history/db.ts";
 import { log } from "./rebalance/logger.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
 import { createOneShotRunner } from "./scheduling/once.ts";
-import { loadStrategy, resolveStrategyName } from "./strategies/loader.ts";
+import {
+	formatStrategyList,
+	loadStrategy,
+	resolveStrategySelection,
+} from "./strategies/loader.ts";
 
 // Silence harmless "RpcError: Method not found" (-32601) warnings that
 // polkadot-api emits when its archive_v1_* fallback hits Bittensor nodes
@@ -21,35 +25,43 @@ export async function runRebalance({
 	dryRun,
 }: RunRebalanceOptions): Promise<number> {
 	const env = loadEnv();
-	const strategyName = resolveStrategyName(env.strategy);
-	const { getStrategyTargets } = await loadStrategy(strategyName);
+	const selection = resolveStrategySelection({ envStrategy: env.strategy });
+	if (selection.kind === "list") {
+		console.log(formatStrategyList(selection.available));
+		return 0;
+	}
+
+	const strategyName = selection.name;
+	const { getStrategyTargets } = loadStrategy(strategyName);
 	log.info(`Strategy: ${strategyName}`);
 
-	const bittensorClient = createBittensorClient(env.wsEndpoints);
 	const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
-	assertEmissionData(historyDb);
-
 	try {
-		const context = buildRunnerContext(
-			bittensorClient,
-			env,
-			strategyName,
-			getStrategyTargets,
-			{ dryRun },
-			historyDb,
-		);
+		assertEmissionData(historyDb);
+		const bittensorClient = createBittensorClient(env.wsEndpoints);
+		try {
+			const context = buildRunnerContext(
+				bittensorClient,
+				env,
+				strategyName,
+				getStrategyTargets,
+				{ dryRun },
+				historyDb,
+			);
 
-		let cycleExitCode = 0;
-		const runner = createOneShotRunner(async () => {
-			const { exitCode } = await context.runRebalanceCycle();
-			cycleExitCode = exitCode;
-		});
+			let cycleExitCode = 0;
+			const runner = createOneShotRunner(async () => {
+				const { exitCode } = await context.runRebalanceCycle();
+				cycleExitCode = exitCode;
+			});
 
-		await runner.start();
-		return cycleExitCode;
+			await runner.start();
+			return cycleExitCode;
+		} finally {
+			bittensorClient.client.destroy();
+		}
 	} finally {
 		historyDb.close();
-		bittensorClient.client.destroy();
 	}
 }
 

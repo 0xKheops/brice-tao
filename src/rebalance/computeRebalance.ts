@@ -1,6 +1,5 @@
 import type { Balances, StakeEntry } from "../balances/getBalances.ts";
 import { TAO } from "./constants.ts";
-import { log } from "./logger.ts";
 import { formatTao } from "./tao.ts";
 import type {
 	MoveOperation,
@@ -21,6 +20,16 @@ interface ResolvedTarget extends StrategyTarget {
 	targetTaoValue: bigint;
 }
 
+export interface RebalanceDiagnostic {
+	level: "info" | "verbose";
+	message: string;
+}
+
+export interface ComputeRebalanceOptions {
+	useLimits?: boolean;
+	onDiagnostic?: (diagnostic: RebalanceDiagnostic) => void;
+}
+
 /**
  * Compute the rebalance plan: given current balances and strategy targets
  * (with shares), convert shares to absolute TAO values and produce a list
@@ -30,7 +39,7 @@ export function computeRebalance(
 	balances: Balances,
 	targets: StrategyTarget[],
 	config: RebalanceConfig,
-	options?: { useLimits?: boolean },
+	options: ComputeRebalanceOptions = {},
 ): RebalancePlan {
 	if (targets.length === 0) {
 		return { targets: [], operations: [], skipped: [] };
@@ -44,7 +53,7 @@ export function computeRebalance(
 		operations: replenishOps,
 		adjustedFree,
 		adjustedPositions,
-	} = replenishReserve(balances.free, classified, config);
+	} = replenishReserve(balances.free, classified, config, options.onDiagnostic);
 
 	// 2. Compute available portfolio and per-target allocation
 	const available = balances.totalTaoValue - config.freeReserveTao;
@@ -59,17 +68,23 @@ export function computeRebalance(
 	}));
 	resolved.sort((a, b) => a.netuid - b.netuid);
 
-	log.verbose(
+	emitDiagnostic(
+		options.onDiagnostic,
+		"verbose",
 		`Target allocation: ${resolved.length} subnets, ${formatTao(resolved[0]?.targetTaoValue ?? 0n)} τ each`,
 	);
 	for (const t of resolved) {
-		log.verbose(
+		emitDiagnostic(
+			options.onDiagnostic,
+			"verbose",
 			`  Target SN${t.netuid}: ${formatTao(t.targetTaoValue)} τ (${t.hotkey.slice(0, 8)}…)`,
 		);
 	}
 
 	for (const pos of adjustedPositions) {
-		log.verbose(
+		emitDiagnostic(
+			options.onDiagnostic,
+			"verbose",
 			`  Position SN${pos.netuid} (${pos.hotkey.slice(0, 8)}…): ${formatTao(pos.taoValue)} τ → ${pos.classification}`,
 		);
 	}
@@ -81,6 +96,7 @@ export function computeRebalance(
 		adjustedFree,
 		config,
 		options?.useLimits ?? true,
+		options.onDiagnostic,
 	);
 	return {
 		targets,
@@ -110,6 +126,7 @@ function replenishReserve(
 	freeBalance: bigint,
 	positions: ClassifiedPosition[],
 	config: RebalanceConfig,
+	onDiagnostic?: (diagnostic: RebalanceDiagnostic) => void,
 ): {
 	operations: RebalanceOperation[];
 	adjustedFree: bigint;
@@ -147,7 +164,9 @@ function replenishReserve(
 		source.alphaPrice > 0n ? (deficit * TAO) / source.alphaPrice : 0n;
 	if (alphaToUnstake <= 0n) return noChange;
 
-	log.info(
+	emitDiagnostic(
+		onDiagnostic,
+		"info",
 		`Reserve replenishment: unstaking ~${formatTao(deficit)} τ from SN${source.netuid} ` +
 			`(free ${formatTao(freeBalance)} τ < reserve ${formatTao(config.freeReserveTao)} τ)`,
 	);
@@ -178,12 +197,21 @@ function replenishReserve(
 	};
 }
 
+function emitDiagnostic(
+	onDiagnostic: ComputeRebalanceOptions["onDiagnostic"],
+	level: RebalanceDiagnostic["level"],
+	message: string,
+): void {
+	onDiagnostic?.({ level, message });
+}
+
 function generateOperations(
 	positions: ClassifiedPosition[],
 	targets: ResolvedTarget[],
 	freeBalance: bigint,
 	config: RebalanceConfig,
 	useLimits: boolean,
+	onDiagnostic?: ComputeRebalanceOptions["onDiagnostic"],
 ): { operations: RebalanceOperation[]; skipped: RebalancePlan["skipped"] } {
 	const operations: RebalanceOperation[] = [];
 	const skipped: RebalancePlan["skipped"] = [];
@@ -230,7 +258,9 @@ function generateOperations(
 				limitPrice: 0n,
 				estimatedTaoValue: pos.taoValue,
 			});
-			log.verbose(
+			emitDiagnostic(
+				onDiagnostic,
+				"verbose",
 				`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target with deficit)`,
 			);
 			continue;
@@ -264,7 +294,9 @@ function generateOperations(
 					limitPrice: 0n,
 					estimatedTaoValue: pos.taoValue,
 				});
-				log.verbose(
+				emitDiagnostic(
+					onDiagnostic,
+					"verbose",
 					`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (no swap target within overfill cap)`,
 				);
 				continue;
@@ -285,11 +317,15 @@ function generateOperations(
 				originHotkey: needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
 			});
 			if (needsHotkeyChange) {
-				log.verbose(
+				emitDiagnostic(
+					onDiagnostic,
+					"verbose",
 					`  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${best.target.netuid}: ~${formatTao(pos.taoValue)} τ`,
 				);
 			} else {
-				log.verbose(
+				emitDiagnostic(
+					onDiagnostic,
+					"verbose",
 					`  OP: swap SN${pos.netuid}→SN${best.target.netuid}: ~${formatTao(pos.taoValue)} τ (matching hotkey)`,
 				);
 			}
@@ -324,7 +360,9 @@ function generateOperations(
 				limitPrice: 0n,
 				estimatedTaoValue: pos.taoValue,
 			});
-			log.verbose(
+			emitDiagnostic(
+				onDiagnostic,
+				"verbose",
 				`  OP: unstake SN${pos.netuid}: ~${formatTao(pos.taoValue)} τ (all split allocations below minimum)`,
 			);
 			continue;
@@ -368,7 +406,9 @@ function generateOperations(
 				limitPrice: 0n,
 				originHotkey: needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
 			});
-			log.verbose(
+			emitDiagnostic(
+				onDiagnostic,
+				"verbose",
 				needsHotkeyChange
 					? `  OP: move hotkey SN${pos.netuid} + swap SN${pos.netuid}→SN${alloc.target.netuid}: ~${formatTao(alloc.taoAmount)} τ`
 					: `  OP: swap SN${pos.netuid}→SN${alloc.target.netuid}: ~${formatTao(alloc.taoAmount)} τ (matching hotkey)`,
@@ -393,7 +433,9 @@ function generateOperations(
 					estimatedTaoValue: remainderTao,
 					limitPrice: 0n,
 				});
-				log.verbose(
+				emitDiagnostic(
+					onDiagnostic,
+					"verbose",
 					`  OP: unstake remainder SN${pos.netuid}: ~${formatTao(remainderTao)} τ`,
 				);
 			}
@@ -476,11 +518,15 @@ function generateOperations(
 						needsHotkeyChange && !useLimits ? pos.hotkey : undefined,
 				});
 				if (needsHotkeyChange) {
-					log.verbose(
+					emitDiagnostic(
+						onDiagnostic,
+						"verbose",
 						`  OP: move hotkey SN${pos.netuid} + swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ`,
 					);
 				} else {
-					log.verbose(
+					emitDiagnostic(
+						onDiagnostic,
+						"verbose",
 						`  OP: swap overweight SN${pos.netuid}→SN${fullSwapTarget.netuid}: ~${formatTao(reduceAmount)} τ (matching hotkey)`,
 					);
 				}
@@ -494,7 +540,9 @@ function generateOperations(
 					limitPrice: 0n,
 					estimatedTaoValue: reduceAmount,
 				});
-				log.verbose(
+				emitDiagnostic(
+					onDiagnostic,
+					"verbose",
 					`  OP: unstake overweight SN${pos.netuid}: ~${formatTao(reduceAmount)} τ`,
 				);
 			}
@@ -541,7 +589,9 @@ function generateOperations(
 		fulfilled.set(target.netuid, currentFulfilled + stakeAmount);
 		availableFree -= stakeAmount;
 
-		log.verbose(
+		emitDiagnostic(
+			onDiagnostic,
+			"verbose",
 			`  OP: stake SN${target.netuid} with ${target.hotkey.slice(0, 8)}…: ${formatTao(stakeAmount)} τ`,
 		);
 	}

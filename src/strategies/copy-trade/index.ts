@@ -1,14 +1,17 @@
 import { dirname, join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
-import type { PolkadotClient, TypedApi } from "polkadot-api";
+import type { TypedApi } from "polkadot-api";
 import type { Balances } from "../../balances/getBalances.ts";
-import type { Env } from "../../config/env.ts";
 import { ConfigError } from "../../errors.ts";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
 import { resolveValidators } from "../../validators/index.ts";
-import type { AuditSections, StrategyResult } from "../types.ts";
+import type {
+	AuditSections,
+	StrategyContext,
+	StrategyResult,
+} from "../types.ts";
 import { loadCopyTradeConfig } from "./config.ts";
 import { getLeaderShares, type LeaderShare } from "./getLeaderShares.ts";
 
@@ -31,11 +34,11 @@ const CONFIG_PATH = metaDir.startsWith("/$bunfs")
  * Fetches the leader's on-chain positions, computes proportional shares,
  * and maps them to the follower's portfolio.
  */
-export async function getStrategyTargets(
-	client: PolkadotClient,
-	env: Env,
-	balances: Balances,
-): Promise<StrategyResult> {
+export async function getStrategyTargets({
+	client,
+	env,
+	balances,
+}: StrategyContext): Promise<StrategyResult> {
 	const api: Api = client.getTypedApi(bittensor);
 	const config = loadCopyTradeConfig(CONFIG_PATH, env.leaderAddress);
 

@@ -8,7 +8,11 @@ import {
 	type BlockInfo,
 	createBlockIntervalRunner,
 } from "../../scheduling/blockInterval.ts";
-import type { RunnerContext, StrategyRunner } from "../../scheduling/types.ts";
+import type {
+	RebalanceCycleResult,
+	RunnerContext,
+	StrategyRunner,
+} from "../../scheduling/types.ts";
 import { loadSmaStoplossConfig } from "./config.ts";
 import { openPriceDatabase, type PriceDatabase } from "./db.ts";
 import { fetchAllSubnetData } from "./fetchSubnetData.ts";
@@ -53,8 +57,16 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 	 * Per-tick state update: sample prices, manage stop-losses, then rebalance.
 	 * All DB mutations happen here — getStrategyTargets only reads shared state.
 	 */
-	async function tick(_block: BlockInfo): Promise<{ exitCode: number }> {
-		if (stopped || !db) return { exitCode: 1 };
+	async function tick(_block: BlockInfo): Promise<RebalanceCycleResult> {
+		if (stopped || !db) {
+			return {
+				exitCode: 1,
+				outcome: "error",
+				reason: "Runner is stopped or database is unavailable",
+				plan: null,
+				batchResult: null,
+			};
+		}
 
 		const database = db;
 
@@ -186,11 +198,13 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 			setSharedState(state);
 
 			// 6. Run rebalance cycle
-			const { exitCode } = await ctx.runRebalanceCycle();
-			if (exitCode === 0) {
+			const result = await ctx.runRebalanceCycle();
+			if (result.exitCode === 0) {
 				console.log(`[${label}] Tick finished successfully`);
 			} else {
-				console.error(`[${label}] Tick finished with exit code ${exitCode}`);
+				console.error(
+					`[${label}] Tick finished with exit code ${result.exitCode} (${result.outcome})`,
+				);
 			}
 
 			// Refresh stop-loss state after rebalance (positions may have changed)
@@ -230,10 +244,16 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 				stoppedOut: new Map(stoppedOut),
 			});
 
-			return { exitCode };
+			return result;
 		} catch (err) {
 			console.error(`[${label}] Unexpected error in tick:`, err);
-			return { exitCode: 1 };
+			return {
+				exitCode: 1,
+				outcome: "error",
+				reason: err instanceof Error ? err.message : String(err),
+				plan: null,
+				batchResult: null,
+			};
 		}
 	}
 

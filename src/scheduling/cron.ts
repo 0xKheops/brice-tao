@@ -1,22 +1,10 @@
-import { writeFileSync } from "node:fs";
 import { Cron } from "croner";
+import { writeHeartbeat } from "./heartbeat.ts";
 import type {
 	CronScheduleConfig,
 	RebalanceCycleResult,
 	StrategyRunner,
 } from "./types.ts";
-
-/**
- * Write a heartbeat deadline (epoch seconds) to `data/heartbeat`.
- * Docker healthcheck verifies the deadline is still in the future.
- */
-function writeHeartbeat(deadlineSeconds: number): void {
-	try {
-		writeFileSync("data/heartbeat", String(Math.round(deadlineSeconds)));
-	} catch {
-		// Non-critical — don't fail the run
-	}
-}
 
 export interface CronRunnerOptions {
 	schedule: CronScheduleConfig;
@@ -66,18 +54,24 @@ export function createCronRunner({
 					console.error(
 						`[${label}] ${MAX_CONSECUTIVE_STALE} consecutive stale timeouts — exiting for container restart`,
 					);
-					process.exit(1);
+					process.exitCode = 1;
+					job?.stop();
+					job = undefined;
 				}
 			}, schedule.staleTimeoutMinutes * 60_000);
 
 			try {
 				console.log(`[${label}] Starting run...`);
-				const { exitCode } = await onTick();
+				const result = await onTick();
 				consecutiveStaleTimeouts = 0;
-				if (exitCode === 0) {
-					console.log(`[${label}] Run finished successfully`);
+				if (result.exitCode === 0) {
+					console.log(
+						`[${label}] Run finished successfully (${result.outcome})`,
+					);
 				} else {
-					console.error(`[${label}] Run finished with exit code ${exitCode}`);
+					console.error(
+						`[${label}] Run finished with exit code ${result.exitCode} (${result.outcome})`,
+					);
 				}
 			} catch (err) {
 				console.error(`[${label}] Unexpected error in run:`, err);

@@ -1,13 +1,16 @@
 import { dirname, join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
-import type { PolkadotClient, TypedApi } from "polkadot-api";
+import type { TypedApi } from "polkadot-api";
 import type { Balances } from "../../balances/getBalances.ts";
-import type { Env } from "../../config/env.ts";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
 import { getValidatorCandidatesByYield } from "../../validators/pickBestValidator.ts";
-import type { AuditSections, StrategyResult } from "../types.ts";
+import type {
+	AuditSections,
+	StrategyContext,
+	StrategyResult,
+} from "../types.ts";
 import { loadCowardConfig } from "./config.ts";
 
 type Api = TypedApi<typeof bittensor>;
@@ -28,11 +31,11 @@ const CONFIG_PATH = metaDir.startsWith("/$bunfs")
  * Picks the best-yielding SN0 validator but only switches if the improvement
  * exceeds the stickiness threshold (avoids unnecessary move_stake churn).
  */
-export async function getStrategyTargets(
-	client: PolkadotClient,
-	env: Env,
-	balances: Balances,
-): Promise<StrategyResult> {
+export async function getStrategyTargets({
+	client,
+	env,
+	balances,
+}: StrategyContext): Promise<StrategyResult> {
 	const api: Api = client.getTypedApi(bittensor);
 	const config = loadCowardConfig(CONFIG_PATH);
 

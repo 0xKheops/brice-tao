@@ -85,6 +85,13 @@ const balances: Balances = {
 	totalTaoValue: 10n * TAO,
 };
 
+const strategyContext = {
+	client,
+	env,
+	balances,
+	historyDb: {} as never,
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -121,7 +128,7 @@ describe("getStrategyTargets (copy-trade)", () => {
 			skipped: [],
 		});
 
-		const result = await getStrategyTargets(client, env, balances);
+		const result = await getStrategyTargets(strategyContext);
 
 		expect(result.targets).toHaveLength(1);
 		expect(result.targets[0]?.netuid).toBe(0);
@@ -150,7 +157,7 @@ describe("getStrategyTargets (copy-trade)", () => {
 			skipped: [{ netuid: 2, reason: "no validator found" }],
 		});
 
-		const result = await getStrategyTargets(client, env, balances);
+		const result = await getStrategyTargets(strategyContext);
 
 		expect(result.targets).toHaveLength(1);
 		expect(result.targets[0]?.netuid).toBe(1);
@@ -172,7 +179,7 @@ describe("getStrategyTargets (copy-trade)", () => {
 			filtered: [],
 		});
 
-		const result = await getStrategyTargets(client, env, balances);
+		const result = await getStrategyTargets(strategyContext);
 
 		expect(result.targets).toEqual([]);
 		expect(result.rebalanceConfig).toBeDefined();
@@ -197,9 +204,7 @@ describe("getStrategyTargets (copy-trade)", () => {
 			},
 		});
 
-		expect(getStrategyTargets(client, env, balances)).rejects.toThrow(
-			ConfigError,
-		);
+		expect(getStrategyTargets(strategyContext)).rejects.toThrow(ConfigError);
 	});
 
 	it("preserves original shares when all validators resolve successfully", async () => {
@@ -225,7 +230,7 @@ describe("getStrategyTargets (copy-trade)", () => {
 			skipped: [],
 		});
 
-		const result = await getStrategyTargets(client, env, balances);
+		const result = await getStrategyTargets(strategyContext);
 
 		expect(result.targets).toHaveLength(2);
 		expect(result.targets[0]?.share).toBeCloseTo(0.7);

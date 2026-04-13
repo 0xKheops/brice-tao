@@ -116,7 +116,10 @@ export function createRunner(ctx: RunnerContext): StrategyRunner {
 				},
 				error: (err) => {
 					console.error(`[${label}] Block subscription error:`, err);
-					process.exit(1);
+					process.exitCode = 1;
+					stopped = true;
+					sub?.unsubscribe();
+					sub = undefined;
 				},
 			});
 

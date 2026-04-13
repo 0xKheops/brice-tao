@@ -1,13 +1,15 @@
 import { dirname, join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
-import type { PolkadotClient, TypedApi } from "polkadot-api";
-import type { Balances } from "../../balances/getBalances.ts";
-import type { Env } from "../../config/env.ts";
+import type { TypedApi } from "polkadot-api";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
 import { resolveValidators } from "../../validators/index.ts";
-import type { AuditSections, StrategyResult } from "../types.ts";
+import type {
+	AuditSections,
+	StrategyContext,
+	StrategyResult,
+} from "../types.ts";
 import { loadRootEmissionConfig } from "./config.ts";
 import { fetchSubnetData } from "./fetchSubnetData.ts";
 import { type SubnetEvaluation, scoreSubnets } from "./scoreSubnets.ts";
@@ -31,11 +33,11 @@ const CONFIG_PATH = metaDir.startsWith("/$bunfs")
  * remainder to the single best emission-yield subnet. Uses only on-chain
  * data — no SN45 API or external indexer required.
  */
-export async function getStrategyTargets(
-	client: PolkadotClient,
-	env: Env,
-	balances: Balances,
-): Promise<StrategyResult> {
+export async function getStrategyTargets({
+	client,
+	env,
+	balances,
+}: StrategyContext): Promise<StrategyResult> {
 	const api: Api = client.getTypedApi(bittensor);
 	const config = loadRootEmissionConfig(CONFIG_PATH);
 

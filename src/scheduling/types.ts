@@ -1,6 +1,7 @@
 import type { PolkadotClient } from "polkadot-api";
 import type { Env } from "../config/env.ts";
 import type { HistoryDatabase } from "../history/db.ts";
+import type { BatchResult, RebalancePlan } from "../rebalance/types.ts";
 
 /** Schedule config for cron-based strategies — parsed from config.yaml top-level fields */
 export interface CronScheduleConfig {
@@ -14,8 +15,20 @@ export interface BlockIntervalConfig {
 	staleTimeoutBlocks: number;
 }
 
+export type RebalanceCycleOutcome =
+	| "skipped"
+	| "no_ops"
+	| "completed"
+	| "partial_failure"
+	| "timeout"
+	| "error";
+
 export interface RebalanceCycleResult {
 	exitCode: number;
+	outcome: RebalanceCycleOutcome;
+	reason?: string;
+	plan: RebalancePlan | null;
+	batchResult: BatchResult | null;
 }
 
 /**

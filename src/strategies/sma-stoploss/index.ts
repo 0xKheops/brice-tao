@@ -1,14 +1,17 @@
 import { dirname, join } from "node:path";
 import { bittensor } from "@polkadot-api/descriptors";
-import type { PolkadotClient, TypedApi } from "polkadot-api";
-import type { Balances } from "../../balances/getBalances.ts";
+import type { TypedApi } from "polkadot-api";
 import type { Env } from "../../config/env.ts";
 import type { HistoryDatabase } from "../../history/db.ts";
 import { log } from "../../rebalance/logger.ts";
 import { formatTao } from "../../rebalance/tao.ts";
 import type { StrategyTarget } from "../../rebalance/types.ts";
 import { resolveValidators } from "../../validators/index.ts";
-import type { AuditSections, StrategyResult } from "../types.ts";
+import type {
+	AuditSections,
+	StrategyContext,
+	StrategyResult,
+} from "../types.ts";
 import { loadSmaStoplossConfig } from "./config.ts";
 import { openPriceDatabase } from "./db.ts";
 import { fetchAllSubnetData } from "./fetchSubnetData.ts";
@@ -98,11 +101,11 @@ export async function warmup(
  * All state mutations (price sampling, stop-loss updates) are handled
  * by the runner before this function is called.
  */
-export async function getStrategyTargets(
-	client: PolkadotClient,
-	env: Env,
-	balances: Balances,
-): Promise<StrategyResult> {
+export async function getStrategyTargets({
+	client,
+	env,
+	balances,
+}: StrategyContext): Promise<StrategyResult> {
 	const api: Api = client.getTypedApi(bittensor);
 	const config = loadSmaStoplossConfig(CONFIG_PATH);
 

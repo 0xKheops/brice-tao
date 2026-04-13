@@ -4,75 +4,95 @@ import { suppressRpcNoise } from "./api/suppressRpcNoise.ts";
 import { loadEnv } from "./config/env.ts";
 import { assertEmissionData, openHistoryDatabase } from "./history/db.ts";
 import { buildRunnerContext } from "./scheduling/context.ts";
-import { loadStrategy, resolveStrategyName } from "./strategies/loader.ts";
+import {
+	formatStrategyList,
+	loadStrategy,
+	resolveStrategySelection,
+} from "./strategies/loader.ts";
 
 // Silence harmless "RpcError: Method not found" (-32601) warnings that
 // polkadot-api emits when its archive_v1_* fallback hits Bittensor nodes
 // (which don't implement the archive JSON-RPC spec). See suppressRpcNoise.ts.
 suppressRpcNoise();
 
-// --- Resolve strategy ---
-const env = loadEnv();
-const strategyName = resolveStrategyName(env.strategy);
-const { getStrategyTargets, createRunner, preparePreview, warmup } =
-	await loadStrategy(strategyName);
+export async function runScheduler(): Promise<void> {
+	const env = loadEnv();
+	const selection = resolveStrategySelection({ envStrategy: env.strategy });
+	if (selection.kind === "list") {
+		console.log(formatStrategyList(selection.available));
+		return;
+	}
 
-// --- Open shared history DB ---
-const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
-assertEmissionData(historyDb);
+	const strategyName = selection.name;
+	const { getStrategyTargets, createRunner, preparePreview, warmup } =
+		loadStrategy(strategyName);
 
-// --- Build context ---
-const bittensorClient = createBittensorClient(env.wsEndpoints);
-const context = buildRunnerContext(
-	bittensorClient,
-	env,
-	strategyName,
-	getStrategyTargets,
-	{ dryRun: false },
-	historyDb,
-);
+	const historyDb = openHistoryDatabase(join("data", "history.sqlite"));
+	let runner: Awaited<ReturnType<typeof createRunner>> | undefined;
+	let isShuttingDown = false;
 
-// --- Graceful shutdown (registered early to handle SIGTERM during startup) ---
-let runner: Awaited<ReturnType<typeof createRunner>> | undefined;
-let isShuttingDown = false;
-const shutdown = async () => {
-	if (isShuttingDown) return;
-	isShuttingDown = true;
-	console.log("[scheduler] Shutting down...");
-	if (runner) await runner.stop();
-	historyDb.close();
-	bittensorClient.client.destroy();
-	process.exit(0);
-};
+	try {
+		assertEmissionData(historyDb);
+		const bittensorClient = createBittensorClient(env.wsEndpoints);
+		const context = buildRunnerContext(
+			bittensorClient,
+			env,
+			strategyName,
+			getStrategyTargets,
+			{ dryRun: false },
+			historyDb,
+		);
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+		const shutdown = async () => {
+			if (isShuttingDown) return;
+			isShuttingDown = true;
+			console.log("[scheduler] Shutting down...");
+			if (runner) await runner.stop();
+			historyDb.close();
+			bittensorClient.client.destroy();
+		};
 
-// Warm up from archive node BEFORE the initial rebalance so data-dependent
-// strategies have full indicator windows (SMA histories, price stability, etc.)
-// on first run. Idempotent — runners may re-invoke the same warmup in start().
-if (warmup) {
-	await warmup(env, historyDb);
+		process.on("SIGTERM", () => {
+			void shutdown();
+		});
+		process.on("SIGINT", () => {
+			void shutdown();
+		});
+
+		try {
+			if (warmup) {
+				await warmup(env, historyDb);
+			}
+
+			if (preparePreview) {
+				await preparePreview();
+			}
+
+			console.log("[scheduler] Running initial rebalance on startup...");
+			const result = await context.runRebalanceCycle();
+			if (result.exitCode === 0) {
+				console.log(
+					`[scheduler] Initial rebalance completed successfully (${result.outcome}).`,
+				);
+			} else {
+				console.error(
+					`[scheduler] Initial rebalance finished with exit code ${result.exitCode} (${result.outcome}) — continuing to scheduled runs.`,
+				);
+			}
+
+			runner = createRunner(context);
+			await runner.start();
+		} catch (err) {
+			await shutdown();
+			throw err;
+		}
+	} finally {
+		if (!isShuttingDown) {
+			historyDb.close();
+		}
+	}
 }
 
-// Hydrate shared state from persistent DB before the initial rebalance so
-// data-dependent strategies (sma-stoploss, steady-tide) have indicator
-// histories available instead of seeing an empty cold-start state.
-if (preparePreview) {
-	await preparePreview();
+if (import.meta.main) {
+	await runScheduler();
 }
-
-// --- Initial rebalance on startup ---
-console.log("[scheduler] Running initial rebalance on startup...");
-const { exitCode } = await context.runRebalanceCycle();
-if (exitCode === 0) {
-	console.log("[scheduler] Initial rebalance completed successfully.");
-} else {
-	console.error(
-		`[scheduler] Initial rebalance finished with exit code ${exitCode} — continuing to scheduled runs.`,
-	);
-}
-
-// --- Start strategy runner ---
-runner = createRunner(context);
-await runner.start();

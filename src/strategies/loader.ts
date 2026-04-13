@@ -1,167 +1,79 @@
-import { readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { getStrategyTargets as copyTrade } from "./copy-trade/index.ts";
-import { createRunner as copyTradeRunner } from "./copy-trade/runner.ts";
-import { createBacktest as cowardBacktest } from "./coward/backtest.ts";
-import { loadCowardConfig } from "./coward/config.ts";
-import { getStrategyTargets as coward } from "./coward/index.ts";
-import { createRunner as cowardRunner } from "./coward/runner.ts";
-import { createBacktest as rootEmissionBacktest } from "./root-emission/backtest.ts";
-import { loadRootEmissionConfig } from "./root-emission/config.ts";
-import { getStrategyTargets as rootEmission } from "./root-emission/index.ts";
-import { createRunner as rootEmissionRunner } from "./root-emission/runner.ts";
-import { createBacktest as smaStoplossBacktest } from "./sma-stoploss/backtest.ts";
-import { loadSmaStoplossConfig } from "./sma-stoploss/config.ts";
-import {
-	getStrategyTargets as smaStoploss,
-	preparePreview as smaStoplossPreview,
-	warmup as smaStoplossWarmup,
-} from "./sma-stoploss/index.ts";
-import { createRunner as smaStoplossRunner } from "./sma-stoploss/runner.ts";
-import type { BacktestSchedule, StrategyModule } from "./types.ts";
-
-// In compiled binaries, import.meta.url points to /$bunfs/root/ (virtual FS).
-// Fall back to process.execPath to find the real strategies directory on disk.
-const metaDir = new URL(".", import.meta.url).pathname;
-const STRATEGIES_DIR = metaDir.startsWith("/$bunfs")
-	? join(dirname(process.execPath), "src", "strategies")
-	: metaDir;
-
-// Config paths for getBacktestSchedule (backtest runs from source, not compiled binary)
-const rootEmissionConfigPath = new URL(
-	"./root-emission/config.yaml",
-	import.meta.url,
-).pathname;
-const smaStoplossConfigPath = new URL(
-	"./sma-stoploss/config.yaml",
-	import.meta.url,
-).pathname;
-
-const cowardConfigPath = new URL("./coward/config.yaml", import.meta.url)
-	.pathname;
-
-function getCowardBacktestSchedule(): BacktestSchedule {
-	const config = loadCowardConfig(cowardConfigPath);
-	return { type: "cron", cronSchedule: config.schedule.cronSchedule };
-}
-
-function getRootEmissionBacktestSchedule(): BacktestSchedule {
-	const config = loadRootEmissionConfig(rootEmissionConfigPath);
-	return { type: "cron", cronSchedule: config.schedule.cronSchedule };
-}
-
-function getSmaStoplossBacktestSchedule(): BacktestSchedule {
-	const config = loadSmaStoplossConfig(smaStoplossConfigPath);
-	return {
-		type: "block-interval",
-		intervalBlocks: config.schedule.rebalanceIntervalBlocks,
-	};
-}
-
-// Static registry so Bun can bundle strategy code into the compiled binary.
-// Dynamic import() resolves against /$bunfs/ in compiled mode and fails.
-const strategyRegistry: Record<string, StrategyModule> = {
-	"copy-trade": {
-		getStrategyTargets: copyTrade,
-		createRunner: copyTradeRunner,
-	},
-	coward: {
-		getStrategyTargets: coward,
-		createRunner: cowardRunner,
-		createBacktest: cowardBacktest,
-		getBacktestSchedule: getCowardBacktestSchedule,
-	},
-	"root-emission": {
-		getStrategyTargets: rootEmission,
-		createRunner: rootEmissionRunner,
-		createBacktest: rootEmissionBacktest,
-		getBacktestSchedule: getRootEmissionBacktestSchedule,
-	},
-	"sma-stoploss": {
-		getStrategyTargets: smaStoploss,
-		createRunner: smaStoplossRunner,
-		preparePreview: smaStoplossPreview,
-		warmup: smaStoplossWarmup,
-		createBacktest: smaStoplossBacktest,
-		getBacktestSchedule: getSmaStoplossBacktestSchedule,
-	},
-};
-
-/** List all available strategy folder names by scanning src/strategies/ */
-function listStrategies(): string[] {
-	return readdirSync(STRATEGIES_DIR)
-		.filter((name) => {
-			if (name.startsWith(".")) return false;
-			try {
-				return statSync(join(STRATEGIES_DIR, name)).isDirectory();
-			} catch {
-				return false;
-			}
-		})
-		.sort();
-}
-
-/**
- * Load a strategy module by name.
- * Throws with a helpful message listing available strategies if the name is invalid.
- */
-export async function loadStrategy(name: string): Promise<StrategyModule> {
-	const available = listStrategies();
-
-	if (!available.includes(name)) {
-		throw new Error(
-			`Unknown strategy "${name}". Available strategies:\n${available.map((s) => `  - ${s}`).join("\n")}`,
-		);
-	}
-
-	const mod = strategyRegistry[name];
-	if (!mod) {
-		throw new Error(
-			`Strategy "${name}" exists on disk but is not registered in the strategy registry (loader.ts). Add it to strategyRegistry.`,
-		);
-	}
-
-	return mod;
-}
-
-/** Parse --strategy flag from process.argv; returns undefined if not present. */
-function parseStrategyArg(): string | undefined {
-	const idx = process.argv.indexOf("--strategy");
-	if (idx === -1) return undefined;
-	const value = process.argv[idx + 1];
-	if (!value || value.startsWith("--")) {
-		throw new Error(
-			"--strategy requires a value (e.g. --strategy root-emission)",
-		);
-	}
-	return value;
-}
+import { strategyModule as copyTrade } from "./copy-trade/module.ts";
+import { strategyModule as coward } from "./coward/module.ts";
+import { strategyModule as rootEmission } from "./root-emission/module.ts";
+import { strategyModule as smaStoploss } from "./sma-stoploss/module.ts";
+import type { StrategyModule } from "./types.ts";
 
 const DEFAULT_STRATEGY = "root-emission";
 
-/**
- * Resolve strategy name from CLI flag → env var → default (root-emission).
- * If --list-strategies is present, prints available strategies and exits.
- */
-export function resolveStrategyName(envStrategy: string | undefined): string {
-	if (process.argv.includes("--list-strategies")) {
-		const available = listStrategies();
-		console.log("Available strategies:");
-		for (const s of available) {
-			console.log(`  - ${s}`);
-		}
-		process.exit(0);
+const strategyRegistry: Record<string, StrategyModule> = {
+	"copy-trade": copyTrade,
+	coward,
+	"root-emission": rootEmission,
+	"sma-stoploss": smaStoploss,
+};
+
+export interface StrategySelectionOptions {
+	argv?: string[];
+	envStrategy?: string;
+}
+
+export type StrategySelection =
+	| { kind: "list"; available: string[] }
+	| { kind: "selected"; name: string };
+
+function listStrategies(): string[] {
+	return Object.keys(strategyRegistry).sort();
+}
+
+export function formatStrategyList(available = listStrategies()): string {
+	return [
+		"Available strategies:",
+		...available.map((name) => `  - ${name}`),
+	].join("\n");
+}
+
+export function loadStrategy(name: string): StrategyModule {
+	const mod = strategyRegistry[name];
+	if (mod) return mod;
+
+	const available = listStrategies();
+	throw new Error(
+		`Unknown strategy "${name}". ${formatStrategyList(available)}`,
+	);
+}
+
+export function resolveStrategySelection({
+	argv = process.argv.slice(2),
+	envStrategy,
+}: StrategySelectionOptions): StrategySelection {
+	if (argv.includes("--list-strategies")) {
+		return { kind: "list", available: listStrategies() };
 	}
 
-	const fromArg = parseStrategyArg();
+	const fromArg = parseStrategyArg(argv);
 	const name = fromArg ?? envStrategy;
 
 	if (!name) {
 		console.warn(
 			`[strategy] No --strategy flag or STRATEGY env var — defaulting to "${DEFAULT_STRATEGY}"`,
 		);
-		return DEFAULT_STRATEGY;
+		return { kind: "selected", name: DEFAULT_STRATEGY };
 	}
 
-	return name;
+	return { kind: "selected", name };
+}
+
+function parseStrategyArg(argv: string[]): string | undefined {
+	const idx = argv.indexOf("--strategy");
+	if (idx === -1) return undefined;
+
+	const value = argv[idx + 1];
+	if (!value || value.startsWith("--")) {
+		throw new Error(
+			"--strategy requires a value (e.g. --strategy root-emission)",
+		);
+	}
+
+	return value;
 }
