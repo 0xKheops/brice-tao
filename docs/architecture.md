@@ -13,6 +13,10 @@ scripts/
   backtest.ts            → Strategy backtester with AMM simulation
   bunker.ts              → Emergency exit script (move everything to SN0)
 src/
+  backtest/
+    cli.ts               → Backtest CLI parsing + schedule resolution
+    chart.ts             → Equity curve chart rendering helpers
+    metrics.ts           → Performance metrics + report formatting
   main.ts                 → One-shot CLI entrypoint
   scheduler.ts            → Long-running scheduler (signal handling + graceful shutdown)
   errors.ts               → Custom error classes
@@ -33,11 +37,10 @@ src/
     resolveValidators.ts  → Validator hotkey resolution (existing position reuse + yield pick + fallback)
   history/
     constants.ts          → Block-interval constant (DB_HISTORY_BLOCK_INTERVAL), grid helpers
-    db.ts                 → SQLite database wrapper (open, record, query)
+    db.ts                 → SQLite database wrapper + schema ownership (open, record, query)
     fetch.ts              → On-chain snapshot fetcher (subnet data at a given block)
     index.ts              → Barrel exports + convenience aliases
     record.ts             → Live recording (recordCurrentBlock — grid-aligned snapshots)
-    schema.ts             → SQLite schema (blocks, subnets, cycles, trades)
     types.ts              → History domain types (BlockMeta, SubnetSnapshot, etc.)
   scheduling/
     types.ts              → StrategyRunner, RunnerContext, CreateRunnerFn
@@ -48,6 +51,7 @@ src/
   strategies/
     types.ts              → Strategy contract (StrategyFn, StrategyModule, StrategyResult, backtest types)
     loader.ts             → Strategy registry + CLI arg parsing
+    */module.ts           → Per-strategy registry metadata (runner/backtest hooks)
     root-emission/        → Simple root + best-emission strategy (cron-based)
     copy-trade/           → Mirror a leader's portfolio (event-driven)
     sma-stoploss/         → SMA crossover momentum + trailing stop-loss (block-interval)

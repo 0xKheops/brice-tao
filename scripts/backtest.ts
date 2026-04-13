@@ -41,6 +41,10 @@ import { execSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Cron } from "croner";
+import {
+	parseBacktestCliArgs,
+	resolveBacktestSchedule,
+} from "../src/backtest/cli.ts";
 import type { EquitySample, TradeResult } from "../src/backtest/metrics.ts";
 import {
 	computeMetrics,
@@ -48,7 +52,6 @@ import {
 	formatMetricsMarkdown,
 	formatMetricsSummary,
 } from "../src/backtest/metrics.ts";
-import { DB_HISTORY_BLOCK_INTERVAL } from "../src/history/constants.ts";
 import {
 	assertEmissionData,
 	openHistoryDatabase,
@@ -62,7 +65,7 @@ import {
 } from "../src/rebalance/amm.ts";
 import { formatTao, TAO } from "../src/rebalance/tao.ts";
 import type { StrategyTarget } from "../src/rebalance/types.ts";
-import { loadStrategy, resolveStrategyName } from "../src/strategies/loader.ts";
+import { loadStrategy } from "../src/strategies/loader.ts";
 import type { BacktestSchedule } from "../src/strategies/types.ts";
 import { GIT_COMMIT } from "../src/version.ts";
 
@@ -76,7 +79,6 @@ const F32 = 1n << 32n;
 const TX_FEE_RAO = (TAO * 12n) / 10_000n;
 
 const DB_PATH = join("data", "history.sqlite");
-const DEFAULT_INITIAL_TAO = 10;
 
 // ---------------------------------------------------------------------------
 // Emission model constants (hardcoded realistic defaults)
@@ -93,60 +95,23 @@ const VALIDATOR_TAKE_PCT = 12n;
 const TAO_WEIGHT_NUM = 18n;
 const TAO_WEIGHT_DENOM = 100n;
 
-// ---------------------------------------------------------------------------
-// CLI arg parsing
-// ---------------------------------------------------------------------------
-
-function parseIntArg(flag: string, fallback: number): number {
-	const idx = process.argv.indexOf(flag);
-	if (idx === -1) return fallback;
-	const raw = process.argv[idx + 1];
-	if (!raw || raw.startsWith("--")) {
-		console.error(`${flag} requires a numeric value`);
-		process.exit(1);
-	}
-	const value = Number.parseInt(raw, 10);
-	if (Number.isNaN(value) || value <= 0) {
-		console.error(`${flag} must be a positive integer, got: ${raw}`);
-		process.exit(1);
-	}
-	return value;
+const cli = parseBacktestCliArgs(process.argv.slice(2), process.env.STRATEGY);
+if (cli.kind === "list") {
+	console.log(cli.message);
+	process.exit(0);
 }
-
-function parseStringArg(flag: string): string | undefined {
-	const idx = process.argv.indexOf(flag);
-	if (idx === -1) return undefined;
-	const raw = process.argv[idx + 1];
-	if (!raw || raw.startsWith("--")) {
-		console.error(`${flag} requires a value`);
-		process.exit(1);
-	}
-	return raw;
-}
-
-const strategyName = resolveStrategyName(process.env.STRATEGY);
-const initialTao = parseIntArg("--initial-tao", DEFAULT_INITIAL_TAO);
-const cliDays = process.argv.includes("--days")
-	? parseIntArg("--days", 0)
-	: undefined;
-const cliIntervalBlocks = process.argv.includes("--interval-blocks")
-	? parseIntArg("--interval-blocks", 0)
-	: undefined;
-const cliCron = parseStringArg("--cron");
-const cliObserveGap = process.argv.includes("--observe-gap")
-	? parseIntArg("--observe-gap", 0)
-	: undefined;
-
-if (cliIntervalBlocks !== undefined && cliCron !== undefined) {
-	console.error("Cannot specify both --interval-blocks and --cron");
-	process.exit(1);
-}
+const {
+	strategyName,
+	initialTao,
+	days: cliDays,
+	observeGap: cliObserveGap,
+} = cli.options;
 
 // ---------------------------------------------------------------------------
 // Optional backfill: only when --backfill is passed
 // ---------------------------------------------------------------------------
 
-if (process.argv.includes("--backfill")) {
+if (cli.options.backfill) {
 	const wsEndpoints = process.env.WS_ENDPOINT?.split(",") ?? [];
 	const archiveEndpoints = process.env.ARCHIVE_WS_ENDPOINT?.split(",") ?? [];
 
@@ -193,12 +158,11 @@ if (process.argv.includes("--backfill")) {
 // Load strategy
 // ---------------------------------------------------------------------------
 
-const strategyModule = await loadStrategy(strategyName);
+const strategyModule = loadStrategy(strategyName);
 if (!strategyModule.createBacktest) {
-	console.error(
+	throw new Error(
 		`Strategy "${strategyName}" does not support backtesting (no createBacktest export).`,
 	);
-	process.exit(1);
 }
 const strategy = strategyModule.createBacktest();
 
@@ -206,30 +170,10 @@ const strategy = strategyModule.createBacktest();
 // Resolve schedule: CLI override → strategy config → error
 // ---------------------------------------------------------------------------
 
-let schedule: BacktestSchedule;
-if (cliCron) {
-	schedule = { type: "cron", cronSchedule: cliCron };
-} else if (cliIntervalBlocks !== undefined) {
-	schedule = { type: "block-interval", intervalBlocks: cliIntervalBlocks };
-} else if (strategyModule.getBacktestSchedule) {
-	schedule = strategyModule.getBacktestSchedule();
-} else {
-	console.error(
-		`Strategy "${strategyName}" has no getBacktestSchedule() — provide --interval-blocks or --cron`,
-	);
-	process.exit(1);
-}
-
-// Validate block-interval alignment
-if (
-	schedule.type === "block-interval" &&
-	schedule.intervalBlocks % DB_HISTORY_BLOCK_INTERVAL !== 0
-) {
-	console.error(
-		`--interval-blocks (${schedule.intervalBlocks}) must be a multiple of BLOCK_INTERVAL (${DB_HISTORY_BLOCK_INTERVAL}) for history DB alignment`,
-	);
-	process.exit(1);
-}
+const schedule: BacktestSchedule = resolveBacktestSchedule(
+	cli.options,
+	strategyModule,
+);
 
 // ---------------------------------------------------------------------------
 // Load history
@@ -247,11 +191,10 @@ if (cliDays !== undefined) {
 }
 
 if (blockMetas.length < 2) {
-	console.error(
+	db.close();
+	throw new Error(
 		"Not enough data in history DB to backtest. Run `bun backfill` first.",
 	);
-	db.close();
-	process.exit(1);
 }
 
 // biome-ignore lint/style/noNonNullAssertion: length >= 2 guaranteed above
@@ -955,10 +898,9 @@ function buildTrigger(
 	// Initialize: find the first cron tick at-or-after the first snapshot
 	let nextScheduledAt = cron.nextRun(new Date(firstTimestamp - 1));
 	if (!nextScheduledAt) {
-		console.error(
+		throw new Error(
 			`Cron expression "${sched.cronSchedule}" has no future ticks from ${new Date(firstTimestamp).toISOString()}`,
 		);
-		process.exit(1);
 	}
 
 	return (_blockNumber, timestamp) => {
