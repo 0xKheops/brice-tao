@@ -24,19 +24,27 @@ Each strategy has its own `config.yaml` with tunable parameters — see `src/str
 
 - [Bun](https://bun.sh) (for local development)
 - [Docker](https://docs.docker.com/get-docker/) (for containerized deployment)
-- Two Bittensor wallets: a **main wallet** that holds your funds, and a separate **bot wallet** used only to sign staking transactions.
+- A Bittensor account with TAO — your **main account** (coldkey)
+- It's optional for the sake of open source but if you are serious about trading bots, you'll need an archive node RPC. Backtesting strategies and warming up bots require access to archive nodes. `onfinality.com` and `dwellir.com` provide nice free tiers, and much more for paid accounts.
 
-### Why use a staking proxy?
+### Accounts & security
 
-Think of this as separating your **funds wallet** from your **automation wallet**. Your main wallet holds your TAO and stake. The bot wallet is only there to sign staking transactions for the bot. In Bittensor terms, the main wallet is the **coldkey**, and the bot wallet is the **staking proxy**.
+The bot needs two things to operate:
 
-This is safer because the bot only needs the secret phrase of the bot wallet. Your main wallet's secret phrase never has to live on your laptop, server, or container. The bot only needs the public address of the main wallet (`COLDKEY_ADDRESS`). Because the bot wallet phrase is shared with the bot, treat it as a higher-risk wallet and keep only a small amount of TAO on it for transaction fees.
+1. The **address** of the account that holds your funds (your main account / coldkey)
+2. The **recovery phrase** (mnemonic) of a separate account that has staking proxy permission on it
 
-### Set up the staking proxy
+A bot has to sign transactions, which means it needs a mnemonic. But your main account's recovery phrase is the master key to all your funds — it should never live in a config file, on a server, or really on any computer at all. For any serious amount of TAO, your main account should be a [Ledger](https://www.ledger.com/) hardware wallet, where the mnemonic is generated on-device and never leaves it.
 
-1. In [Talisman](https://www.talisman.xyz/), create a brand new account using a **newly generated mnemonic**. This mnemonic will be provided to the bot so do not create any other accounts from it, and never use this mnemonic for anything else. This will be your proxy account.
-2. Open [dev.papi.how](https://dev.papi.how), connect to the bittensor chain (provide the rpc url) then from the Extrinsics tab submit a `Proxy -> addProxy` with the **Proxy Account** address as the delegate, `Staking` as the proxy type, and `0` delay. Sign this transaction using your **Main Account**. ![Create staking proxy](./docs/create-staking-proxy.png)
-3. In the bot config, set `COLDKEY_ADDRESS` to the public address of your main account, and set `PROXY_MNEMONIC` to the secret phrase of the proxy account. Do **not** put your main account secret phrase in the bot config.
+So instead of handing the bot your main mnemonic, you create a cheap throwaway account and grant it **staking-only** proxy permission over your main account. The bot signs with this proxy's mnemonic — it can stake and unstake on your behalf, but it cannot transfer funds out. If the server is compromised, the worst that can happen is some unwanted staking moves, not a drained wallet.
+
+#### Set up the staking proxy
+
+1. In [Talisman](https://www.talisman.xyz/), create a new account with a **fresh mnemonic**. This will be your proxy account — its mnemonic goes to the bot, so don't reuse it for anything else.
+2. From your **main account** (Ledger or software wallet), submit a `Proxy -> addProxy` extrinsic on-chain: set the proxy account address as the delegate, `Staking` as the proxy type, and `0` delay. You can do this from [dev.papi.how](https://dev.papi.how) connected to a Bittensor RPC endpoint. ![Create staking proxy](./docs/create-staking-proxy.png)
+3. Set `COLDKEY_ADDRESS` to the public address of your main account, and `PROXY_MNEMONIC` to the proxy account's mnemonic. **Never** put your main account's mnemonic in the bot config.
+
+Fund the proxy account with a small amount of TAO for transaction fees — it doesn't need anything else.
 
 ## Configuration
 
