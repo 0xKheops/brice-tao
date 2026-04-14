@@ -4,7 +4,7 @@ Automated portfolio rebalancer for [Bittensor](https://bittensor.com/) subnets. 
 
 ## Strategies
 
-The bot ships with four strategies. Select one with `--strategy <name>` or the `STRATEGY` env var (defaults to `root-emission`).
+The project ships with four "hello world" strategies. Select one with `--strategy <name>` or the `STRATEGY` env var (defaults to `root-emission`).
 
 | | root-emission | copy-trade | sma-stoploss | coward |
 |---|---|---|---|---|
@@ -25,7 +25,7 @@ Each strategy has its own `config.yaml` with tunable parameters — see `src/str
 - [Bun](https://bun.sh) (for local development)
 - [Docker](https://docs.docker.com/get-docker/) (for containerized deployment)
 - A Bittensor account with TAO — your **main account** (coldkey)
-- It's optional for the sake of open source but if you are serious about trading bots, you'll need an archive node RPC. Backtesting strategies and warming up bots require access to archive nodes. `onfinality.com` and `dwellir.com` provide nice free tiers, and much more for paid accounts.
+- Backtesting strategies and warming up bots require access to an archive node. [OnFinality](https://onfinality.io/) and [Dwellir](https://dwellir.com/) provide nice free tiers.
 
 ### Accounts & security
 
@@ -103,22 +103,15 @@ bun rebalance                                     # one-shot rebalance (default:
 bun rebalance -- --strategy copy-trade --dry-run   # dry run a specific strategy
 bun preview   -- --strategy root-emission          # preview with audit report
 bun scheduler                                      # long-running scheduler
-bun scheduler -- --strategy sma-stoploss             # scheduler with specific strategy
-bun bunker                                          # emergency exit: move all positions to SN0
-bun bunker    -- --dry-run                          # preview bunker operations without executing
+bun scheduler -- --strategy sma-stoploss           # scheduler with specific strategy
+bun bunker                                         # emergency exit: move all positions to SN0
+bun bunker    -- --dry-run                         # preview bunker operations without executing
+
+# History & backtesting (require ARCHIVE_WS_ENDPOINT)
+bun backfill  -- --days 30                         # backfill 30 days of on-chain history
+bun backtest  -- --strategy root-emission          # replay strategy over historical data
+bun backtest  -- --strategy root-emission --days 7 --initial-tao 100   # custom window & capital
 ```
-
-### `bun preview` vs `bun rebalance --dry-run`
-
-These commands serve different purposes:
-
-| | `bun preview` | `bun rebalance --dry-run` |
-|---|---|---|
-| **Purpose** | "Show me the plan" — quick, read-only analysis | "Rehearse the deployment" — full pipeline validation |
-| **Requires secrets?** | No (`WS_ENDPOINT` + `COLDKEY_ADDRESS` only) | Yes (all production env vars including `PROXY_MNEMONIC`) |
-| **Output** | Terminal audit tables + `reports/preview-*.md` | Terminal logs + decoded extrinsic JSON + log file |
-| **Validates** | Strategy logic, allocation math, operation planning | Everything above + signer, proxy, MEV shield, slippage simulation |
-| **Safe to share?** | Yes — no secrets needed or exposed | No — requires full production credentials |
 
 ## Docker
 
@@ -193,6 +186,62 @@ bun backfill -- --days 30 --concurrency 4 --rpm 300
 
 > **Tip:** Start with modest values and increase gradually. If you see timeout errors or HTTP 429 responses, reduce concurrency or add an RPM cap. Backfills are resumable — already-fetched blocks are skipped on re-run.
 
+### Backtesting strategies
+
+The backtest script replays historical snapshots through a strategy and simulates portfolio changes with AMM-aware trade execution and emission accrual.
+
+**Prerequisites:** a populated history database (see [Backfilling](#backfilling-history-for-backtests) above). If the DB is empty or stale, use `--backfill` to auto-fill gaps before the run — this requires `ARCHIVE_WS_ENDPOINT`.
+
+```bash
+bun backtest -- --strategy <name> [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--strategy <name>` | Strategy to test (or `STRATEGY` env var; `--strategy list` to list all) |
+| `--days <n>` | Limit to last N days of history (default: all available data) |
+| `--initial-tao <n>` | Starting capital in TAO (default: 10) |
+| `--interval-blocks <n>` | Force rebalance every N blocks (must be a multiple of 25) |
+| `--cron "<expr>"` | Force a cron schedule, evaluated in UTC (e.g. `"0 6,18 * * *"`) |
+| `--observe-gap <n>` | Minimum blocks between observe-triggered rebalances (default: 0) |
+| `--backfill` | Auto-backfill missing history before running (requires `ARCHIVE_WS_ENDPOINT`) |
+
+**Schedule detection:** The strategy's native schedule is used by default (cron or block-interval, via `getBacktestSchedule()`). CLI flags `--interval-blocks` and `--cron` override it.
+
+**Examples:**
+
+```bash
+# Backtest root-emission over the last 7 days with 100 τ starting capital
+bun backtest -- --strategy root-emission --days 7 --initial-tao 100
+
+# Force a 12-hour cron schedule
+bun backtest -- --strategy root-emission --cron "0 6,18 * * *"
+
+# Auto-backfill any gaps, then run
+bun backtest -- --strategy root-emission --backfill
+```
+
+**Output:** a Markdown + JSON report saved to `reports/backtest-<strategy>-<timestamp>.md`, containing:
+
+- **Trade log** — every sell/buy with amounts, fees, and realized PnL
+- **Open positions** — unrealized PnL and cost basis
+- **Performance metrics** — total return, CAGR, Sharpe ratio, max drawdown, win rate, profit factor
+- **Equity curve** — timestamped portfolio values (strategy vs. HODL benchmark)
+
+<details>
+<summary>Trade simulation model</summary>
+
+The backtest uses **constant-product AMM math** (x·y=k) with pool reserves from the history DB. SN0 (root) trades at 1:1 with zero pool fee. Fees: pool fee of ~0.05% on input + fixed tx fee per trade. Sell→buy rotations charge one pool fee (on the sell leg), matching on-chain `swap_stake` behavior.
+
+Emission accrual uses a simplified drip model (~85–90% accuracy vs on-chain) based on `alpha_out_emission` from DynamicInfo, with owner cut, miner/validator split, and validator take applied per block.
+
+**Known limitations:**
+- Does **not** model full Yuma consensus, validator set dynamics, or concentrated liquidity
+- Does **not** model staking emission rewards beyond the simplified drip (real returns will differ)
+- Treat results as a **relative comparison tool** between strategies, not an absolute return prediction
+
+</details>
+
 ## CI
 
 All pushes and PRs to `main` are checked via GitHub Actions: lint, type-check, tests, and dead-code detection.
@@ -216,4 +265,5 @@ The name is a nod to [**Brice de Nice**](https://en.wikipedia.org/wiki/Brice_de_
 - [Video walkthrough](https://www.youtube.com/watch?v=jBHYiRT_Zz0) — Overview of the rebalancer concept and setup
 - [Architecture](docs/architecture.md) — System design and data flow
 - [Custom Strategies](docs/custom-strategies.md) — Guide to building your own strategy
+- [OnFinality](https://onfinality.io/) / [Dwellir](https://dwellir.com/) — Archive node providers (free tiers available)
 - [Bittensor docs](https://docs.bittensor.com/) — Bittensor network documentation
