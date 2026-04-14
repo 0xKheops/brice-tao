@@ -85,8 +85,16 @@ function parseIntFlag(flag: string): number | undefined {
 
 const days = parseIntFlag("--days");
 const fromBlock = parseIntFlag("--from");
-const concurrency = parseIntFlag("--concurrency") ?? 1;
-const rpm = parseIntFlag("--rpm") ?? 0;
+const concurrency =
+	parseIntFlag("--concurrency") ??
+	(process.env.BACKFILL_CONCURRENCY
+		? Number.parseInt(process.env.BACKFILL_CONCURRENCY, 10)
+		: 1);
+const rpm =
+	parseIntFlag("--rpm") ??
+	(process.env.BACKFILL_RPM
+		? Number.parseInt(process.env.BACKFILL_RPM, 10)
+		: 0);
 
 if (days === undefined && fromBlock === undefined) {
 	console.error(

@@ -53,7 +53,9 @@ Set the following in your environment or `.env` file (see `.env.example`):
 | `VALIDATOR_HOTKEY` | | Fallback validator when yield-based selection fails |
 | `STRATEGY` | | Active strategy (default: `root-emission`) |
 | `LEADER_ADDRESS` | | Leader coldkey to mirror (copy-trade strategy only) |
-| `ARCHIVE_WS_ENDPOINT` | | Archive node for price history warmup (sma-stoploss) |
+| `ARCHIVE_WS_ENDPOINT` | | Archive node endpoints for history warmup & backfill (comma-separated for failover) |
+| `BACKFILL_CONCURRENCY` | | Parallel block fetches during backfill (default: `1`) |
+| `BACKFILL_RPM` | | Max RPC requests per minute during backfill — `0` = unlimited (default: `0`) |
 | `GIT_COMMIT` | | Git commit hash for log traceability (auto-detected locally; set via Docker build arg) |
 
 ### Strategy config
@@ -148,6 +150,40 @@ All strategies record on-chain subnet data to a shared SQLite database (`data/hi
 - Every `block_number` in the DB satisfies `block_number % 25 === 0` — enforced by both code and a SQL CHECK constraint
 - `recordCurrentBlock()` from `src/history/record.ts` is called by every strategy runner and silently skips non-grid blocks
 - Backfill scripts must iterate in steps of `BLOCK_INTERVAL` (25) using helpers from `src/history/constants.ts`
+
+### Backfilling history for backtests
+
+Strategies that rely on historical data (e.g. `sma-stoploss`) and all backtesting require a populated history database. The DB is **not** populated automatically — you must backfill it from an **archive RPC node**.
+
+**You need an archive node.** Standard (pruned) RPC endpoints only serve recent blocks. Archive nodes retain full chain history and are available from providers like [OnFinality](https://onfinality.io/), [Dwellir](https://dwellir.com/), and others. Set the endpoint in your `.env`:
+
+```env
+ARCHIVE_WS_ENDPOINT=wss://your-archive-node.example.com/ws
+```
+
+Then run the backfill:
+
+```bash
+bun backfill -- --days 30           # backfill the last 30 days
+```
+
+**Default settings are conservative.** The project defaults (`concurrency=1`, `rpm=unlimited`) are tuned for the lowest-tier archive node plans (e.g. free tiers on OnFinality or Dwellir). This avoids hitting rate limits but makes large backfills **extremely slow** — a 30-day backfill can take hours at concurrency 1.
+
+**If you have a paid archive plan**, increase throughput via your `.env` or CLI flags:
+
+```env
+# .env — tune for your provider's rate limits
+BACKFILL_CONCURRENCY=4    # parallel block fetches (default: 1)
+BACKFILL_RPM=300           # max RPC requests/min, 0 = unlimited (default: 0)
+```
+
+CLI flags override env vars:
+
+```bash
+bun backfill -- --days 30 --concurrency 4 --rpm 300
+```
+
+> **Tip:** Start with modest values and increase gradually. If you see timeout errors or HTTP 429 responses, reduce concurrency or add an RPM cap. Backfills are resumable — already-fetched blocks are skipped on re-run.
 
 ## CI
 
