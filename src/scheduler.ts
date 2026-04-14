@@ -87,7 +87,11 @@ export async function runScheduler(): Promise<void> {
 			throw err;
 		}
 	} finally {
-		if (!isShuttingDown) {
+		// Only close the DB here if the runner never started (early error).
+		// When the runner IS active, the DB stays open and is closed later by
+		// shutdown() on SIGTERM/SIGINT (or by the process.on("exit") handler
+		// registered inside openHistoryDatabase()).
+		if (!isShuttingDown && !runner) {
 			historyDb.close();
 		}
 	}
