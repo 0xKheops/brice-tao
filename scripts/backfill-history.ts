@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { createBittensorClient } from "../src/api/createClient.ts";
+import { RpcRateLimiter } from "../src/api/rateLimiter.ts";
 import { getBlockHash, isZeroHash } from "../src/api/rpcThrottle.ts";
 import {
 	BLOCK_INTERVAL,
@@ -26,9 +27,6 @@ function formatDuration(totalSeconds: number): string {
 	return `${s}s`;
 }
 
-/** Number of blocks to fetch concurrently */
-const BATCH_SIZE = 2;
-
 const PROGRESS_EVERY = 50;
 
 /** Per-block fetch timeout — prevents hanging on unresponsive archive nodes */
@@ -39,6 +37,9 @@ const MAX_RETRIES = 3;
 
 /** Base delay (ms) for exponential backoff between retries */
 const RETRY_BASE_DELAY_MS = 2_000;
+
+/** Estimated RPC calls per block fetch (hash + 5 sequential queries) */
+const RPC_CALLS_PER_BLOCK = 6;
 
 async function withTimeout<T>(
 	promise: Promise<T>,
@@ -66,40 +67,45 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
-const daysIdx = process.argv.indexOf("--days");
-const fromIdx = process.argv.indexOf("--from");
+function parseIntFlag(flag: string): number | undefined {
+	const idx = process.argv.indexOf(flag);
+	if (idx === -1) return undefined;
+	const raw = process.argv[idx + 1];
+	if (!raw) {
+		console.error(`Error: ${flag} requires a value`);
+		process.exit(1);
+	}
+	const val = Number.parseInt(raw, 10);
+	if (Number.isNaN(val)) {
+		console.error(`Error: ${flag} must be an integer`);
+		process.exit(1);
+	}
+	return val;
+}
 
-if (daysIdx === -1 && fromIdx === -1) {
+const days = parseIntFlag("--days");
+const fromBlock = parseIntFlag("--from");
+const concurrency = parseIntFlag("--concurrency") ?? 1;
+const rpm = parseIntFlag("--rpm") ?? 0;
+
+if (days === undefined && fromBlock === undefined) {
 	console.error(
-		"Usage: bun backfill -- --days <number> [--from <block_number>]",
+		"Usage: bun backfill -- --days <number> [--from <block_number>] [--concurrency <n>] [--rpm <n>]",
 	);
 	process.exit(1);
 }
 
-let days: number | undefined;
-if (daysIdx !== -1) {
-	if (!process.argv[daysIdx + 1]) {
-		console.error("Error: --days requires a value");
-		process.exit(1);
-	}
-	days = Number.parseInt(process.argv[daysIdx + 1] as string, 10);
-	if (Number.isNaN(days) || days <= 0) {
-		console.error("Error: --days must be a positive integer");
-		process.exit(1);
-	}
+if (days !== undefined && days <= 0) {
+	console.error("Error: --days must be a positive integer");
+	process.exit(1);
 }
-
-let fromBlock: number | undefined;
-if (fromIdx !== -1) {
-	if (!process.argv[fromIdx + 1]) {
-		console.error("Error: --from requires a block number");
-		process.exit(1);
-	}
-	fromBlock = Number.parseInt(process.argv[fromIdx + 1] as string, 10);
-	if (Number.isNaN(fromBlock) || fromBlock < 0) {
-		console.error("Error: --from must be a non-negative integer");
-		process.exit(1);
-	}
+if (fromBlock !== undefined && fromBlock < 0) {
+	console.error("Error: --from must be a non-negative integer");
+	process.exit(1);
+}
+if (concurrency < 1) {
+	console.error("Error: --concurrency must be >= 1");
+	process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,21 +213,23 @@ try {
 
 						const atOptions = { at: blockHash };
 
-						const [
-							dynamicInfos,
-							immunityPeriod,
-							subnetToPrune,
-							priceMap,
-							timestamp,
-						] = await Promise.all([
-							api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
-							api.query.SubtensorModule.NetworkImmunityPeriod.getValue(
+						// Sequential queries: concurrent archive requests trigger a
+						// polkadot-api ws-middleware bug when the RPC rate-limits
+						// responses (manifests as "Cannot destructure 'subscription'").
+						const dynamicInfos =
+							await api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(
 								atOptions,
-							),
-							api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-							fetchAlphaPricesWithFallback(api, atOptions),
-							api.query.Timestamp.Now.getValue(atOptions),
-						]);
+							);
+						const immunityPeriod =
+							await api.query.SubtensorModule.NetworkImmunityPeriod.getValue(
+								atOptions,
+							);
+						const subnetToPrune =
+							await api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(
+								atOptions,
+							);
+						const priceMap = await fetchAlphaPricesWithFallback(api, atOptions);
+						const timestamp = await api.query.Timestamp.Now.getValue(atOptions);
 
 						const decoder = new TextDecoder();
 						const subnets: SubnetSnapshot[] = [];
@@ -283,14 +291,20 @@ try {
 		return null;
 	}
 
-	for (let i = 0; i < missingBlocks.length; i += BATCH_SIZE) {
+	const limiter = new RpcRateLimiter({ concurrency, rpm });
+	const rpmLabel = rpm > 0 ? `${rpm} rpm` : "unlimited";
+	console.log(`Rate limits: concurrency=${concurrency}, rpm=${rpmLabel}`);
+
+	for (let i = 0; i < missingBlocks.length; i += concurrency) {
 		// Re-check the runtime API periodically as we move into newer blocks
 		// where the API may have been deployed (blocks are processed ascending).
 		if (i % 500 === 0) resetRuntimeApiFlag();
 
-		const batch = missingBlocks.slice(i, i + BATCH_SIZE);
+		const batch = missingBlocks.slice(i, i + concurrency);
 
-		const results = await Promise.all(batch.map((b) => fetchBlock(b)));
+		const results = await Promise.all(
+			batch.map((b) => limiter.run(() => fetchBlock(b), RPC_CALLS_PER_BLOCK)),
+		);
 
 		for (const snapshot of results) {
 			if (snapshot) {
@@ -302,8 +316,8 @@ try {
 		}
 
 		// Progress logging
-		const done = Math.min(i + BATCH_SIZE, missingBlocks.length);
-		if (done % PROGRESS_EVERY < BATCH_SIZE || done === missingBlocks.length) {
+		const done = Math.min(i + concurrency, missingBlocks.length);
+		if (done % PROGRESS_EVERY < concurrency || done === missingBlocks.length) {
 			const elapsed = (Date.now() - startTime) / 1000;
 			const rate = done / elapsed;
 			const remaining = (missingBlocks.length - done) / rate;

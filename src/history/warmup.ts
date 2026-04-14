@@ -1,6 +1,7 @@
 import type { bittensor } from "@polkadot-api/descriptors";
 import type { PolkadotClient } from "polkadot-api";
 import { createBittensorClient } from "../api/createClient.ts";
+import { RpcRateLimiter } from "../api/rateLimiter.ts";
 import { getBlockHash, isZeroHash } from "../api/rpcThrottle.ts";
 import { log } from "../rebalance/logger.ts";
 import {
@@ -12,8 +13,11 @@ import type { HistoryDatabase } from "./db.ts";
 import { fetchAlphaPricesWithFallback } from "./priceFallback.ts";
 import type { HistorySnapshot, SubnetSnapshot } from "./types.ts";
 
-const BATCH_SIZE = 5;
+/** Blocks fetched concurrently — kept at 1 to avoid polkadot-api ws-middleware crash */
+const BATCH_SIZE = 1;
 const BLOCK_FETCH_TIMEOUT_MS = 30_000;
+/** Estimated RPC calls per block fetch */
+const RPC_CALLS_PER_BLOCK = 6;
 
 async function withTimeout<T>(
 	promise: Promise<T>,
@@ -98,26 +102,29 @@ export async function warmupHistoryDb(
 			`History warmup: fetching ${missingBlocks.length} blocks (${allGridBlocks.length - missingBlocks.length} already in DB)`,
 		);
 
+		const limiter = new RpcRateLimiter({ concurrency: BATCH_SIZE });
 		let fetched = 0;
 
 		for (let i = 0; i < missingBlocks.length; i += BATCH_SIZE) {
 			const batch = missingBlocks.slice(i, i + BATCH_SIZE);
 
 			const results = await Promise.all(
-				batch.map(async (blockNum) => {
-					try {
-						return await withTimeout(
-							fetchBlockSnapshot(client, api, blockNum),
-							BLOCK_FETCH_TIMEOUT_MS,
-							`block ${blockNum}`,
-						);
-					} catch (err) {
-						log.warn(
-							`History warmup: skipping block ${blockNum}: ${err instanceof Error ? err.message : String(err)}`,
-						);
-						return null;
-					}
-				}),
+				batch.map((blockNum) =>
+					limiter.run(
+						() =>
+							withTimeout(
+								fetchBlockSnapshot(client, api, blockNum),
+								BLOCK_FETCH_TIMEOUT_MS,
+								`block ${blockNum}`,
+							).catch((err) => {
+								log.warn(
+									`History warmup: skipping block ${blockNum}: ${err instanceof Error ? err.message : String(err)}`,
+								);
+								return null;
+							}),
+						RPC_CALLS_PER_BLOCK,
+					),
+				),
 			);
 
 			for (const snapshot of results) {
@@ -163,14 +170,16 @@ async function fetchBlockSnapshot(
 
 	const atOptions = { at: blockHash };
 
-	const [dynamicInfos, immunityPeriod, subnetToPrune, priceMap, timestamp] =
-		await Promise.all([
-			api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions),
-			api.query.SubtensorModule.NetworkImmunityPeriod.getValue(atOptions),
-			api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions),
-			fetchAlphaPricesWithFallback(api, atOptions),
-			api.query.Timestamp.Now.getValue(atOptions),
-		]);
+	// Sequential queries: concurrent archive requests trigger a polkadot-api
+	// ws-middleware bug when the RPC rate-limits responses.
+	const dynamicInfos =
+		await api.apis.SubnetInfoRuntimeApi.get_all_dynamic_info(atOptions);
+	const immunityPeriod =
+		await api.query.SubtensorModule.NetworkImmunityPeriod.getValue(atOptions);
+	const subnetToPrune =
+		await api.apis.SubnetInfoRuntimeApi.get_subnet_to_prune(atOptions);
+	const priceMap = await fetchAlphaPricesWithFallback(api, atOptions);
+	const timestamp = await api.query.Timestamp.Now.getValue(atOptions);
 
 	const decoder = new TextDecoder();
 	const subnets: SubnetSnapshot[] = [];
