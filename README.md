@@ -108,9 +108,9 @@ bun bunker                                         # emergency exit: move all po
 bun bunker    -- --dry-run                         # preview bunker operations without executing
 
 # History & backtesting (require ARCHIVE_WS_ENDPOINT)
-bun backfill  -- --days 30                         # backfill 30 days of on-chain history
+bun backfill  -- --days 5                          # backfill 5 days of on-chain history
 bun backtest  -- --strategy root-emission          # replay strategy over historical data
-bun backtest  -- --strategy root-emission --days 7 --initial-tao 100   # custom window & capital
+bun backtest  -- --strategy root-emission --days 5 --initial-tao 100   # custom window & capital
 ```
 
 ## Docker
@@ -126,23 +126,6 @@ cat logs/rebalance-*.log         # view execution logs (persisted on host)
 ```
 
 Both `docker:*` scripts use `scripts/dc.sh`, which automatically passes the current git commit hash as a build arg so every log entry is traceable.
-
-## Architecture
-
-The rebalance pipeline:
-
-```
-Fetch Balances → Strategy Targets → Compute Operations → Simulate Slippage → MEV Shield → Execute → Verify → Notify
-```
-
-See [docs/architecture.md](docs/architecture.md) for the full system design.
-
-### Key concepts
-
-- **TAO/Alpha** — TAO is the base token (1 TAO = 10⁹ RAO). Alpha is a per-subnet staking token; staking TAO converts it via an AMM pool.
-- **MEV Shield** — Transactions are encrypted (XChaCha20-Poly1305 + ML-KEM-768) before submission to prevent frontrunning.
-- **Price limits** — U64F64 fixed-point values protecting swaps against slippage, computed via on-chain simulation.
-- **Proxy account** — The bot signs with a staking-only proxy, never the coldkey. Limits blast radius.
 
 ### History database
 
@@ -165,10 +148,10 @@ ARCHIVE_WS_ENDPOINT=wss://your-archive-node.example.com/ws
 Then run the backfill:
 
 ```bash
-bun backfill -- --days 30           # backfill the last 30 days
+bun backfill -- --days 5            # backfill the last 5 days
 ```
 
-**Default settings are conservative.** The project defaults (`concurrency=1`, `rpm=unlimited`) are tuned for the lowest-tier archive node plans (e.g. free tiers on OnFinality or Dwellir). This avoids hitting rate limits but makes large backfills **extremely slow** — a 30-day backfill can take hours at concurrency 1.
+**Default settings are conservative.** The project defaults (`concurrency=1`, `rpm=unlimited`) are tuned for the lowest-tier archive node plans (e.g. free tiers on OnFinality or Dwellir). This avoids hitting rate limits but makes large backfills **extremely slow** — a large backfill can take hours at concurrency 1.
 
 **If you have a paid archive plan**, increase throughput via your `.env` or CLI flags:
 
@@ -181,7 +164,7 @@ BACKFILL_RPM=300           # max RPC requests/min, 0 = unlimited (default: 0)
 CLI flags override env vars:
 
 ```bash
-bun backfill -- --days 30 --concurrency 4 --rpm 300
+bun backfill -- --days 5 --concurrency 4 --rpm 300
 ```
 
 > **Tip:** Start with modest values and increase gradually. If you see timeout errors or HTTP 429 responses, reduce concurrency or add an RPM cap. Backfills are resumable — already-fetched blocks are skipped on re-run.
@@ -211,8 +194,8 @@ bun backtest -- --strategy <name> [options]
 **Examples:**
 
 ```bash
-# Backtest root-emission over the last 7 days with 100 τ starting capital
-bun backtest -- --strategy root-emission --days 7 --initial-tao 100
+# Backtest root-emission over the last 5 days with 100 τ starting capital
+bun backtest -- --strategy root-emission --days 5 --initial-tao 100
 
 # Force a 12-hour cron schedule
 bun backtest -- --strategy root-emission --cron "0 6,18 * * *"
