@@ -562,7 +562,7 @@ function buildMetricRows(
 					m.winRate !== null
 						? `${m.winRate.toFixed(1)}%`
 						: `${c.dim}N/A${c.reset}`,
-				hint: "% of individual trades that were profitable",
+				hint: "% of closed trades that were profitable",
 			},
 			{
 				label: "Profit Factor",
@@ -575,7 +575,7 @@ function buildMetricRows(
 					m.expectancy !== null
 						? `${fmtNum(m.expectancy)} τ`
 						: `${c.dim}N/A${c.reset}`,
-				hint: "Average profit/loss per trade",
+				hint: "Average profit/loss per closed trade",
 			},
 			{
 				label: "Payoff Ratio",
@@ -620,8 +620,9 @@ function buildMetricRows(
 export interface MetricsExtra {
 	strategyName: string;
 	durationDays: number;
-	rebalanceCount: number;
-	totalTrades: number;
+	cycleCount: number;
+	tradeLegCount: number;
+	closedTradeCount: number;
 	totalFeesTao: string;
 	initialTao: string;
 	finalTao: string;
@@ -656,7 +657,7 @@ export function formatMetricsSummary(
 
 	// ── Header box ──
 	const headerLine1 = `  📈 BACKTEST — ${extra.strategyName}`;
-	const headerLine2 = `  ${extra.durationDays.toFixed(1)} days · ${extra.rebalanceCount} rebalances · ${extra.totalTrades} trades · fees: ${extra.totalFeesTao} τ`;
+	const headerLine2 = `  ${extra.durationDays.toFixed(1)} days · ${extra.cycleCount} cycles · ${extra.tradeLegCount} trade legs · ${extra.closedTradeCount} closed trades · fees: ${extra.totalFeesTao} τ`;
 	const boxW = Math.max(W, headerLine1.length + 4, headerLine2.length + 4);
 	lines.push("");
 	lines.push(`${c.dim}╔${"═".repeat(boxW)}╗${c.reset}`);
@@ -829,7 +830,7 @@ export function formatMetricsMarkdown(
 	if (m.winRate !== null) {
 		const wrIcon = m.winRate >= 50 ? "✅" : "⚠️";
 		takeaways.push(
-			`${wrIcon} Won ${m.winRate.toFixed(0)}% of ${extra.totalTrades} trades${m.profitFactor !== null ? ` (profit factor: ${fmtRatio(m.profitFactor)})` : ""}`,
+			`${wrIcon} Won ${m.winRate.toFixed(0)}% of ${extra.closedTradeCount} closed trades${m.profitFactor !== null ? ` (profit factor: ${fmtRatio(m.profitFactor)})` : ""}`,
 		);
 	}
 	if (extra.durationDays < 60) {
@@ -847,8 +848,9 @@ export function formatMetricsMarkdown(
 	lines.push("| --- | --- |");
 	lines.push(`| Strategy | ${extra.strategyName} |`);
 	lines.push(`| Period | ${extra.durationDays.toFixed(1)} days |`);
-	lines.push(`| Rebalances | ${extra.rebalanceCount} |`);
-	lines.push(`| Total trades | ${extra.totalTrades} |`);
+	lines.push(`| Execution cycles | ${extra.cycleCount} |`);
+	lines.push(`| Trade legs | ${extra.tradeLegCount} |`);
+	lines.push(`| Closed trades | ${extra.closedTradeCount} |`);
 	lines.push(`| Total fees | ${extra.totalFeesTao} τ |`);
 	lines.push("");
 
@@ -921,13 +923,19 @@ export function formatMetricsMarkdown(
 	lines.push("| Metric | Value | |");
 	lines.push("| --- | --- | --- |");
 	lines.push(
-		`| Win Rate | ${m.winRate !== null ? `${m.winRate.toFixed(1)}%` : "N/A"} | ${indicator(m.winRate, 50, true)} % of trades in profit |`,
+		`| Closed Trades | ${extra.closedTradeCount} | Realized sell exits used for win rate / expectancy |`,
+	);
+	lines.push(
+		`| Trade Legs | ${extra.tradeLegCount} | Each BUY or SELL leg; one swap counts as 2 |`,
+	);
+	lines.push(
+		`| Win Rate | ${m.winRate !== null ? `${m.winRate.toFixed(1)}%` : "N/A"} | ${indicator(m.winRate, 50, true)} % of closed trades in profit |`,
 	);
 	lines.push(
 		`| Profit Factor | ${fmtRatio(m.profitFactor)} | ${indicator(m.profitFactor, 1, true)} Gross profit / gross loss |`,
 	);
 	lines.push(
-		`| Expectancy | ${m.expectancy !== null ? `${fmtNum(m.expectancy)} τ/trade` : "N/A"} | Average profit per trade |`,
+		`| Expectancy | ${m.expectancy !== null ? `${fmtNum(m.expectancy)} τ/trade` : "N/A"} | Average profit per closed trade |`,
 	);
 	lines.push(
 		`| Payoff Ratio | ${fmtRatio(m.payoffRatio)} | Avg win size / avg loss size |`,
@@ -993,13 +1001,19 @@ export function formatMetricsMarkdown(
 		"| **Recovery Factor** | Total return / max drawdown. Shows how well the strategy rebounds from its worst decline. |",
 	);
 	lines.push(
-		"| **Win Rate** | Percentage of trades that made money. High win rate with tiny wins and big losses is still bad — check Payoff Ratio. |",
+		"| **Win Rate** | Percentage of closed trades that made money. High win rate with tiny wins and big losses is still bad — check Payoff Ratio. |",
+	);
+	lines.push(
+		"| **Trade Leg** | A single BUY or SELL side in the operations log. One swap contributes two trade legs: the sell side and the buy side. |",
+	);
+	lines.push(
+		"| **Closed Trade** | A realized exit (sell) with measurable PnL. Win rate, profit factor, expectancy, and payoff ratio use closed trades, not trade legs. |",
 	);
 	lines.push(
 		"| **Profit Factor** | Gross profits / gross losses. >1 means the strategy is net profitable on trades alone. |",
 	);
 	lines.push(
-		"| **Expectancy** | Average τ gained (or lost) per trade. Combines win rate with average win/loss sizes. |",
+		"| **Expectancy** | Average τ gained (or lost) per closed trade. Combines win rate with average win/loss sizes. |",
 	);
 	lines.push(
 		"| **Payoff Ratio** | Average winning trade / average losing trade. With 50% win rate, you need payoff >1 to profit. |",
@@ -1054,8 +1068,11 @@ export function formatMetricsJson(
 			generatedAt: new Date().toISOString(),
 			durationDays: round(extra.durationDays, 1),
 			blockRange: extra.blockRange ?? null,
-			rebalanceCount: extra.rebalanceCount,
-			totalTrades: extra.totalTrades,
+			cycleCount: extra.cycleCount,
+			tradeLegCount: extra.tradeLegCount,
+			closedTradeCount: extra.closedTradeCount,
+			rebalanceCount: extra.cycleCount,
+			totalTrades: extra.tradeLegCount,
 			initialTao: extra.initialTao,
 			finalTao: extra.finalTao,
 			pnlTao: extra.pnlTao,

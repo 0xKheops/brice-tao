@@ -9,6 +9,7 @@ import {
 	conditionalVaR,
 	type EquitySample,
 	expectancy,
+	formatMetricsMarkdown,
 	kurtosis,
 	omegaRatio,
 	payoffRatio,
@@ -430,5 +431,34 @@ describe("computeMetrics", () => {
 		const m = computeMetrics([{ timestamp: 0, value: 100 }], []);
 		expect(m.totalReturnPct).toBe(0);
 		expect(m.maxDrawdownPct).toBe(0);
+	});
+});
+
+describe("formatMetricsMarkdown", () => {
+	test("distinguishes trade legs from closed trades in report text", () => {
+		const equity = makeEquity([100, 102, 101]);
+		const trades: TradeResult[] = [{ pnlAbsolute: 1 }, { pnlAbsolute: -1 }];
+		const metrics = computeMetrics(equity, trades);
+
+		const markdown = formatMetricsMarkdown(metrics, {
+			strategyName: "slack-water",
+			durationDays: 1,
+			cycleCount: 3,
+			tradeLegCount: 5,
+			closedTradeCount: 2,
+			totalFeesTao: "0.0063",
+			initialTao: "2.0000",
+			finalTao: "2.0211",
+			pnlTao: "+0.0211",
+			pnlPct: 1.06,
+			tradePnlTao: "+0.0010",
+			emissionPnlTao: "+0.0201",
+		});
+
+		expect(markdown).toContain("| Execution cycles | 3 |");
+		expect(markdown).toContain("| Trade legs | 5 |");
+		expect(markdown).toContain("| Closed trades | 2 |");
+		expect(markdown).toContain("Won 50% of 2 closed trades");
+		expect(markdown).not.toContain("Won 50% of 5 trades");
 	});
 });

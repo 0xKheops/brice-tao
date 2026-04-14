@@ -615,14 +615,20 @@ function logBuy(netuid: number, subnetName: string, taoSpent: bigint) {
 	});
 }
 
-function flushTrades(blockNumber: number, timestamp: number) {
+function flushTrades(
+	blockNumber: number,
+	timestamp: number,
+	kind: "initial-deployment" | "rebalance",
+) {
 	if (tickTrades.length === 0) return;
 
 	const sells = tickTrades.filter((t) => t.side === "sell");
 	const buys = tickTrades.filter((t) => t.side === "buy");
+	const heading =
+		kind === "initial-deployment" ? "Initial deployment" : "Rebalance";
 
 	reportLines.push(
-		`### Rebalance — ${formatTime(timestamp)} — #${blockNumber}`,
+		`### ${heading} — ${formatTime(timestamp)} — #${blockNumber}`,
 	);
 	reportLines.push("");
 	if (sells.length > 0 || buys.length > 0) {
@@ -930,7 +936,7 @@ function buildTrigger(
 
 const initialValue = free;
 const shouldRebalance = buildTrigger(schedule, firstBlock.timestamp);
-let rebalanceCount = 0;
+let cycleCount = 0;
 
 // Model realistic execution latency: after any rebalance, block observe-triggered
 // rebalances for a minimum gap. Matches the live runner's inflightRun guard which
@@ -1041,6 +1047,7 @@ for (const meta of blockMetas) {
 	}
 
 	// Rebalance tick
+	const isInitialCycle = cycleCount === 0;
 	const { targets: rawTargets } = strategy.step(
 		snapshots,
 		meta.blockNumber,
@@ -1162,8 +1169,12 @@ for (const meta of blockMetas) {
 		fillPrices,
 	});
 
-	flushTrades(meta.blockNumber, meta.timestamp);
-	rebalanceCount++;
+	flushTrades(
+		meta.blockNumber,
+		meta.timestamp,
+		isInitialCycle ? "initial-deployment" : "rebalance",
+	);
+	cycleCount++;
 	lastRebalanceBlock = meta.blockNumber;
 	pendingObserveRebalance = false;
 }
@@ -1256,8 +1267,9 @@ const gitBranch = (() => {
 const metricsExtra = {
 	strategyName,
 	durationDays,
-	rebalanceCount,
-	totalTrades,
+	cycleCount,
+	tradeLegCount: totalTrades,
+	closedTradeCount: tradeResults.length,
 	totalFeesTao: formatTao(totalFeesPaid),
 	initialTao: formatTao(initialValue),
 	finalTao: formatTao(finalValue),
