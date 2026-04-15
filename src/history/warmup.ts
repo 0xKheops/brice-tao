@@ -25,16 +25,23 @@ async function withTimeout<T>(
 	label: string,
 ): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(
-			() => reject(new Error(`Timeout fetching ${label} (${ms}ms)`)),
-			ms,
-		);
+		timer = setTimeout(() => {
+			timedOut = true;
+			reject(new Error(`Timeout fetching ${label} (${ms}ms)`));
+		}, ms);
 	});
 	try {
 		return await Promise.race([promise, timeout]);
 	} finally {
 		if (timer) clearTimeout(timer);
+		// When the timeout wins the race, the original promise is still in-flight.
+		// Suppress its eventual rejection (e.g. DestroyedError when the archive
+		// client is torn down) so it doesn't surface as an unhandled rejection.
+		if (timedOut) {
+			promise.catch(() => {});
+		}
 	}
 }
 
