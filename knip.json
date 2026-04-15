@@ -6,7 +6,7 @@
 		"src/history/index.ts",
 		"src/errors.ts"
 	],
-	"ignore": [".papi/**"],
+	"ignore": [],
 	"ignoreDependencies": ["bun-types"],
 	"ignoreExportsUsedInFile": {
 		"interface": true,

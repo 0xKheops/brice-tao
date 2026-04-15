@@ -28,27 +28,27 @@
 		"pre-commit": "bunx biome check --staged --no-errors-on-unmatched --error-on-warnings"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.11",
+		"@biomejs/biome": "^2.4.12",
 		"@types/bun": "latest",
-		"knip": "^6.3.1",
+		"knip": "^6.4.1",
 		"simple-git-hooks": "^2.13.1",
-		"typescript": "^5.9.3"
+		"typescript": "^6.0.2"
 	},
 	"peerDependencies": {
-		"typescript": "^5"
+		"typescript": "^6.0.2"
 	},
 	"trustedDependencies": [
 		"@polkadot-api/descriptors"
 	],
 	"dependencies": {
-		"@noble/ciphers": "^2.1.1",
+		"@noble/ciphers": "^2.2.0",
 		"@polkadot-api/descriptors": "file:.papi/descriptors",
-		"@polkadot-api/substrate-bindings": "^0.20.0",
-		"@polkadot-labs/hdkd": "^0.0.26",
-		"@polkadot-labs/hdkd-helpers": "^0.0.27",
+		"@polkadot-api/substrate-bindings": "^0.20.1",
+		"@polkadot-labs/hdkd": "^0.0.28",
+		"@polkadot-labs/hdkd-helpers": "^0.0.29",
 		"croner": "^10.0.1",
 		"mlkem": "^2.7.0",
-		"polkadot-api": "^2.0.0",
+		"polkadot-api": "^2.0.1",
 		"rxjs": "^7.8.2",
 		"yaml": "^2.8.3"
 	}
