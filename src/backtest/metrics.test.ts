@@ -3,18 +3,25 @@ import {
 	annualizedVolatility,
 	cagr,
 	calmarRatio,
+	capmRegression,
 	computeDrawdown,
+	computeDrawdownTimeseries,
 	computeMetrics,
 	computeReturns,
+	computeRollingSharpe,
 	conditionalVaR,
 	type EquitySample,
 	expectancy,
 	formatMetricsMarkdown,
+	informationRatio,
 	kurtosis,
+	maxConsecutiveLosses,
+	maxConsecutiveWins,
 	omegaRatio,
 	payoffRatio,
 	profitFactor,
 	recoveryFactor,
+	rollingSummary,
 	sharpeRatio,
 	skewness,
 	sortinoRatio,
@@ -460,5 +467,260 @@ describe("formatMetricsMarkdown", () => {
 		expect(markdown).toContain("| Closed trades | 2 |");
 		expect(markdown).toContain("Won 50% of 2 closed trades");
 		expect(markdown).not.toContain("Won 50% of 5 trades");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Consecutive streaks
+// ---------------------------------------------------------------------------
+
+describe("maxConsecutiveWins", () => {
+	test("returns null for empty trades", () => {
+		expect(maxConsecutiveWins([])).toBeNull();
+	});
+
+	test("counts consecutive wins", () => {
+		const trades: TradeResult[] = [
+			{ pnlAbsolute: 1 },
+			{ pnlAbsolute: 2 },
+			{ pnlAbsolute: -1 },
+			{ pnlAbsolute: 3 },
+			{ pnlAbsolute: 4 },
+			{ pnlAbsolute: 5 },
+		];
+		expect(maxConsecutiveWins(trades)).toBe(3);
+	});
+
+	test("all wins", () => {
+		const trades: TradeResult[] = [
+			{ pnlAbsolute: 1 },
+			{ pnlAbsolute: 2 },
+			{ pnlAbsolute: 3 },
+		];
+		expect(maxConsecutiveWins(trades)).toBe(3);
+	});
+
+	test("zero-pnl trades are not wins", () => {
+		const trades: TradeResult[] = [
+			{ pnlAbsolute: 1 },
+			{ pnlAbsolute: 0 },
+			{ pnlAbsolute: 1 },
+		];
+		expect(maxConsecutiveWins(trades)).toBe(1);
+	});
+});
+
+describe("maxConsecutiveLosses", () => {
+	test("returns null for empty trades", () => {
+		expect(maxConsecutiveLosses([])).toBeNull();
+	});
+
+	test("counts consecutive losses", () => {
+		const trades: TradeResult[] = [
+			{ pnlAbsolute: -1 },
+			{ pnlAbsolute: -2 },
+			{ pnlAbsolute: 1 },
+			{ pnlAbsolute: -3 },
+		];
+		expect(maxConsecutiveLosses(trades)).toBe(2);
+	});
+
+	test("no losses returns 0", () => {
+		const trades: TradeResult[] = [{ pnlAbsolute: 1 }, { pnlAbsolute: 2 }];
+		expect(maxConsecutiveLosses(trades)).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Information Ratio
+// ---------------------------------------------------------------------------
+
+describe("informationRatio", () => {
+	test("returns null with insufficient data", () => {
+		expect(informationRatio([0.01], [0.005])).toBeNull();
+	});
+
+	test("positive when strategy beats benchmark consistently", () => {
+		const strategy = Array.from({ length: 60 }, () => 0.005);
+		const benchmark = Array.from({ length: 60 }, () => 0.002);
+		const ir = informationRatio(strategy, benchmark);
+		expect(ir).not.toBeNull();
+		// biome-ignore lint/style/noNonNullAssertion: asserted not null above
+		expect(ir!).toBeGreaterThan(0);
+	});
+
+	test("returns null when tracking error is zero", () => {
+		const returns = [0.01, 0.02, 0.03];
+		expect(informationRatio(returns, returns)).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// CAPM Regression
+// ---------------------------------------------------------------------------
+
+describe("capmRegression", () => {
+	test("returns null with insufficient data", () => {
+		expect(capmRegression([0.01, 0.02], [0.01, 0.02])).toBeNull();
+	});
+
+	test("perfect positive correlation gives beta ≈ 1", () => {
+		const bench = [0.01, -0.02, 0.015, -0.01, 0.005, 0.02, -0.005, 0.01];
+		const strat = bench.map((r) => r * 1.0);
+		const result = capmRegression(strat, bench);
+		expect(result).not.toBeNull();
+		expect(result?.beta).toBeCloseTo(1.0, 5);
+		expect(result?.rSquared).toBeCloseTo(1.0, 5);
+	});
+
+	test("amplified strategy gives beta > 1", () => {
+		const bench = [0.01, -0.02, 0.015, -0.01, 0.005, 0.02, -0.005, 0.01];
+		const strat = bench.map((r) => r * 2);
+		const result = capmRegression(strat, bench);
+		expect(result).not.toBeNull();
+		expect(result?.beta).toBeCloseTo(2.0, 5);
+	});
+
+	test("alpha is annualized", () => {
+		const bench = [0.01, -0.02, 0.015, -0.01, 0.005];
+		// Strategy adds 0.001 daily alpha
+		const strat = bench.map((r) => r + 0.001);
+		const result = capmRegression(strat, bench);
+		expect(result).not.toBeNull();
+		// Alpha should be approximately 0.001 * 365.25 * 100 ≈ 36.5%
+		expect(result?.alpha).toBeCloseTo(36.525, 0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Rolling Sharpe
+// ---------------------------------------------------------------------------
+
+describe("computeRollingSharpe", () => {
+	test("returns null with insufficient data", () => {
+		const equity = makeEquity([100, 101, 102]);
+		expect(computeRollingSharpe(equity, 30)).toBeNull();
+	});
+
+	test("produces results for sufficient data", () => {
+		// 45 daily samples — enough for 30-day rolling window
+		const values = Array.from({ length: 45 }, (_, i) => 100 + i * 0.5);
+		const equity = makeEquity(values);
+		const result = computeRollingSharpe(equity, 30);
+		expect(result).not.toBeNull();
+		expect(result?.length).toBeGreaterThan(0);
+		// Steady uptrend should give positive Sharpe
+		expect(result?.[0]?.value).toBeGreaterThan(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Drawdown Timeseries
+// ---------------------------------------------------------------------------
+
+describe("computeDrawdownTimeseries", () => {
+	test("returns null with insufficient data", () => {
+		expect(computeDrawdownTimeseries([])).toBeNull();
+		expect(
+			computeDrawdownTimeseries([{ timestamp: 0, value: 100 }]),
+		).toBeNull();
+	});
+
+	test("computes drawdown at each point", () => {
+		const equity = makeEquity([100, 110, 105, 120, 100]);
+		const result = computeDrawdownTimeseries(equity);
+		expect(result).not.toBeNull();
+		// biome-ignore lint/style/noNonNullAssertion: asserted not null above
+		expect(result!).toHaveLength(5);
+		// At peak (100→100 start)
+		expect(result?.[0]?.drawdownPct).toBe(0);
+		// New peak at 110
+		expect(result?.[1]?.drawdownPct).toBe(0);
+		// 105/110 = drawdown of ~4.55%
+		expect(result?.[2]?.drawdownPct).toBeCloseTo(4.545, 1);
+		// New peak at 120
+		expect(result?.[3]?.drawdownPct).toBe(0);
+		// 100/120 = drawdown of ~16.67%
+		expect(result?.[4]?.drawdownPct).toBeCloseTo(16.667, 1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Rolling Summary
+// ---------------------------------------------------------------------------
+
+describe("rollingSummary", () => {
+	test("returns null for null input", () => {
+		expect(rollingSummary(null)).toBeNull();
+	});
+
+	test("returns null for empty array", () => {
+		expect(rollingSummary([])).toBeNull();
+	});
+
+	test("computes min/median/max", () => {
+		const series = [
+			{ timestamp: 1, value: 2 },
+			{ timestamp: 2, value: 5 },
+			{ timestamp: 3, value: 1 },
+			{ timestamp: 4, value: 8 },
+			{ timestamp: 5, value: 3 },
+		];
+		const result = rollingSummary(series);
+		expect(result).not.toBeNull();
+		expect(result?.min).toBe(1);
+		expect(result?.max).toBe(8);
+		expect(result?.median).toBe(3);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// computeMetrics — benchmark integration
+// ---------------------------------------------------------------------------
+
+describe("computeMetrics with benchmark", () => {
+	test("includes informationRatio and CAPM when benchmark provided", () => {
+		const equity = makeEquity(
+			Array.from({ length: 90 }, (_, i) => 100 + i * 0.3 + Math.sin(i) * 2),
+		);
+		const benchmark = makeEquity(
+			Array.from({ length: 90 }, (_, i) => 100 + i * 0.1),
+		);
+		const metrics = computeMetrics(equity, [], benchmark);
+		expect(metrics.informationRatio).not.toBeNull();
+		expect(metrics.alpha).not.toBeNull();
+		expect(metrics.beta).not.toBeNull();
+		expect(metrics.rSquared).not.toBeNull();
+	});
+
+	test("returns null for benchmark metrics when no benchmark", () => {
+		const equity = makeEquity([100, 110, 105]);
+		const metrics = computeMetrics(equity, []);
+		expect(metrics.informationRatio).toBeNull();
+		expect(metrics.alpha).toBeNull();
+		expect(metrics.beta).toBeNull();
+		expect(metrics.rSquared).toBeNull();
+	});
+
+	test("includes consecutive streaks", () => {
+		const equity = makeEquity([100, 110, 105]);
+		const trades: TradeResult[] = [
+			{ pnlAbsolute: 1 },
+			{ pnlAbsolute: 2 },
+			{ pnlAbsolute: -1 },
+			{ pnlAbsolute: -2 },
+			{ pnlAbsolute: -3 },
+		];
+		const metrics = computeMetrics(equity, trades);
+		expect(metrics.maxConsecWins).toBe(2);
+		expect(metrics.maxConsecLosses).toBe(3);
+	});
+
+	test("includes drawdown timeseries", () => {
+		const equity = makeEquity([100, 110, 105, 120, 100]);
+		const metrics = computeMetrics(equity, []);
+		expect(metrics.drawdownTimeseries).not.toBeNull();
+		// biome-ignore lint/style/noNonNullAssertion: asserted not null above
+		expect(metrics.drawdownTimeseries!).toHaveLength(5);
 	});
 });

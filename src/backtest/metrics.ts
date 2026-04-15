@@ -39,6 +39,10 @@ export interface BacktestMetrics {
 	sortinoRatio: number | null;
 	calmarRatio: number | null;
 	omegaRatio: number | null;
+	informationRatio: number | null;
+	alpha: number | null;
+	beta: number | null;
+	rSquared: number | null;
 
 	// -- Drawdown --
 	maxDrawdownPct: number;
@@ -50,6 +54,8 @@ export interface BacktestMetrics {
 	profitFactor: number | null;
 	expectancy: number | null;
 	payoffRatio: number | null;
+	maxConsecWins: number | null;
+	maxConsecLosses: number | null;
 
 	// -- Tail risk --
 	var95: number | null;
@@ -57,6 +63,20 @@ export interface BacktestMetrics {
 	tailRatio: number | null;
 	skewness: number | null;
 	kurtosis: number | null;
+
+	// -- Rolling (time-varying) --
+	rollingSharpe: RollingMetric[] | null;
+	drawdownTimeseries: DrawdownSample[] | null;
+}
+
+export interface RollingMetric {
+	timestamp: number;
+	value: number;
+}
+
+export interface DrawdownSample {
+	timestamp: number;
+	drawdownPct: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,12 +373,170 @@ export function kurtosis(dailyReturns: number[]): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Consecutive streaks
+// ---------------------------------------------------------------------------
+
+export function maxConsecutiveWins(trades: TradeResult[]): number | null {
+	if (trades.length === 0) return null;
+	let max = 0;
+	let current = 0;
+	for (const t of trades) {
+		if (t.pnlAbsolute > 0) {
+			current++;
+			if (current > max) max = current;
+		} else {
+			current = 0;
+		}
+	}
+	return max;
+}
+
+export function maxConsecutiveLosses(trades: TradeResult[]): number | null {
+	if (trades.length === 0) return null;
+	let max = 0;
+	let current = 0;
+	for (const t of trades) {
+		if (t.pnlAbsolute < 0) {
+			current++;
+			if (current > max) max = current;
+		} else {
+			current = 0;
+		}
+	}
+	return max;
+}
+
+// ---------------------------------------------------------------------------
+// Information Ratio
+// ---------------------------------------------------------------------------
+
+export function informationRatio(
+	strategyReturns: number[],
+	benchmarkReturns: number[],
+): number | null {
+	const len = Math.min(strategyReturns.length, benchmarkReturns.length);
+	if (len < 2) return null;
+	const activeReturns: number[] = [];
+	for (let i = 0; i < len; i++) {
+		activeReturns.push(
+			(strategyReturns[i] as number) - (benchmarkReturns[i] as number),
+		);
+	}
+	const m = mean(activeReturns);
+	const s = stddev(activeReturns, m);
+	if (s === 0) return null;
+	return (m / s) * Math.sqrt(TRADING_DAYS_PER_YEAR);
+}
+
+// ---------------------------------------------------------------------------
+// CAPM regression (Alpha, Beta, R²)
+// ---------------------------------------------------------------------------
+
+export interface CAPMResult {
+	alpha: number;
+	beta: number;
+	rSquared: number;
+}
+
+export function capmRegression(
+	strategyReturns: number[],
+	benchmarkReturns: number[],
+): CAPMResult | null {
+	const len = Math.min(strategyReturns.length, benchmarkReturns.length);
+	if (len < 3) return null;
+
+	const mx = mean(benchmarkReturns.slice(0, len));
+	const my = mean(strategyReturns.slice(0, len));
+
+	let sxx = 0;
+	let sxy = 0;
+	let syy = 0;
+	for (let i = 0; i < len; i++) {
+		const dx = (benchmarkReturns[i] as number) - mx;
+		const dy = (strategyReturns[i] as number) - my;
+		sxx += dx * dx;
+		sxy += dx * dy;
+		syy += dy * dy;
+	}
+
+	if (sxx === 0) return null;
+
+	const beta = sxy / sxx;
+	// Annualized alpha: daily alpha × trading days
+	const dailyAlpha = my - beta * mx;
+	const alpha = dailyAlpha * TRADING_DAYS_PER_YEAR * 100;
+	const rSquared = syy > 0 ? (sxy * sxy) / (sxx * syy) : 0;
+
+	return { alpha, beta, rSquared };
+}
+
+// ---------------------------------------------------------------------------
+// Rolling metrics (Sharpe, drawdown timeseries)
+// ---------------------------------------------------------------------------
+
+export function computeRollingSharpe(
+	equity: EquitySample[],
+	windowDays = 30,
+): RollingMetric[] | null {
+	const daily = toDailyValues(equity);
+	if (daily.length < windowDays + 1) return null;
+
+	const dailyValues = daily.map((s) => s.value);
+	const dailyReturns = computeReturns(dailyValues);
+	const results: RollingMetric[] = [];
+
+	for (let i = windowDays - 1; i < dailyReturns.length; i++) {
+		const window = dailyReturns.slice(i - windowDays + 1, i + 1);
+		const sr = sharpeRatio(window);
+		if (sr !== null) {
+			results.push({
+				timestamp: (daily[i + 1] as EquitySample).timestamp,
+				value: sr,
+			});
+		}
+	}
+
+	return results.length > 0 ? results : null;
+}
+
+export function computeDrawdownTimeseries(
+	equity: EquitySample[],
+): DrawdownSample[] | null {
+	if (equity.length < 2) return null;
+
+	let peak = (equity[0] as EquitySample).value;
+	const results: DrawdownSample[] = [];
+
+	for (const sample of equity) {
+		if (sample.value > peak) peak = sample.value;
+		const dd = peak > 0 ? ((peak - sample.value) / peak) * 100 : 0;
+		results.push({ timestamp: sample.timestamp, drawdownPct: dd });
+	}
+
+	return results;
+}
+
+/** Compute summary stats from a rolling metric series: min, median, max */
+export function rollingSummary(
+	series: RollingMetric[] | null,
+): { min: number; median: number; max: number } | null {
+	if (!series || series.length === 0) return null;
+	const values = series.map((s) => s.value).sort((a, b) => a - b);
+	return {
+		min: values[0] as number,
+		median: percentile(values, 50),
+		max: values[values.length - 1] as number,
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Master computation
 // ---------------------------------------------------------------------------
 
 export function computeMetrics(
 	equityCurve: EquitySample[],
 	trades: TradeResult[],
+	benchmarkEquity?: EquitySample[],
 ): BacktestMetrics {
 	const initial =
 		equityCurve.length > 0 ? (equityCurve[0] as EquitySample).value : 0;
@@ -381,6 +559,16 @@ export function computeMetrics(
 	const cagrPct = cagr(initial, final, durationDays);
 	const dd = computeDrawdown(equityCurve);
 
+	// Benchmark-relative metrics
+	let ir: number | null = null;
+	let capm: CAPMResult | null = null;
+	if (benchmarkEquity && benchmarkEquity.length >= 2) {
+		const benchDaily = toDailyValues(benchmarkEquity);
+		const benchReturns = computeReturns(benchDaily.map((s) => s.value));
+		ir = informationRatio(dailyReturns, benchReturns);
+		capm = capmRegression(dailyReturns, benchReturns);
+	}
+
 	return {
 		totalReturnPct: totalRetPct,
 		cagr: cagrPct,
@@ -390,6 +578,10 @@ export function computeMetrics(
 		sortinoRatio: sortinoRatio(dailyReturns),
 		calmarRatio: calmarRatio(cagrPct, dd.maxDrawdownPct),
 		omegaRatio: omegaRatio(dailyReturns),
+		informationRatio: ir,
+		alpha: capm?.alpha ?? null,
+		beta: capm?.beta ?? null,
+		rSquared: capm?.rSquared ?? null,
 
 		maxDrawdownPct: dd.maxDrawdownPct,
 		maxDrawdownDurationDays: dd.maxDrawdownDurationDays,
@@ -399,12 +591,17 @@ export function computeMetrics(
 		profitFactor: profitFactor(trades),
 		expectancy: expectancy(trades),
 		payoffRatio: payoffRatio(trades),
+		maxConsecWins: maxConsecutiveWins(trades),
+		maxConsecLosses: maxConsecutiveLosses(trades),
 
 		var95: valueAtRisk(dailyReturns),
 		cvar95: conditionalVaR(dailyReturns),
 		tailRatio: tailRatio(dailyReturns),
 		skewness: skewness(dailyReturns),
 		kurtosis: kurtosis(dailyReturns),
+
+		rollingSharpe: computeRollingSharpe(equityCurve),
+		drawdownTimeseries: computeDrawdownTimeseries(equityCurve),
 	};
 }
 
@@ -412,7 +609,12 @@ export function computeMetrics(
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-import { type AnsiColors, createColors, renderEquityChart } from "./chart.ts";
+import {
+	type AnsiColors,
+	createColors,
+	renderEquityChart,
+	renderUnderwaterChart,
+} from "./chart.ts";
 
 function fmtPct(v: number | null, decimals = 2): string {
 	if (v === null) return "N/A";
@@ -540,6 +742,29 @@ function buildMetricRows(
 				hint: "Probability-weighted gains vs losses (>1 = net gain)",
 			},
 			{
+				label: "Info Ratio",
+				value: colorRatio(m.informationRatio, 0.5, c),
+				hint: "Excess return per unit of tracking error vs HODL",
+			},
+			{
+				label: "Alpha (ann.)",
+				value: colorPct(m.alpha, true, c),
+				hint: "CAPM alpha — excess return above benchmark beta",
+			},
+			{
+				label: "Beta",
+				value: fmtRatio(m.beta),
+				hint: "Sensitivity to benchmark moves (<1 = defensive)",
+			},
+			{
+				label: "R²",
+				value:
+					m.rSquared !== null
+						? `${(m.rSquared * 100).toFixed(1)}%`
+						: `${c.dim}N/A${c.reset}`,
+				hint: "% of return variance explained by benchmark",
+			},
+			{
 				label: "Max Drawdown",
 				value: colorPct(-m.maxDrawdownPct, true, c),
 				hint: "Worst peak-to-valley decline",
@@ -581,6 +806,22 @@ function buildMetricRows(
 				label: "Payoff Ratio",
 				value: fmtRatio(m.payoffRatio),
 				hint: "Avg winning trade / avg losing trade",
+			},
+			{
+				label: "Max Consec Wins",
+				value:
+					m.maxConsecWins !== null
+						? `${m.maxConsecWins}`
+						: `${c.dim}N/A${c.reset}`,
+				hint: "Longest winning streak",
+			},
+			{
+				label: "Max Consec Losses",
+				value:
+					m.maxConsecLosses !== null
+						? `${m.maxConsecLosses}`
+						: `${c.dim}N/A${c.reset}`,
+				hint: "Longest losing streak",
 			},
 		],
 		tail: [
@@ -634,6 +875,10 @@ export interface MetricsExtra {
 	hodlCagr?: number;
 	equityCurve?: EquitySample[];
 	hodlEquityCurve?: EquitySample[];
+	/** Portfolio turnover ratio (annual) */
+	turnoverRatio?: number;
+	/** Cost drag as % of initial portfolio value */
+	costDragPct?: number;
 	/** Code context — helps AI match reports to source */
 	gitCommit?: string;
 	gitBranch?: string;
@@ -678,6 +923,17 @@ export function formatMetricsSummary(
 			height: 15,
 		});
 		if (chart) lines.push(chart);
+	}
+
+	// ── Underwater chart ──
+	if (m.drawdownTimeseries && m.drawdownTimeseries.length >= 3) {
+		lines.push("");
+		const underwater = renderUnderwaterChart(m.drawdownTimeseries, {
+			colors: c,
+			width: 60,
+			height: 8,
+		});
+		if (underwater) lines.push(underwater);
 	}
 
 	// ── Verdict ──
@@ -739,6 +995,47 @@ export function formatMetricsSummary(
 	renderSection("Risk", "──", rows.risk);
 	renderSection("Trades", "──", rows.trades);
 	renderSection("Tail Risk", "──", rows.tail);
+
+	// ── Rolling Sharpe summary ──
+	const rsSum = rollingSummary(m.rollingSharpe);
+	if (rsSum) {
+		lines.push("");
+		lines.push(
+			`  ${c.dim}── Rolling Sharpe (30d) ${"─".repeat(Math.max(0, W - 25))}${c.reset}`,
+		);
+		const minStr = colorRatio(rsSum.min, 0, c);
+		const medStr = colorRatio(rsSum.median, 1.0, c);
+		const maxStr = colorRatio(rsSum.max, 1.0, c);
+		lines.push(`  Min ${minStr}    Median ${medStr}    Max ${maxStr}`);
+	}
+
+	// ── Turnover & cost drag ──
+	if (extra.turnoverRatio !== undefined || extra.costDragPct !== undefined) {
+		lines.push("");
+		lines.push(
+			`  ${c.dim}── Efficiency ${"─".repeat(Math.max(0, W - 16))}${c.reset}`,
+		);
+		if (extra.turnoverRatio !== undefined) {
+			const labelStr = "  Turnover (ann.)".padEnd(22);
+			const valueStr = padStartVisible(
+				`${extra.turnoverRatio.toFixed(2)}×`,
+				16,
+			);
+			lines.push(
+				`${labelStr}${valueStr}    ${c.dim}Times portfolio traded per year${c.reset}`,
+			);
+		}
+		if (extra.costDragPct !== undefined) {
+			const labelStr = "  Cost Drag".padEnd(22);
+			const valueStr = padStartVisible(
+				colorPct(-extra.costDragPct, true, c),
+				16,
+			);
+			lines.push(
+				`${labelStr}${valueStr}    ${c.dim}Total fees as % of initial value${c.reset}`,
+			);
+		}
+	}
 
 	// ── PnL decomposition ──
 	lines.push("");
@@ -899,6 +1196,16 @@ export function formatMetricsMarkdown(
 	lines.push(
 		`| Omega Ratio | ${fmtRatio(m.omegaRatio)} | ${indicator(m.omegaRatio, 1, true)} Gain probability / loss probability |`,
 	);
+	lines.push(
+		`| Info Ratio | ${fmtRatio(m.informationRatio)} | ${indicator(m.informationRatio, 0.5, true)} Excess return per tracking error vs HODL |`,
+	);
+	lines.push(
+		`| Alpha (ann.) | ${fmtPct(m.alpha)} | ${indicator(m.alpha, 0, true)} CAPM excess return above benchmark beta |`,
+	);
+	lines.push(`| Beta | ${fmtRatio(m.beta)} | Sensitivity to benchmark moves |`);
+	lines.push(
+		`| R² | ${m.rSquared !== null ? `${(m.rSquared * 100).toFixed(1)}%` : "N/A"} | Variance explained by benchmark |`,
+	);
 	lines.push("");
 
 	// ── Drawdown ──
@@ -940,6 +1247,12 @@ export function formatMetricsMarkdown(
 	lines.push(
 		`| Payoff Ratio | ${fmtRatio(m.payoffRatio)} | Avg win size / avg loss size |`,
 	);
+	lines.push(
+		`| Max Consec Wins | ${m.maxConsecWins ?? "N/A"} | Longest winning streak |`,
+	);
+	lines.push(
+		`| Max Consec Losses | ${m.maxConsecLosses ?? "N/A"} | Longest losing streak |`,
+	);
 	lines.push("");
 
 	// ── Tail Risk ──
@@ -961,6 +1274,38 @@ export function formatMetricsMarkdown(
 		`| Kurtosis | ${fmtRatio(m.kurtosis)} | Tail heaviness vs normal distribution |`,
 	);
 	lines.push("");
+
+	// ── Efficiency ──
+	if (extra.turnoverRatio !== undefined || extra.costDragPct !== undefined) {
+		lines.push("## Efficiency");
+		lines.push("");
+		lines.push("| Metric | Value | |");
+		lines.push("| --- | --- | --- |");
+		if (extra.turnoverRatio !== undefined) {
+			lines.push(
+				`| Turnover (ann.) | ${extra.turnoverRatio.toFixed(2)}× | Times portfolio traded per year |`,
+			);
+		}
+		if (extra.costDragPct !== undefined) {
+			lines.push(
+				`| Cost Drag | ${fmtPct(-extra.costDragPct)} | Total fees as % of initial value |`,
+			);
+		}
+		lines.push("");
+	}
+
+	// ── Rolling Sharpe ──
+	const rsSummary = rollingSummary(m.rollingSharpe);
+	if (rsSummary) {
+		lines.push("## Rolling Sharpe (30-day window)");
+		lines.push("");
+		lines.push("| Stat | Value |");
+		lines.push("| --- | --- |");
+		lines.push(`| Min | ${fmtRatio(rsSummary.min)} |`);
+		lines.push(`| Median | ${fmtRatio(rsSummary.median)} |`);
+		lines.push(`| Max | ${fmtRatio(rsSummary.max)} |`);
+		lines.push("");
+	}
 
 	// ── PnL Decomposition ──
 	lines.push("## PnL Decomposition");
@@ -1039,6 +1384,30 @@ export function formatMetricsMarkdown(
 	lines.push(
 		"| **Emission PnL** | Staking rewards that would have accrued during the period. Estimated — real emissions depend on validator and network state. |",
 	);
+	lines.push(
+		"| **Information Ratio** | Excess return over benchmark per unit of tracking error. Like Sharpe but relative to HODL. >0.5 is good, >1 is excellent. |",
+	);
+	lines.push(
+		"| **Alpha** | CAPM alpha — the annualized return that can't be explained by benchmark exposure (beta). Positive alpha = genuine skill. |",
+	);
+	lines.push(
+		"| **Beta** | Sensitivity to benchmark moves. β=1 means 1:1 tracking. β<1 = defensive, β>1 = amplified exposure. |",
+	);
+	lines.push(
+		"| **R²** | Percentage of strategy return variance explained by the benchmark. High R² = benchmark-driven; low R² = independent returns. |",
+	);
+	lines.push(
+		"| **Max Consec Wins/Losses** | Longest unbroken streak of winning or losing trades. Helps assess psychological and capital drawdown risk. |",
+	);
+	lines.push(
+		"| **Turnover** | Annualized ratio of total traded volume to average portfolio value. Higher turnover = more trading activity and fee exposure. |",
+	);
+	lines.push(
+		"| **Cost Drag** | Total fees paid as a percentage of initial portfolio value. Shows how much trading costs erode returns. |",
+	);
+	lines.push(
+		"| **Rolling Sharpe** | Sharpe ratio computed over a rolling 30-day window. Shows how risk-adjusted performance evolves over time. |",
+	);
 	lines.push("");
 
 	return lines.join("\n");
@@ -1089,6 +1458,10 @@ export function formatMetricsJson(
 			sortinoRatio: round(m.sortinoRatio, 4),
 			calmarRatio: round(m.calmarRatio, 4),
 			omegaRatio: round(m.omegaRatio, 4),
+			informationRatio: round(m.informationRatio, 4),
+			alpha: round(m.alpha, 4),
+			beta: round(m.beta, 4),
+			rSquared: round(m.rSquared, 4),
 			maxDrawdownPct: round(m.maxDrawdownPct, 2),
 			maxDrawdownDurationDays: round(m.maxDrawdownDurationDays, 1),
 			recoveryFactor: round(m.recoveryFactor, 4),
@@ -1096,11 +1469,14 @@ export function formatMetricsJson(
 			profitFactor: m.profitFactor !== null ? round(m.profitFactor, 4) : null,
 			expectancy: m.expectancy !== null ? round(m.expectancy, 6) : null,
 			payoffRatio: m.payoffRatio !== null ? round(m.payoffRatio, 4) : null,
+			maxConsecWins: m.maxConsecWins,
+			maxConsecLosses: m.maxConsecLosses,
 			var95: round(m.var95, 4),
 			cvar95: round(m.cvar95, 4),
 			tailRatio: round(m.tailRatio, 4),
 			skewness: round(m.skewness, 4),
 			kurtosis: round(m.kurtosis, 4),
+			rollingSharpe: rollingSummary(m.rollingSharpe),
 		},
 		hodl:
 			extra.hodlReturnPct !== undefined
@@ -1108,6 +1484,19 @@ export function formatMetricsJson(
 						returnPct: round(extra.hodlReturnPct, 2),
 						cagr:
 							extra.hodlCagr !== undefined ? round(extra.hodlCagr, 2) : null,
+					}
+				: null,
+		efficiency:
+			extra.turnoverRatio !== undefined || extra.costDragPct !== undefined
+				? {
+						turnoverRatio:
+							extra.turnoverRatio !== undefined
+								? round(extra.turnoverRatio, 2)
+								: null,
+						costDragPct:
+							extra.costDragPct !== undefined
+								? round(extra.costDragPct, 4)
+								: null,
 					}
 				: null,
 	};

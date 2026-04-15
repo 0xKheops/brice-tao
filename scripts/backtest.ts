@@ -105,6 +105,8 @@ const {
 	initialTao,
 	days: cliDays,
 	observeGap: cliObserveGap,
+	exportCsv,
+	exportTrades,
 } = cli.options;
 
 // ---------------------------------------------------------------------------
@@ -311,6 +313,7 @@ let free: bigint = BigInt(initialTao) * TAO;
 const positions: Map<number, Position> = new Map();
 let totalTrades = 0;
 let totalFeesPaid = 0n;
+let totalTradedVolume = 0n;
 
 // ---------------------------------------------------------------------------
 // Metrics tracking — equity curve, trade results, HODL benchmark
@@ -587,8 +590,22 @@ interface TradeLog {
 	mdLine: string;
 }
 
+/** Trade leg record for CSV export */
+interface TradeLeg {
+	block: number;
+	timestamp: number;
+	side: "sell" | "buy";
+	netuid: number;
+	subnet: string;
+	taoAmount: number;
+	pnlPct: number | null;
+}
+
 const tickTrades: TradeLog[] = [];
 let tickTxFees = 0n;
+const allTradeLegs: TradeLeg[] = [];
+let currentTradeBlock = 0;
+let currentTradeTimestamp = 0;
 
 function formatPnlMd(pnlPct: number | null): string {
 	if (pnlPct === null) return "";
@@ -606,12 +623,30 @@ function logSell(
 		side: "sell",
 		mdLine: `| SELL | SN${netuid} ${subnetName.slice(0, 15)} | ${formatTao(taoReceived)} τ${formatPnlMd(pnlPct)} |`,
 	});
+	allTradeLegs.push({
+		block: currentTradeBlock,
+		timestamp: currentTradeTimestamp,
+		side: "sell",
+		netuid,
+		subnet: subnetName,
+		taoAmount: Number(taoReceived) / Number(TAO),
+		pnlPct,
+	});
 }
 
 function logBuy(netuid: number, subnetName: string, taoSpent: bigint) {
 	tickTrades.push({
 		side: "buy",
 		mdLine: `| BUY | SN${netuid} ${subnetName.slice(0, 15)} | ${formatTao(taoSpent)} τ |`,
+	});
+	allTradeLegs.push({
+		block: currentTradeBlock,
+		timestamp: currentTradeTimestamp,
+		side: "buy",
+		netuid,
+		subnet: subnetName,
+		taoAmount: Number(taoSpent) / Number(TAO),
+		pnlPct: null,
 	});
 }
 
@@ -698,6 +733,7 @@ function sellAll(
 	logSell(netuid, subnetName, taoReceived, pnlPct);
 	positions.delete(netuid);
 	totalTrades++;
+	totalTradedVolume += taoReceived;
 }
 
 function sellPartial(
@@ -777,6 +813,7 @@ function sellPartial(
 	if (pos.alpha <= 0n) positions.delete(netuid);
 	logSell(netuid, subnetName, taoReceived, pnlPct);
 	totalTrades++;
+	totalTradedVolume += taoReceived;
 }
 
 function buy(
@@ -811,6 +848,7 @@ function buy(
 		positions.set(0, pos);
 		logBuy(0, subnetName, actual);
 		totalTrades++;
+		totalTradedVolume += actual;
 		return;
 	}
 
@@ -866,6 +904,7 @@ function buy(
 	positions.set(netuid, pos);
 	logBuy(netuid, subnetName, actual);
 	totalTrades++;
+	totalTradedVolume += actual;
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1119,9 @@ for (const meta of blockMetas) {
 	initVirtualReserves(snapshots);
 	// Reset fee-free budget for this tick (accumulates from sells)
 	feeFreeBudget = 0n;
+	// Track current block context for trade leg CSV export
+	currentTradeBlock = meta.blockNumber;
+	currentTradeTimestamp = meta.timestamp;
 
 	// Build target set
 	const targetSet = new Map(targets.map((t) => [t.netuid, t.share]));
@@ -1245,7 +1287,7 @@ const durationDays = durationMs / (86_400 * 1000);
 
 const tradePnl = pnlRao - totalEmissionsAccruedRao;
 
-const metrics = computeMetrics(equityCurve, tradeResults);
+const metrics = computeMetrics(equityCurve, tradeResults, hodlEquityCurve);
 const hodlMetrics = computeMetrics(hodlEquityCurve, []);
 
 const scheduleLabel =
@@ -1264,6 +1306,19 @@ const gitBranch = (() => {
 	}
 })();
 
+const avgPortfolioValue =
+	equityCurve.length > 0
+		? equityCurve.reduce((sum, s) => sum + s.value, 0) / equityCurve.length
+		: 0;
+const durationYears = durationDays / 365.25;
+const tradedVolumeTao = Number(totalTradedVolume) / Number(TAO);
+const turnoverRatio =
+	avgPortfolioValue > 0 && durationYears > 0
+		? tradedVolumeTao / (avgPortfolioValue * durationYears)
+		: 0;
+const costDragPct =
+	initialValue > 0n ? (Number(totalFeesPaid) / Number(initialValue)) * 100 : 0;
+
 const metricsExtra = {
 	strategyName,
 	durationDays,
@@ -1281,6 +1336,8 @@ const metricsExtra = {
 	hodlCagr: hodlMetrics.cagr,
 	equityCurve,
 	hodlEquityCurve,
+	turnoverRatio,
+	costDragPct,
 	gitCommit: GIT_COMMIT,
 	gitBranch,
 	strategyConfigPath: `src/strategies/${strategyName}/config.yaml`,
@@ -1297,6 +1354,37 @@ reportLines.push(formatMetricsJson(metrics, metricsExtra));
 
 await mkdir("reports", { recursive: true });
 await writeFile(reportPath, reportLines.join("\n"));
+
+// ── CSV exports ──
+if (exportCsv) {
+	const csvPath = reportPath.replace(/\.md$/, "-equity.csv");
+	const csvLines = ["timestamp,block,strategy_tao,hodl_tao,drawdown_pct"];
+	const ddMap = new Map(
+		(metrics.drawdownTimeseries ?? []).map((d) => [d.timestamp, d.drawdownPct]),
+	);
+	for (let i = 0; i < equityCurve.length; i++) {
+		const s = equityCurve[i] as EquitySample;
+		const h = hodlEquityCurve[i] as EquitySample | undefined;
+		const dd = ddMap.get(s.timestamp) ?? 0;
+		csvLines.push(
+			`${new Date(s.timestamp).toISOString()},${blockMetas[Math.min(i, blockMetas.length - 1)]?.blockNumber ?? 0},${s.value.toFixed(6)},${(h?.value ?? 0).toFixed(6)},${dd.toFixed(4)}`,
+		);
+	}
+	await writeFile(csvPath, csvLines.join("\n"));
+	console.log(`  📊 Equity CSV: ${csvPath}`);
+}
+
+if (exportTrades) {
+	const csvPath = reportPath.replace(/\.md$/, "-trades.csv");
+	const csvLines = ["block,timestamp,side,netuid,subnet,tao_amount,pnl_pct"];
+	for (const leg of allTradeLegs) {
+		csvLines.push(
+			`${leg.block},${new Date(leg.timestamp).toISOString()},${leg.side},${leg.netuid},${leg.subnet.replace(/,/g, "")},${leg.taoAmount.toFixed(6)},${leg.pnlPct !== null ? leg.pnlPct.toFixed(4) : ""}`,
+		);
+	}
+	await writeFile(csvPath, csvLines.join("\n"));
+	console.log(`  📝 Trades CSV: ${csvPath}`);
+}
 
 const summary = formatMetricsSummary(metrics, metricsExtra);
 console.log(summary);

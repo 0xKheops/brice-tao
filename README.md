@@ -111,6 +111,7 @@ bun bunker    -- --dry-run                         # preview bunker operations w
 bun backfill  -- --days 5                          # backfill 5 days of on-chain history
 bun backtest  -- --strategy root-emission          # replay strategy over historical data
 bun backtest  -- --strategy root-emission --days 5 --initial-tao 100   # custom window & capital
+bun compare   -- --days 30                          # compare all strategies side-by-side
 ```
 
 ## Docker
@@ -188,6 +189,8 @@ bun backtest -- --strategy <name> [options]
 | `--cron "<expr>"` | Force a cron schedule, evaluated in UTC (e.g. `"0 6,18 * * *"`) |
 | `--observe-gap <n>` | Minimum blocks between observe-triggered rebalances (default: 0) |
 | `--backfill` | Auto-backfill missing history before running (requires `ARCHIVE_WS_ENDPOINT`) |
+| `--export-csv` | Write equity curve CSV alongside the markdown report |
+| `--export-trades` | Write trade legs CSV alongside the markdown report |
 
 **Schedule detection:** The strategy's native schedule is used by default (cron or block-interval, via `getBacktestSchedule()`). CLI flags `--interval-blocks` and `--cron` override it.
 
@@ -208,8 +211,9 @@ bun backtest -- --strategy root-emission --backfill
 
 - **Trade log** — every sell/buy with amounts, fees, and realized PnL
 - **Open positions** — unrealized PnL and cost basis
-- **Performance metrics** — total return, CAGR, Sharpe ratio, max drawdown, win rate, profit factor
+- **Performance metrics** — total return, CAGR, Sharpe ratio, Sortino, Calmar, Information Ratio, CAPM alpha/beta, max drawdown, rolling Sharpe, win rate, profit factor, turnover & cost drag
 - **Equity curve** — timestamped portfolio values (strategy vs. HODL benchmark)
+- **Underwater chart** — drawdown depth over time (terminal only)
 
 <details>
 <summary>Trade simulation model</summary>
@@ -224,6 +228,18 @@ Emission accrual uses a simplified drip model (~85–90% accuracy vs on-chain) b
 - Treat results as a **relative comparison tool** between strategies, not an absolute return prediction
 
 </details>
+
+### Comparing strategies
+
+Compare all backtestable strategies side-by-side:
+
+```bash
+bun compare -- --days 30                                # all strategies, last 30 days
+bun compare -- --days 7 --strategies root-emission,coward  # specific strategies
+bun compare -- --days 14 --initial-tao 100              # custom starting capital
+```
+
+Outputs a ranked comparison table (terminal), plus `reports/comparison-<timestamp>.md` and `.json`.
 
 ## CI
 

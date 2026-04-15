@@ -87,7 +87,7 @@ export function createColors(): AnsiColors {
 // Chart types
 // ---------------------------------------------------------------------------
 
-import type { EquitySample } from "./metrics.ts";
+import type { DrawdownSample, EquitySample } from "./metrics.ts";
 
 interface ChartOptions {
 	/** Character columns for the braille plot area (default: 60) */
@@ -393,6 +393,133 @@ export function renderEquityChart(
 			}
 		}
 		dateLine += dateChars.join("");
+		lines.push(`${c.dim}${dateLine}${c.reset}`);
+	}
+
+	return lines.join("\n");
+}
+
+/**
+ * Render an underwater (drawdown) chart using braille characters.
+ *
+ * Shows continuous drawdown percentage as a red-shaded area below zero.
+ * Values are negative percentages (0% = at peak, -50% = 50% below peak).
+ */
+export function renderUnderwaterChart(
+	drawdownTimeseries: DrawdownSample[],
+	options?: Partial<ChartOptions>,
+): string {
+	if (drawdownTimeseries.length < 2) return "";
+
+	const c = options?.colors ?? createColors();
+	const charWidth = options?.width ?? 60;
+	const charHeight = options?.height ?? 8;
+	const dotWidth = charWidth * 2;
+	const dotHeight = charHeight * 4;
+
+	const ddValues = drawdownTimeseries.map((s) => -s.drawdownPct);
+	const timestamps = drawdownTimeseries.map((s) => s.timestamp);
+
+	// Y range: 0 (top) to worst drawdown (bottom)
+	const minVal = Math.min(...ddValues);
+	const maxVal = 0;
+	const padding = Math.abs(minVal) * 0.05 || 0.01;
+
+	const downsampled = downsample(ddValues, dotWidth);
+	const pixels = valuesToPixels(
+		downsampled,
+		minVal - padding,
+		maxVal + padding,
+		dotHeight,
+	);
+
+	// Fill from zero-line down to the drawdown value
+	const zeroPixel = valuesToPixels(
+		[0],
+		minVal - padding,
+		maxVal + padding,
+		dotHeight,
+	)[0] as number;
+
+	const canvas = makeCanvas(charHeight, charWidth);
+	for (let x = 0; x < pixels.length; x++) {
+		const py = pixels[x] as number;
+		// Fill from zero to current drawdown (top to bottom in pixel space)
+		const startY = Math.min(zeroPixel, py);
+		const endY = Math.max(zeroPixel, py);
+		for (let fillY = startY; fillY <= endY; fillY++) {
+			if (fillY >= 0 && fillY < dotHeight) {
+				setPixel(canvas, x, fillY, charWidth);
+			}
+		}
+	}
+
+	// Compute Y-axis ticks
+	const ticks = computeNiceTicks(minVal - padding, maxVal + padding, 4);
+	const labelWidth = Math.max(
+		...ticks.map((t) => formatAxisLabel(t).length),
+		4,
+	);
+
+	const tickRowMap = new Map<number, string>();
+	for (const tick of ticks) {
+		if (tick < minVal - padding || tick > maxVal + padding) continue;
+		const normalized =
+			(tick - (minVal - padding)) / (maxVal + padding - (minVal - padding));
+		const pixelY = Math.round((1 - normalized) * (dotHeight - 1));
+		const charRow = Math.floor(pixelY / 4);
+		if (charRow >= 0 && charRow < charHeight) {
+			tickRowMap.set(charRow, `${formatAxisLabel(tick)}%`);
+		}
+	}
+
+	const lines: string[] = [];
+	lines.push(`  📉 Underwater Chart (drawdown %)`);
+
+	for (let row = 0; row < charHeight; row++) {
+		const label = tickRowMap.get(row);
+		const labelStr = label
+			? label.padStart(labelWidth + 1)
+			: " ".repeat(labelWidth + 1);
+
+		let rowStr = "";
+		for (let col = 0; col < charWidth; col++) {
+			// biome-ignore lint/style/noNonNullAssertion: canvas is properly sized
+			const bits = canvas[row]![col]!;
+			if (bits) {
+				rowStr += `${c.red}${String.fromCharCode(BRAILLE_BASE + bits)}${c.reset}`;
+			} else {
+				rowStr += String.fromCharCode(BRAILLE_BASE);
+			}
+		}
+
+		lines.push(`  ${c.dim}${labelStr} ┤${c.reset}${rowStr}`);
+	}
+
+	const bottomBorder = `  ${" ".repeat(labelWidth + 1)} └${"─".repeat(charWidth)}`;
+	lines.push(`${c.dim}${bottomBorder}${c.reset}`);
+
+	// X-axis date labels
+	if (timestamps.length >= 2) {
+		const dateCount = Math.min(5, Math.max(2, Math.floor(charWidth / 12)));
+		const positions: Array<{ pos: number; label: string }> = [];
+
+		for (let i = 0; i < dateCount; i++) {
+			const idx = Math.round((i / (dateCount - 1)) * (timestamps.length - 1));
+			// biome-ignore lint/style/noNonNullAssertion: bounded
+			const label = formatDateShort(timestamps[idx]!);
+			const charPos = Math.round((i / (dateCount - 1)) * (charWidth - 1));
+			positions.push({ pos: charPos, label });
+		}
+
+		const dateChars = new Array(charWidth).fill(" ");
+		for (const { pos, label } of positions) {
+			const start = Math.max(0, pos - Math.floor(label.length / 2));
+			for (let j = 0; j < label.length && start + j < charWidth; j++) {
+				dateChars[start + j] = label[j];
+			}
+		}
+		const dateLine = " ".repeat(labelWidth + 4) + dateChars.join("");
 		lines.push(`${c.dim}${dateLine}${c.reset}`);
 	}
 

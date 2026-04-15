@@ -15,6 +15,8 @@ export interface BacktestCliOptions {
 	cron?: string;
 	observeGap?: number;
 	backfill: boolean;
+	exportCsv: boolean;
+	exportTrades: boolean;
 }
 
 export type BacktestCliParseResult =
@@ -50,6 +52,8 @@ export function parseBacktestCliArgs(
 				? parseIntArg(argv, "--observe-gap")
 				: undefined,
 			backfill: argv.includes("--backfill"),
+			exportCsv: argv.includes("--export-csv"),
+			exportTrades: argv.includes("--export-trades"),
 		},
 	};
 }

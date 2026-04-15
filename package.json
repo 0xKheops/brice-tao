@@ -17,6 +17,7 @@
 		"backfill": "bun run scripts/backfill-history.ts",
 		"backtest": "bun run scripts/backtest.ts",
 		"bunker": "bun run scripts/bunker.ts",
+		"compare": "bun run scripts/compare-strategies.ts",
 		"preview": "bun run scripts/preview-rebalance.ts",
 		"rebalance": "bun run src/main.ts",
 		"scheduler": "bun run src/scheduler.ts",
