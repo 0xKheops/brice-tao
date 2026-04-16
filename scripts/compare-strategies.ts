@@ -13,6 +13,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+const IGNORED_STRATEGIES: string[] = ["copy-trade"];
+
 // ── CLI parsing ──
 
 interface CompareOptions {
@@ -448,8 +450,7 @@ if (opts.strategies) {
 	strategies = opts.strategies;
 } else {
 	const all = await discoverBacktestableStrategies();
-	// Skip copy-trade (event-driven, not backtestable)
-	strategies = all.filter((s) => s !== "copy-trade");
+	strategies = all.filter((s) => !IGNORED_STRATEGIES.includes(s));
 }
 
 console.log(`  Strategies: ${strategies.join(", ")}`);
