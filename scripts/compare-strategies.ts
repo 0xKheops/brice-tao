@@ -7,7 +7,7 @@
  * Usage:
  *   bun compare -- --days 30
  *   bun compare -- --days 7 --strategies root-emission,coward
- *   bun compare -- --days 14 --initial-tao 100
+ *   bun compare -- --days 14 --initial-tao 10
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -17,14 +17,16 @@ const IGNORED_STRATEGIES: string[] = ["copy-trade"];
 
 // ── CLI parsing ──
 
+const DEFAULT_INITIAL_TAO = 10;
+
 interface CompareOptions {
 	days?: number;
-	initialTao?: number;
+	initialTao: number;
 	strategies?: string[];
 }
 
 function parseArgs(argv: string[]): CompareOptions {
-	const opts: CompareOptions = {};
+	const opts: CompareOptions = { initialTao: DEFAULT_INITIAL_TAO };
 
 	const daysIdx = argv.indexOf("--days");
 	if (daysIdx !== -1) {
@@ -86,7 +88,7 @@ async function runBacktest(
 ): Promise<StrategyResult> {
 	const args = ["bun", "backtest", "--", "--strategy", strategy];
 	if (opts.days) args.push("--days", String(opts.days));
-	if (opts.initialTao) args.push("--initial-tao", String(opts.initialTao));
+	args.push("--initial-tao", String(opts.initialTao));
 
 	console.log(`  ▸ Running: ${args.join(" ")}`);
 	const proc = Bun.spawn(args, {
@@ -519,7 +521,7 @@ if (opts.strategies) {
 
 console.log(`  Strategies: ${strategies.join(", ")}`);
 if (opts.days) console.log(`  Period: ${opts.days} days`);
-if (opts.initialTao) console.log(`  Initial: ${opts.initialTao} τ`);
+console.log(`  Initial: ${opts.initialTao} τ`);
 console.log("");
 
 // Run backtests sequentially (each already hits the DB/RPC)
