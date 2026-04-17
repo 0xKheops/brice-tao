@@ -259,6 +259,18 @@ const COMPARISON_METRICS: MetricDef[] = [
 		higherIsBetter: false,
 	},
 	{
+		key: "run.tradeLegCount",
+		label: "Trade Legs",
+		format: num,
+		higherIsBetter: false,
+	},
+	{
+		key: "run.closedTradeCount",
+		label: "Closed Trades",
+		format: num,
+		higherIsBetter: false,
+	},
+	{
 		key: "efficiency.turnoverRatio",
 		label: "Turnover",
 		format: ratio,
