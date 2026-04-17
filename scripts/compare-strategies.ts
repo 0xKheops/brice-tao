@@ -388,6 +388,27 @@ function formatComparisonMarkdown(results: StrategyResult[]): string {
 	);
 	lines.push("");
 
+	// Run parameters — critical context so readers don't mis-compare runs
+	// with different initial capital (strategies are NOT scale-invariant due
+	// to AMM slippage in the backtest model).
+	const params = extractRunParameters(successful);
+	if (params) {
+		lines.push("## Run Parameters");
+		lines.push("");
+		lines.push("| Parameter | Value |");
+		lines.push("| --- | --- |");
+		lines.push(`| Initial capital | ${params.initialTao} τ |`);
+		lines.push(
+			`| Period | block ${params.firstBlock} → ${params.lastBlock} (${params.snapshots} snapshots, ${params.durationDays} days) |`,
+		);
+		if (params.mismatched) {
+			lines.push(
+				"| ⚠️ Mismatch | Child backtests ran with **different** initial capital — results are NOT directly comparable |",
+			);
+		}
+		lines.push("");
+	}
+
 	// Summary table
 	lines.push("## Ranking Table");
 	lines.push("");
@@ -425,6 +446,7 @@ function formatComparisonJson(
 	const successful = results.filter((r) => r.success && r.json);
 	return {
 		generatedAt: new Date().toISOString(),
+		parameters: extractRunParameters(successful),
 		strategies: successful.map((r) => ({
 			name: r.name,
 			reportPath: r.reportPath,
@@ -433,6 +455,48 @@ function formatComparisonJson(
 		failed: results
 			.filter((r) => !r.success)
 			.map((r) => ({ name: r.name, error: r.error })),
+	};
+}
+
+interface RunParameters {
+	initialTao: string;
+	firstBlock: number;
+	lastBlock: number;
+	snapshots: number;
+	durationDays: number;
+	mismatched: boolean;
+}
+
+/**
+ * Extract the initial capital, block range, and duration from the first
+ * successful run's JSON. Also flags whether any other run used different
+ * initial capital — this is the #1 reason identical strategies produce
+ * different numbers (AMM slippage in the backtest is non-linear in size).
+ */
+function extractRunParameters(
+	successful: StrategyResult[],
+): RunParameters | null {
+	if (successful.length === 0) return null;
+	const first = successful[0]?.json as Record<string, unknown> | undefined;
+	if (!first) return null;
+	const run = first.run as Record<string, unknown> | undefined;
+	if (!run) return null;
+	const blockRange = run.blockRange as
+		| { first?: number; last?: number; snapshots?: number }
+		| undefined;
+	const initialTao = String(run.initialTao ?? "?");
+	const mismatched = successful.some((r) => {
+		const rj = r.json as Record<string, unknown> | undefined;
+		const rr = rj?.run as Record<string, unknown> | undefined;
+		return rr && String(rr.initialTao) !== initialTao;
+	});
+	return {
+		initialTao,
+		firstBlock: blockRange?.first ?? 0,
+		lastBlock: blockRange?.last ?? 0,
+		snapshots: blockRange?.snapshots ?? 0,
+		durationDays: (run.durationDays as number) ?? 0,
+		mismatched,
 	};
 }
 
@@ -474,6 +538,22 @@ for (const strategy of strategies) {
 
 // Output comparison
 console.log(formatComparisonTable(results));
+
+// Print run parameters so readers can't mis-compare runs with different
+// initial capital (the #1 source of "why do my results differ?" confusion).
+const runParams = extractRunParameters(results.filter((r) => r.success));
+if (runParams) {
+	console.log(`  ${DIM}Initial capital:${RESET} ${runParams.initialTao} τ`);
+	console.log(
+		`  ${DIM}Period:${RESET} block ${runParams.firstBlock} → ${runParams.lastBlock} (${runParams.snapshots} snapshots, ${runParams.durationDays.toFixed(1)} days)`,
+	);
+	if (runParams.mismatched) {
+		console.log(
+			`  ${RED}⚠  Warning:${RESET} child backtests used different initial capital — results are NOT directly comparable`,
+		);
+	}
+	console.log("");
+}
 
 // Write reports
 await mkdir("reports", { recursive: true });
