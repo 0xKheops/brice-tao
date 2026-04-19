@@ -83,7 +83,7 @@ function parseIntFlag(flag: string): number | undefined {
 	return val;
 }
 
-const days = parseIntFlag("--days");
+const days = parseIntFlag("--days") ?? 1;
 const fromBlock = parseIntFlag("--from");
 const concurrency =
 	parseIntFlag("--concurrency") ??
@@ -96,14 +96,7 @@ const rpm =
 		? Number.parseInt(process.env.BACKFILL_RPM, 10)
 		: 0);
 
-if (days === undefined && fromBlock === undefined) {
-	console.error(
-		"Usage: bun backfill -- --days <number> [--from <block_number>] [--concurrency <n>] [--rpm <n>]",
-	);
-	process.exit(1);
-}
-
-if (days !== undefined && days <= 0) {
+if (days <= 0) {
 	console.error("Error: --days must be a positive integer");
 	process.exit(1);
 }
@@ -142,7 +135,7 @@ regularClient.destroy();
 // Compute block range
 // ---------------------------------------------------------------------------
 const rawStart = snapToGrid(
-	fromBlock ?? Math.max(0, currentBlock - (days ?? 0) * BLOCKS_PER_DAY),
+	fromBlock ?? Math.max(0, currentBlock - days * BLOCKS_PER_DAY),
 );
 const rangeStart = Math.max(rawStart, snapToGrid(OLDEST_BACKFILL_BLOCK));
 const rangeEnd = snapToGrid(currentBlock);
